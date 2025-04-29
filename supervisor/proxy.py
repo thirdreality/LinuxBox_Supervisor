@@ -47,7 +47,7 @@ class SupervisorProxy:
                         os.close(fd)
                         os.remove(temp_path)
                     if successful_check:
-                        logging.info("/tmp valid ok")
+                        logging.info("checking /tmp: OK")
                         return True
             except OSError as e:
                 logging.error(f"OS error while checking /tmp: {e}")

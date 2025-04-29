@@ -1,5 +1,6 @@
 import dbus
 import dbus.service
+import logging
 
 from .bletools import BleTools
 
@@ -14,6 +15,7 @@ class Advertisement(dbus.service.Object):
     PATH_BASE = "/org/bluez/example/advertisement"
 
     def __init__(self, index, advertising_type):
+        self.logger = logging.getLogger("Supervisor")
         self.path = self.PATH_BASE + str(index)
         self.bus = BleTools.get_bus()
         self.ad_type = advertising_type
@@ -99,13 +101,13 @@ class Advertisement(dbus.service.Object):
                          in_signature='',
                          out_signature='')
     def Release(self):
-        print ('%s: Released!' % self.path)
+        self.logger.info(f"{self.path}: Released!")
 
     def register_ad_callback(self):
-        print("GATT advertisement registered")
+        self.logger.info("GATT advertisement registered")
 
     def register_ad_error_callback(self):
-        print("Failed to register GATT advertisement")
+        self.logger.error("Failed to register GATT advertisement")
 
     def register(self):
         bus = BleTools.get_bus()
@@ -127,6 +129,6 @@ class Advertisement(dbus.service.Object):
         # Unregister the advertisement
         try:
             ad_manager.UnregisterAdvertisement(self.get_path())
-            print(f"Advertisement {self.get_path()} successfully unregistered")
+            self.logger.info(f"Advertisement {self.get_path()} successfully unregistered")
         except dbus.DBusException as e:
-            print(f"Failed to unregister advertisement: {e}")
+            self.logger.error(f"Failed to unregister advertisement: {e}")

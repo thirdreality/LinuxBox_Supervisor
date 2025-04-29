@@ -1,5 +1,6 @@
 import dbus
 import dbus.mainloop.glib
+import logging
 import dbus.exceptions
 try:
   from gi.repository import GObject
@@ -26,6 +27,7 @@ class NotPermittedException(dbus.exceptions.DBusException):
 
 class Application(dbus.service.Object):
     def __init__(self):
+        self.logger = logging.getLogger("Supervisor")
         dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
         self.mainloop = GObject.MainLoop()
         self.bus = BleTools.get_bus()
@@ -39,18 +41,19 @@ class Application(dbus.service.Object):
 
         # Listen for device connection and disconnection events
         def device_property_changed(interface, changed, invalidated, path):
-            if interface == "org.bluez.Device1":
-                if "Connected" in changed:
-                    if changed["Connected"]:
-                        print(f"[BLE] Device connected: {path}")
-                    else:
-                        print(f"[BLE] Device disconnected: {path}")
-                # Call all registered callbacks
+            # 只关注 org.bluez.Device1 接口的 Connected 属性变化
+            if interface == "org.bluez.Device1" and "Connected" in changed:
+                self.logger.info(f"[BLE] Device property changed: {interface}, {changed}, {invalidated}, {path}")
+                if changed["Connected"]:
+                    logger.info(f"[BLE] Device connected: {path}")
+                else:
+                    logger.info(f"[BLE] Device disconnected: {path}")
+            
                 for cb in self.device_property_callbacks:
                     try:
                         cb(interface, changed, invalidated, path)
                     except Exception as e:
-                        print(f"[BLE] Callback error: {e}")
+                        logger.error(f"[BLE] Callback error: {e}")                    
 
         self.bus.add_signal_receiver(
             device_property_changed,
@@ -85,10 +88,10 @@ class Application(dbus.service.Object):
         return response
 
     def register_app_callback(self):
-        print("GATT application registered")
+        self.logger.info("GATT application registered")
 
     def register_app_error_callback(self, error):
-        print("Failed to register application: " + str(error))
+        self.logger.error(f"Failed to register application: {error}")
 
     def register(self):
         adapter = BleTools.find_adapter(self.bus)
@@ -105,7 +108,7 @@ class Application(dbus.service.Object):
         self.mainloop.run()
 
     def quit(self):
-        print("\nGATT application terminated")
+        self.logger.info("GATT application terminated")
         self.mainloop.quit()
 
 class Service(dbus.service.Object):
@@ -292,12 +295,12 @@ class Descriptor(dbus.service.Object):
                         in_signature='a{sv}',
                         out_signature='ay')
     def ReadValue(self, options):
-        print ('Default ReadValue called, returning error')
+        self.logger.info('Default ReadValue called, returning error')
         raise NotSupportedException()
 
     @dbus.service.method(GATT_DESC_IFACE, in_signature='aya{sv}')
     def WriteValue(self, value, options):
-        print('Default WriteValue called, returning error')
+        self.logger.info('Default WriteValue called, returning error')
         raise NotSupportedException()
 
 

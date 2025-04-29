@@ -14,12 +14,12 @@ import sys
 import logging
 
 # 使用与supervisor相同的logger
-logger = logging.getLogger("Supervisor")
 
 class SupervisorHTTPServer:
     """HTTP Server that integrates with Supervisor for shared state"""
     
     def __init__(self, supervisor, port=8086):
+        self.logger = logging.getLogger("Supervisor")
         self.supervisor = supervisor
         self.port = port
         self.server = None
@@ -29,7 +29,7 @@ class SupervisorHTTPServer:
     def start(self):
         """启动HTTP服务器"""
         if self.server:
-            logger.warning("HTTP Server already running")
+            self.logger.warning("HTTP Server already running")
             return
         
         try:
@@ -44,15 +44,15 @@ class SupervisorHTTPServer:
             self.server_thread = threading.Thread(target=self._run_server, daemon=True)
             self.server_thread.start()
             
-            logger.info(f"HTTP Server started on port {self.port}")
+            self.logger.info(f"HTTP Server starting on port {self.port}")
             
             # 如果supervisor有存储的IP地址，记录URL
             if hasattr(self.supervisor, 'wifi_info') and self.supervisor.wifi_info.get('ip_address'):
                 ip = self.supervisor.wifi_info.get('ip_address')
-                logger.info(f"HTTP Server accessible at: http://{ip}:{self.port}/")
+                self.logger.info(f"HTTP Server accessible at: http://{ip}:{self.port}/")
         
         except Exception as e:
-            logger.error(f"Failed to start HTTP Server: {e}")
+            self.logger.error(f"Failed to start HTTP Server: {e}")
     
     def stop(self):
         """停止HTTP服务器"""
@@ -60,7 +60,7 @@ class SupervisorHTTPServer:
             self.running.clear()
             self.server.shutdown()
             self.server = None
-            logger.info("HTTP Server stopped")
+            self.logger.info("HTTP Server stopped")
     
     def _run_server(self):
         """在一个单独的线程中运行HTTP服务器"""
@@ -69,22 +69,24 @@ class SupervisorHTTPServer:
                 self.server.serve_forever()
             except Exception as e:
                 if self.running.is_set():  # 仅当仍应该运行时记录错误
-                    logger.error(f"HTTP Server error: {e}")
+                    self.logger.error(f"HTTP Server error: {e}")
                     time.sleep(5)  # 等待一段时间再重试
     
     def _create_handler(self):
         """创建一个能访问supervisor的HTTP请求处理器类"""
         supervisor = self.supervisor
+        logger = self.logger
         
         class LinuxBoxHTTPHandler(BaseHTTPRequestHandler):
             """HTTP请求处理器"""
             
             # 存储对supervisor的引用
             _supervisor = supervisor
+            _logger = logger
             
             # 重写日志方法，使用我们的logger
             def log_message(self, format, *args):
-                logger.info(f"{self.client_address[0]} - {format % args}")
+                self._logger.info(f"{self.client_address[0]} - {format % args}")
             
             def _set_headers(self, content_type="application/json"):
                 self.send_response(200)
@@ -263,7 +265,7 @@ class SupervisorHTTPServer:
 
 def signal_handler(signum, frame):
     """处理终止信号"""
-    print(f"Received signal {signum}, exiting HTTP server gracefully...")
+    logging.getLogger("Supervisor").info(f"Received signal {signum}, exiting HTTP server gracefully...")
     http_server.stop()
     sys.exit(0)
 
@@ -277,7 +279,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
     
-    http_server = HTTPServer(supervisor)
+    http_server = SupervisorHTTPServer(supervisor)
     http_server.start()
     
     try:

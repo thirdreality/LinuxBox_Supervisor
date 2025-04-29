@@ -12,12 +12,16 @@ import platform
 import json
 import sys
 
+from .network import NetworkMonitor
 from .hardware import GpioButton, GpioLed, LedState,GpioHwController
 from .utils.wifi_manager import WifiStatus, WifiManager
+from .ota.ota_server import SupervisorOTAServer
+
 from .ble.gattserver import SupervisorGattServer
 from .http_server import SupervisorHTTPServer  
 from .proxy import SupervisorProxy
 from .cli import SupervisorClient
+
 from .utils.utils import (
     execute_system_command,
     perform_reboot,
@@ -60,8 +64,12 @@ class Supervisor:
         self.wifi_manager.init()
 
         self.proxy = SupervisorProxy(self)
-        self.http_server = SupervisorHTTPServer(self)
-        self.gatt_server = SupervisorGattServer(self)
+        self.http_server = None
+        self.gatt_server = None
+
+        self.network_monitor = NetworkMonitor(self)
+        self.ota_server = SupervisorOTAServer(self)
+
         
         # boot up time
         self.start_time = time.time()
@@ -115,19 +123,24 @@ class Supervisor:
     def isZigbeeSupported(self):
         return self._support_zigbee
 
+    def enableThreadSupported(self):
+        self._support_thread = True
+
+    def enableZigbeeSupported(self):
+        self._support_zigbee = True
+
     def _is_tmp_mounted(self):
         return os.system("mountpoint -q /tmp") == 0
     
     def onNetworkFirstConnected(self):
-        print("checking Network ...")
+        logger.info("checking Network onNetworkFirstConnected() ...")
 
     def onNetworkDisconnect(self):
-        print("checking Network ...")
+        logger.info("checking Network onNetworkDisconnect() ...")
 
     def onNetworkConnected(self):
-        print("checking Network ...")
+        logger.info("checking Network onNetworkConnected() ...")
 
-    
     def _handle_socket_command(self, data, conn):
         """处理来自Socket的命令"""
         try:
@@ -208,7 +221,7 @@ class Supervisor:
         if 'uptime' in self.system_info:
             self.system_info['uptime'] = int(time.time() - self.start_time)
 
-    def start_http_server(self):
+    def _start_http_server(self):
         """启动HTTP服务器"""
         if not self.http_server:
             try:
@@ -222,6 +235,43 @@ class Supervisor:
                 logger.error(f"Failed to start HTTP server: {e}")
                 return False
         return True
+
+    def _stop_http_server(self):
+        if not self.http_server:
+            return True
+        try:
+            self.http_server.stop()
+            self.http_server = None
+            logger.info("HTTP server stopped")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to stop HTTP server: {e}")
+            return False
+
+    def _start_gatt_server(self):
+        if not self.gatt_server:
+            try:
+                # 创建并启动GATT服务器
+                self.gatt_server = SupervisorGattServer(self)
+                self.gatt_server.start()
+                logger.info("GATT server started")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to start GATT server: {e}")
+                return False
+        return True
+
+    def _stop_gatt_server(self):
+        if not self.gatt_server:
+            return True
+        try:
+            self.gatt_server.stop()
+            self.gatt_server = None
+            logger.info("GATT server stopped")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to stop GATT server: {e}")
+            return False
 
     def perform_reboot(self):
         logging.info("Performing reboot...")
@@ -251,12 +301,13 @@ class Supervisor:
         self.running.clear()
 
         # 停止HTTP服务器
-        if self.http_server:
-            self.http_server.stop()
-            self.http_server = None
-        
+        self._stop_http_server()
+        # 停止GATT服务器
+        self._stop_gatt_server()
+        # 停止WiFi管理器    
         self.wifi_manager.cleanup()
 
+        self.network_monitor.stop()
 
         # 关闭硬件
         try:
@@ -281,9 +332,13 @@ class Supervisor:
             execute_system_command(["systemctl", "disable", "otbr-agent"])
 
         self.button.start()
+        self.network_monitor.start()
+
+        self._start_http_server()
+        self._start_gatt_server()
+
         self.proxy.run()
 
-import sys
 
 def main():
     import argparse
@@ -306,11 +361,12 @@ def main():
         color = args.arg
         if color is None:
             print("Usage: supervisor.py led <color>")
+            print("Support colors: mqtt_paring|mqtt_pared|mqtt_error|mqtt_normal|reboot|power_off|normal|network_error|network_lost|startup")
             sys.exit(1)
         try:
             led_state = getattr(LedState, color.upper(), None)
             if led_state is None:
-                print(f"Unknown color: {color}, support mqtt_paring, mqtt_pared, mqtt_error, mqtt_normal, reboot, power_off, normal, network_error, network_lost, startup")
+                print(f"Unknown color: {color}, support [mqtt_paring|mqtt_pared|mqtt_error|mqtt_normal|reboot|power_off|normal|network_error|network_lost|startup")
                 sys.exit(1)
             client = SupervisorClient()
             client.set_led_state(color.upper())

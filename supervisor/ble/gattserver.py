@@ -22,8 +22,15 @@ SOFTWARE.
 """
 
 import dbus
+import dbus.mainloop.glib
 import threading
 import json
+import logging
+
+try:
+    from gi.repository import GObject
+except ImportError:
+    import gobject as GObject
 
 from .advertisement import Advertisement
 from .service import Application, Service, Characteristic, Descriptor
@@ -38,7 +45,6 @@ from ..utils.wifi_utils import get_wlan0_mac_for_localname
 GATT_CHRC_IFACE = "org.bluez.GattCharacteristic1"
 NOTIFY_TIMEOUT = 5000
 
-
 class SupervisorGattServer:
     """
     BLE GATT server manager for Supervisor BLE modules.
@@ -46,55 +52,103 @@ class SupervisorGattServer:
     """
     def __init__(self, supervisor):
         self.supervisor = supervisor
+        self.logger = logging.getLogger("Supervisor")
         self.app = None
         self.adv = None
         self.manager_service = None
         self.running = False
+        self.mainloop = None
+        self.mainloop_thread = None
 
     def updateAdv(self, ip_address):
         try:
             # Add IP address to advertisement
             ip_bytes = [int(part) for part in ip_address.split('.')]
-            print(f"Adding device IP address to advertisement: {ip_address} -> {ip_bytes}")
+            self.logger.info(f"Adding device IP address to advertisement: {ip_address} -> {ip_bytes}")
             if self.adv:
                 self.adv.add_manufacturer_data(0x0133, ip_bytes)
         except Exception as e:
-            print(f"Error setting up network services: {e}")
+            self.logger.error(f"Error setting up network services: {e}")
 
     def start(self):
         if self.running:
             return
-        # Initialize BLE Advertisement
-        self.adv = LinuxBoxAdvertisement(0)
-        # Initialize BLE Application and Service
-        self.app = Application()
-        self.app.add_device_property_callback(my_callback)
+        
+        try:
+            # Initialize D-Bus main loop
+            dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+            self.mainloop = GObject.MainLoop()
+            
+            # Initialize BLE Advertisement
+            self.adv = LinuxBoxAdvertisement(0)
+            
+            # Initialize BLE Application and Service
+            self.app = Application()
+            self.app.add_device_property_callback(my_callback)
 
-        self.manager_service = LinuxBoxManagerService(0)
-        self.app.add_service(self.manager_service)
-        # Register Advertisement and Application
-        self.adv.register()
-        self.app.register()
-        self.running = True
-        print("[BLE] GATT server started.")
+            self.manager_service = LinuxBoxManagerService(0)
+            self.app.add_service(self.manager_service)
+            
+            # Register Advertisement and Application
+            self.adv.register()
+            self.app.register()
+            
+            # Start the main loop in a separate thread
+            self.mainloop_thread = threading.Thread(target=self._run_mainloop)
+            self.mainloop_thread.daemon = True
+            self.mainloop_thread.start()
+            
+            self.running = True
+            self.logger.info("[BLE] GATT server started.")
+        except Exception as e:
+            self.logger.error(f"Failed to start GATT server: {e}")
+            self.stop()
+
+    def _run_mainloop(self):
+        """Run the GLib main loop in a separate thread"""
+        try:
+            self.logger.info("[BLE] Starting GATT server main loop")
+            self.mainloop.run()
+            self.logger.info("[BLE] GATT server main loop exited")
+        except Exception as e:
+            self.logger.error(f"Error in GATT server main loop: {e}")
 
     def stop(self):
         if not self.running:
             return
-        # Unregister Advertisement and stop Application mainloop
+        
+        # Unregister Advertisement
         if self.adv:
-            self.adv.unregister()
+            try:
+                self.adv.unregister()
+            except Exception as e:
+                self.logger.error(f"Error unregistering advertisement: {e}")
             self.adv = None
-        if self.app:
-            self.app.quit()
-            self.app = None
+        
+        # Stop Application mainloop
+        if self.mainloop and self.mainloop.is_running():
+            try:
+                GObject.idle_add(self.mainloop.quit)
+            except Exception as e:
+                self.logger.error(f"Error stopping mainloop: {e}")
+        
+        # Wait for the mainloop thread to finish
+        if self.mainloop_thread and self.mainloop_thread.is_alive():
+            try:
+                self.mainloop_thread.join(timeout=2)
+            except Exception as e:
+                self.logger.error(f"Error joining mainloop thread: {e}")
+        
+        self.app = None
         self.manager_service = None
+        self.mainloop = None
+        self.mainloop_thread = None
         self.running = False
-        print("[BLE] GATT server stopped.")
+        self.logger.info("[BLE] GATT server stopped.")
 
 def my_callback(interface, changed, invalidated, path):
-    print("Custom BLE event:", interface, changed, path)
-
+    logger = logging.getLogger("Supervisor")
+    logger.info(f"Custom BLE event: {interface} {changed} {path}")
 
 class LinuxBoxAdvertisement(Advertisement):
     def __init__(self, index):
@@ -122,7 +176,6 @@ class LinuxBoxManagerService(Service):
     def set_farenheit(self, farenheit):
         self.farenheit = farenheit
 
-# -----------------------------------------------------------------------------
 class WifiStatusCharacteristic(Characteristic):
     _CHARACTERISTIC_UUID = "6e400001-0000-4e98-8024-bc5b71e0893e"
 
@@ -135,14 +188,14 @@ class WifiStatusCharacteristic(Characteristic):
         self.add_descriptor(WifiStatusDescriptor(self))
     
     def WriteValue(self, value, options):
-        print(f"Write Value: {value}")
+        self.logger.info(f"Write Value: {value}")
 
         command_str = "".join(chr(byte) for byte in value)
         process_thread = threading.Thread(target=self._process_command_and_notify, args=(command_str,))
         process_thread.start()        
 
     def _process_command_and_notify(self, command):
-        print(f"_process_command_and_notify: {command}")
+        self.logger.info(f"_process_command_and_notify: {command}")
         
         # Generate a proper result using wifi_manager
         result = ""
@@ -157,7 +210,7 @@ class WifiStatusCharacteristic(Characteristic):
             })
 
             if result:
-                print(f"_process_command_and_notify result: {result}")
+                self.logger.info(f"_process_command_and_notify result: {result}")
         
         if self._notifying:
             # Ensure result is not empty to prevent D-Bus signature error
@@ -176,11 +229,11 @@ class WifiStatusCharacteristic(Characteristic):
         if self._notifying:
             return
         self._notifying = True
-        print("Starting Notification")
+        self.logger.info("Starting Notification")
 
     def StopNotify(self):
         self._notifying = False
-        print("Stopping Notification")
+        self.logger.info("Stopping Notification")
 
 class WifiStatusDescriptor(Descriptor):
     WIFI_STATUS_DESCRIPTOR_UUID = "2901"
@@ -200,8 +253,6 @@ class WifiStatusDescriptor(Descriptor):
             value.append(dbus.Byte(c.encode()))
 
         return value
-
-# -----------------------------------------------------------------------------
 
 class WIFIConfigCharacteristic(Characteristic):
     _CHARACTERISTIC_UUID = "6e400002-0000-4e98-8024-bc5b71e0893e"
@@ -223,11 +274,11 @@ class WIFIConfigCharacteristic(Characteristic):
                 
                 if wifi_manager:
                     result = wifi_manager.configure(ssid, password)
-                    print(f"WiFi configuration result: {result}")
+                    self.logger.info(f"WiFi configuration result: {result}")
             else:
-                print("WiFi manager not initialized")
+                self.logger.info("WiFi manager not initialized")
         except Exception as e:
-            print(f"Error processing WiFi config: {e}")
+            self.logger.error(f"Error processing WiFi config: {e}")
         
 
     def ReadValue(self, options):
@@ -257,145 +308,3 @@ class WIFIConfigDescriptor(Descriptor):
             value.append(dbus.Byte(c.encode()))
 
         return value
-
-# -----------------------------------------------------------------------------
-
-
-
-# def signal_handler(signum, frame):
-#     global adv, app, wifi_manager, monitor_stop_flag, http_server_running
-#     print(f"Received signal {signum}, exiting gracefully...")
-#     wifi_manager.cleanup()
-    
-#     # 停止网络监控线程
-#     if monitor_stop_flag:
-#         print("Stopping network monitor...")
-#         monitor_stop_flag.set()
-    
-#     # 停止HTTP服务器（如果正在运行）
-#     if http_server_running:
-#         print("Stopping HTTP server...")
-#         http_server.stop_server()
-#         http_server_running = False
-    
-#     # 停止BLE广告
-#     adv.unregister()
-#     app.quit()
-#     sys.exit(0)
-
-# def main():
-#     global adv, app, wifi_manager, monitor_stop_flag, http_server_running
-    
-#     # 初始化WiFi管理器
-#     wifi_manager = WifiManager()
-#     wifi_manager.init()
-    
-#     # 启动GATT服务器
-#     app = Application()
-#     app.add_service(LinuxBoxManagerService(0))
-#     app.register()
-
-#     adv = LinuxBoxAdvertisement(0)
-    
-#     # 直接获取wlan0的IP地址
-#     ip_address = wifi_manager.get_wlan0_ip()
-    
-#     # 如果有IP地址，我们假设网络已连接，启动HTTP服务器
-#     if ip_address:
-#         try:
-#             # 添加IP地址到广告中
-#             ip_bytes = [int(part) for part in ip_address.split('.')]
-#             print(f"Adding device IP address to advertisement: {ip_address} -> {ip_bytes}")
-#             adv.add_manufacturer_data(0x0133, ip_bytes)
-            
-#             # 启动HTTP服务器
-#             print("Network detected, starting HTTP server...")
-#             if not http_server_running and http_server.init(wifi_manager):
-#                 http_server_running = True
-#                 print(f"HTTP server started on port 8086, available at http://{ip_address}:8086/")
-#             else:
-#                 print("Failed to start HTTP server")
-#         except Exception as e:
-#             print(f"Error setting up network services: {e}")
-#     else:
-#         print("No IPv4 address found for wlan0, advertisement will not include IP address")
-#         print("HTTP server will not be started")
-    
-#     # 注册广告
-#     adv.register()
-
-#     # 设置信号处理函数，用于干净退出
-#     signal.signal(signal.SIGTERM, signal_handler)
-#     signal.signal(signal.SIGINT, signal_handler)
-
-#     # 创建停止事件
-#     monitor_stop_flag = threading.Event()
-    
-#     # 启动网络监控线程，动态管理HTTP服务器
-#     monitor_thread = threading.Thread(target=monitor_network, args=(adv, monitor_stop_flag))
-#     monitor_thread.daemon = True
-#     monitor_thread.start()
-
-#     try:
-#         app.run()
-#     except KeyboardInterrupt:
-#         print("Keyboard interrupt received")
-#         if monitor_stop_flag:
-#             monitor_stop_flag.set()
-#         wifi_manager.cleanup()
-#         if http_server_running:
-#             http_server.stop_server()
-#             http_server_running = False
-#         adv.unregister()
-#         app.quit()
-
-# def monitor_network(adv, stop_flag):
-#     """监控网络状态并动态管理HTTP服务器"""
-#     global wifi_manager, http_server_running
-    
-#     previous_ip = None
-    
-#     while not stop_flag.is_set():
-#         try:
-#             # 获取当前IP地址
-#             current_ip = wifi_manager.get_wlan0_ip()
-            
-#             if current_ip != previous_ip:
-#                 print(f"Network change detected. Previous IP: {previous_ip}, Current IP: {current_ip}")
-                
-#                 # 更新广告数据
-#                 if current_ip:
-#                     try:
-#                         # 将IP地址添加到广告中
-#                         ip_bytes = [int(part) for part in current_ip.split('.')]
-#                         adv.add_manufacturer_data(0x0133, ip_bytes)
-#                         print(f"Updated advertisement with IP: {current_ip}")
-                        
-#                         # 如果HTTP服务器未运行，启动它
-#                         if not http_server_running:
-#                             print("Starting HTTP server...")
-#                             if http_server.init(wifi_manager):
-#                                 http_server_running = True
-#                                 print(f"HTTP server started on port 8086")
-#                     except Exception as e:
-#                         print(f"Error updating network services: {e}")
-#                 else:
-#                     # 如果没有IP但HTTP服务器正在运行，停止它
-#                     if http_server_running:
-#                         print("Network disconnected, stopping HTTP server...")
-#                         http_server.stop_server()
-#                         http_server_running = False
-                
-#                 previous_ip = current_ip
-            
-#             # 每10秒检查一次网络状态
-#             time.sleep(10)
-#         except Exception as e:
-#             print(f"Error in network monitor: {e}")
-#             time.sleep(30)  # 出错后稍微等待长一些
-
-#     print("Network monitor thread stopped")
-#     stop_flag.set()
-
-# if __name__ == "__main__":
-#     main()

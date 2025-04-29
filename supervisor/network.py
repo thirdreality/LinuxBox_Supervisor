@@ -8,7 +8,7 @@ import logging
 import threading
 
 from .hardware import LedState
-from wifi_utils.utils import (
+from .utils.wifi_utils import (
     get_wlan0_mac,
     is_interface_existing,
     is_network_connected,
@@ -79,7 +79,7 @@ class NetworkMonitor:
 
             time.sleep(check_interval)
     
-    def run(self):
+    def start(self):
         """启动线程， 并且维护WIFI状态"""
         self.network_thread = threading.Thread(target=self.network_monitor_task, daemon=True)
         self.network_thread.start()
