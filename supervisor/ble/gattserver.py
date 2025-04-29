@@ -25,14 +25,12 @@ import dbus
 import threading
 import json
 
-from advertisement import Advertisement
-from service import Application, Service, Characteristic, Descriptor
-from wifi_manager import WifiManager
+from .advertisement import Advertisement
+from .service import Application, Service, Characteristic, Descriptor
+from ..utils.wifi_manager import WifiManager
+from ..utils.wifi_utils import get_wlan0_mac_for_localname
 
 #define HUBV3_CONFIG_SERVICE_UUID "6e400000-0000-4e98-8024-bc5b71e0893e"
-
-#查看wifi状态: 使用json指令：读
-#define HUBV3_WIFI_STATUS_CHAR_UUID "6e400001-0000-4e98-8024-bc5b71e0893e"
 
 #配置wifi，使用json指令：写
 #define HUBV3_WIFI_CONFIG_CHAR_UUID "6e400002-0000-4e98-8024-bc5b71e0893e"
@@ -97,8 +95,6 @@ class SupervisorGattServer:
 def my_callback(interface, changed, invalidated, path):
     print("Custom BLE event:", interface, changed, path)
 
-
-from utils.wifi_utils import get_wlan0_mac_for_localname
 
 class LinuxBoxAdvertisement(Advertisement):
     def __init__(self, index):

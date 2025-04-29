@@ -7,7 +7,7 @@ import time
 import logging
 import threading
 
-from hardware import LedState
+from .hardware import LedState
 from wifi_utils.utils import (
     get_wlan0_mac,
     is_interface_existing,

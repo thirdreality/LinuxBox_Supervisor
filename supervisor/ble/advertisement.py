@@ -1,7 +1,7 @@
 import dbus
 import dbus.service
 
-from bletools import BleTools
+from .bletools import BleTools
 
 BLUEZ_SERVICE_NAME = "org.bluez"
 LE_ADVERTISING_MANAGER_IFACE = "org.bluez.LEAdvertisingManager1"

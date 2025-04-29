@@ -5,23 +5,23 @@ import os
 import threading
 import time
 import logging
-
+import signal
 import socket
 import tempfile
 import platform
+import json
+import sys
 
-from hardware import GpioButton, GpioLed, LedState,GpioHwController
-from utils.wifi_manager import WifiStatus, WifiManager
-from ble.gattserver import SupervisorGattServer
-
-from utils.utils import (
+from .hardware import GpioButton, GpioLed, LedState,GpioHwController
+from .utils.wifi_manager import WifiStatus, WifiManager
+from .ble.gattserver import SupervisorGattServer
+from .http_server import SupervisorHTTPServer  
+from .proxy import SupervisorProxy
+from .cli import SupervisorClient
+from .utils.utils import (
     execute_system_command,
     perform_reboot,
-    perform_power_off,
-    get_mac_address,
-    get_ip_address,
-    get_wifi_ssid,
-    is_wifi_connected
+    perform_power_off    
 )
 
 
@@ -37,8 +37,6 @@ logging.basicConfig(
 logger = logging.getLogger("Supervisor")
 
 class Supervisor:
-    SOCKET_PATH = "/tmp/led_socket"
-
     _support_zigbee=True
     _support_thread=False
     #zigbee2mqtt, homekitbridge, homeassistant-core
@@ -61,9 +59,7 @@ class Supervisor:
         self.wifi_manager = WifiManager()
         self.wifi_manager.init()
 
-        # initial 
-        self.server = None
-        self.server_thread = None
+        self.proxy = SupervisorProxy(self)
         self.http_server = SupervisorHTTPServer(self)
         self.gatt_server = SupervisorGattServer(self)
         
@@ -131,67 +127,7 @@ class Supervisor:
     def onNetworkConnected(self):
         print("checking Network ...")
 
-    def _ensure_tmp_ready(self, timeout=60, interval=1):
-        start_time = time.time()
-        
-        while not self._is_tmp_mounted():
-            time.sleep(interval)
-
-        print("/tmp is mounted")
-        successful_check = False
-
-        time.sleep(5)
-        print("checking /tmp ...")
-
-        while time.time() - start_time < timeout:
-            try:
-                if os.path.exists("/tmp") and os.access("/tmp", os.W_OK):
-                    fd, temp_path = tempfile.mkstemp(dir='/tmp')
-                    try:
-                        os.write(fd, b'Test Write')
-                        os.fsync(fd)  # Ensure data is flushed to disk
-                        successful_check = True
-                    finally:
-                        os.close(fd)
-                        os.remove(temp_path)
-                    if successful_check:
-                        print("/tmp check: OK")
-                        return True
-            except OSError as e:
-                print(f"OS error while checking /tmp: {e}")
-            
-            time.sleep(interval)
-
-        return False
-
-    def _setup_socket(self):
-        self._ensure_tmp_ready()
-        time.sleep(1)
-
-        if os.path.exists(self.SOCKET_PATH):
-            os.remove(self.SOCKET_PATH)
-        self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.server.bind(self.SOCKET_PATH)
-        self.server.listen(1)
-        self.server.settimeout(1.0)
     
-    def _socket_thread(self):
-        """运行Socket服务器线程"""
-        logger.info("Starting socket server...")
-        
-        while self.running.is_set():
-            try:
-                conn, _ = self.server.accept()
-                data = conn.recv(1024)
-                if data:
-                    self._handle_socket_command(data, conn)
-            except socket.timeout:
-                continue
-            except Exception as e:
-                if self.running.is_set():
-                    logger.error(f"Socket error: {e}")
-                    time.sleep(1)
-
     def _handle_socket_command(self, data, conn):
         """处理来自Socket的命令"""
         try:
@@ -227,19 +163,7 @@ class Supervisor:
 
     def update_wifi_info(self):
         """更新WiFi信息缓存"""
-        try:
-            connected = is_wifi_connected()
-            self.wifi_info.update({
-                'connected': connected,
-                'ssid': get_wifi_ssid() if connected else '',
-                'ip_address': get_ip_address() if connected else '',
-                'error_message': '' if connected else 'WiFi not connected'
-            })
-            return True
-        except Exception as e:
-            logger.error(f"Error updating WiFi info: {e}")
-            self.wifi_info['error_message'] = str(e)
-            return False
+        return True
 
     def configure_wifi(self, ssid, password):
         """配置WiFi连接"""
@@ -288,9 +212,7 @@ class Supervisor:
         """启动HTTP服务器"""
         if not self.http_server:
             try:
-                # 导入HTTP服务器类
-                from http_server import SupervisorHTTPServer
-                
+
                 # 创建并启动HTTP服务器
                 self.http_server = SupervisorHTTPServer(self, port=8086)
                 self.http_server.start()
@@ -318,6 +240,11 @@ class Supervisor:
         # 这里可以启动一个脚本
         perform_power_off()
     
+    def _signal_handler(self, sig, frame):
+        logging.info("Signal received, stopping...")
+        self.cleanup()
+        sys.exit(0)
+
     def cleanup(self):
         """清理资源"""
         logger.info("Cleaning up resources...")
@@ -328,16 +255,8 @@ class Supervisor:
             self.http_server.stop()
             self.http_server = None
         
-        # 关闭Socket
-        if self.server:
-            try:
-                self.server.close()
-                if os.path.exists(self.SOCKET_PATH):
-                    os.remove(self.SOCKET_PATH)
-            except Exception as e:
-                logger.error(f"Error closing socket: {e}")
-        
         self.wifi_manager.cleanup()
+
 
         # 关闭硬件
         try:
@@ -345,16 +264,24 @@ class Supervisor:
         except:
             pass
 
+        if self.proxy:
+            self.proxy.stop()
+            self.proxy = None
+
     def run(self):
         """主运行函数"""
         logger.info("Starting supervisor...")
-        self.led.run()
 
-        self.hwinit()
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+
+        self.led.start()
+        self.hwinit.initialize_pin()
         if self._support_thread == False:
             execute_system_command(["systemctl", "disable", "otbr-agent"])
 
-        self.button.run() 
+        self.button.start()
+        self.proxy.run()
 
 import sys
 
@@ -365,9 +292,8 @@ def main():
     parser.add_argument('arg', nargs='?', default=None, help="Argument for command (e.g., color for led)")
     args = parser.parse_args()
 
-    supervisor = Supervisor()
-
     if args.command == 'daemon':
+        supervisor = Supervisor()
         try:
             supervisor.run()
         except KeyboardInterrupt:
@@ -381,21 +307,19 @@ def main():
         if color is None:
             print("Usage: supervisor.py led <color>")
             sys.exit(1)
-        # Set LED color (assuming LedState uses color names)
         try:
             led_state = getattr(LedState, color.upper(), None)
             if led_state is None:
-                print(f"Unknown color: {color}")
+                print(f"Unknown color: {color}, support mqtt_paring, mqtt_pared, mqtt_error, mqtt_normal, reboot, power_off, normal, network_error, network_lost, startup")
                 sys.exit(1)
-            supervisor.set_led_state(led_state)
+            client = SupervisorClient()
+            client.set_led_state(color.upper())
             print(f"LED set to {color}")
         except Exception as e:
             print(f"Error setting LED color: {e}")
             sys.exit(1)
     elif args.command == 'sysinfo':
-        import json
         print(json.dumps(supervisor.system_info, indent=2, ensure_ascii=False))
 
 if __name__ == "__main__":
     main()
-

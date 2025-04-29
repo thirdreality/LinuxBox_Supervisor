@@ -8,10 +8,10 @@ import logging
 import threading
 
 from enum import Enum
-from const import LINUXBOX_LED_R_PIN
-from const import LINUXBOX_LED_G_PIN
-from const import LINUXBOX_LED_B_PIN
-from const import LINUXBOX_BUTTON_PIN
+from .const import LINUXBOX_LED_R_PIN
+from .const import LINUXBOX_LED_G_PIN
+from .const import LINUXBOX_LED_B_PIN
+from .const import LINUXBOX_BUTTON_PIN
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -152,7 +152,7 @@ class GpioLed:
 
             time.sleep(0.5)
     
-    def run(self):
+    def start(self):
         """Start LED control thread"""
         self.led_thread = threading.Thread(target=self.led_control_task, daemon=True)
         self.led_thread.start()
@@ -213,7 +213,7 @@ class GpioButton:
 
             time.sleep(0.5)
     
-    def run(self):
+    def start(self):
         """Start button monitoring thread"""
         self.button_thread = threading.Thread(target=self.button_control_task, daemon=True)
         self.button_thread.start()
@@ -235,14 +235,11 @@ class GpioHwController:
     # chip 1: gpiochip411
 
     def initialize_pin(self):
-        # /dev/ttyAML3
-        #gpioset 0 3=0
-        #sleep 0.5
-        #gpioset 0 1=1
-        #sleep 0.5
-        #gpioset 0 1=0
-        #sleep 0.5
-        #gpioset 0 1=1
+        # Initialize GPIO pins for Zigbee and Thread modules
+        for pin in (429, 427):
+            SysFSGPIO.export_pin(pin)
+            SysFSGPIO.set_direction(pin, "out")
+
         self.logger.info("Reset Zigbee module ...")
         SysFSGPIO.write_value(429, 0)
         time.sleep(0.5)
@@ -254,4 +251,4 @@ class GpioHwController:
         time.sleep(0.5)
 
         self.logger.info("Reset Thread module ...")
-        # TODO Check if /dev/ttyAML6 exists
+        # TODO: Add Thread module reset sequence when /dev/ttyAML6 is available
