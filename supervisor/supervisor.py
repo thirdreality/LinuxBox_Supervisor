@@ -17,6 +17,7 @@ from .hardware import GpioButton, GpioLed, LedState,GpioHwController
 from .utils.wifi_manager import WifiStatus, WifiManager
 from .ota.ota_server import SupervisorOTAServer
 
+
 from .ble.gattserver import SupervisorGattServer
 from .http_server import SupervisorHTTPServer  
 from .proxy import SupervisorProxy
@@ -27,6 +28,8 @@ from .utils.utils import (
     perform_reboot,
     perform_power_off    
 )
+
+from .utils.utils import SystemInfo, OtaStatus
 
 
 # Configure logging
@@ -60,6 +63,9 @@ class Supervisor:
         self.stop_event = threading.Event()
         
         self.wifi_status = WifiStatus()
+        self.ota_status = OtaStatus()
+        self.system_info = SystemInfo()
+
         self.wifi_manager = WifiManager()
         self.wifi_manager.init()
 
@@ -73,30 +79,6 @@ class Supervisor:
         
         # boot up time
         self.start_time = time.time()
-                
-        # system information
-        self.system_info = self._get_system_info()
-
-    def _get_system_info(self):
-        """获取系统信息并缓存"""
-        try:
-            return {
-                "model": "LinuxBox",
-                "version": "1.0.0",
-                "hostname": socket.gethostname(),
-                "platform": platform.system(),
-                "platform_version": platform.version(),
-                "architecture": platform.machine(),
-                "processor": platform.processor()
-            }
-        except Exception as e:
-            logger.error(f"Error getting system info: {e}")
-            return {
-                "model": "LinuxBox",
-                "version": "1.0.0",
-                "hostname": "unknown",
-                "uptime": 0
-            }
 
     def set_led_state(self, state):
         with self.state_lock:

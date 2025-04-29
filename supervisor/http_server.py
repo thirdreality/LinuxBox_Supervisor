@@ -147,14 +147,14 @@ class SupervisorHTTPServer:
             def _handle_wifi_status(self):
                 """处理GET /api/wifi/status - 等同于WifiStatusCharacteristic"""
                 # 从supervisor获取WiFi状态信息
-                if hasattr(self._supervisor, 'wifi_info') and self._supervisor.wifi_info:
-                    wifi_info = self._supervisor.wifi_info
+                if hasattr(self._supervisor, 'wifi_status'):
+                    wifi_status = self._supervisor.wifi_status
                     result = {
-                        "connected": wifi_info.get('connected', False),
-                        "ssid": wifi_info.get('ssid', ''),
-                        "ip_address": wifi_info.get('ip_address', ''),
-                        "mac_address": wifi_info.get('mac_address', ''),
-                        "error_message": wifi_info.get('error_message', '')
+                        "connected": wifi_status.connected,
+                        "ssid": wifi_status.ssid,
+                        "ip_address": wifi_status.ip_address,
+                        "mac_address": wifi_status.mac_address,
+                        "error_message": wifi_status.error_message if hasattr(wifi_status, 'error_message') else ""
                     }
                 else:
                     # 如果supervisor没有WiFi信息，返回默认值

@@ -106,8 +106,62 @@ class SupervisorOTAServer:
                             if component == "otbr-agent" and hasattr(self.supervisor, 'enableThreadSupported'):
                                 self.supervisor.enableThreadSupported()
             
-            # 暂时忽略 zigbee2mqtt 和 HomeKitBridge 部分
+            # 处理 zigbee2mqtt 部分
+            if "zigbee2mqtt" in version_info:
+                z2m_info = version_info["zigbee2mqtt"]
+                
+                # 检查是否有版本和发布信息
+                version = z2m_info.get("version")
+                release = z2m_info.get("release")
+                
+                if version and release:
+                    # 构建下载URL
+                    download_url = f"{self.release_base_url}/{release}/zigbee2mqtt_{version}.deb"
+                    
+                    # 更新OTA状态
+                    if hasattr(self.supervisor, 'ota_status'):
+                        self.supervisor.ota_status.status = "Updating zigbee2mqtt"
+                        self.supervisor.ota_status.progress = 50
+                    
+                    # 下载并安装
+                    success = self._download_and_install(download_url, temp_dir, "zigbee2mqtt")
+                    
+                    # 更新OTA状态
+                    if hasattr(self.supervisor, 'ota_status'):
+                        if success:
+                            self.supervisor.ota_status.status = "zigbee2mqtt updated"
+                        else:
+                            self.supervisor.ota_status.status = "zigbee2mqtt update failed"
+                        self.supervisor.ota_status.progress = 100
             
+            # 处理 HomeKitBridge 部分
+            if "homekitbridge" in version_info:
+                hkb_info = version_info["homekitbridge"]
+                
+                # 检查是否有版本和发布信息
+                version = hkb_info.get("version")
+                release = hkb_info.get("release")
+                
+                if version and release:
+                    # 构建下载URL
+                    download_url = f"{self.release_base_url}/{release}/homekitbridge_{version}.deb"
+                    
+                    # 更新OTA状态
+                    if hasattr(self.supervisor, 'ota_status'):
+                        self.supervisor.ota_status.status = "Updating HomeKitBridge"
+                        self.supervisor.ota_status.progress = 50
+                    
+                    # 下载并安装
+                    success = self._download_and_install(download_url, temp_dir, "homekitbridge")
+                    
+                    # 更新OTA状态
+                    if hasattr(self.supervisor, 'ota_status'):
+                        if success:
+                            self.supervisor.ota_status.status = "HomeKitBridge updated"
+                        else:
+                            self.supervisor.ota_status.status = "HomeKitBridge update failed"
+                        self.supervisor.ota_status.progress = 100
+        
         finally:
             # 清理临时目录
             try:
