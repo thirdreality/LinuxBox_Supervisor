@@ -6,6 +6,7 @@ import os
 import time
 import logging
 import threading
+import subprocess
 
 from enum import Enum
 from .const import LINUXBOX_LED_R_PIN
@@ -239,35 +240,6 @@ class GpioHwController:
         """
         Initialize GPIO pins for Zigbee and Thread modules
         """
-        # Initialize GPIO pins for Zigbee and Thread modules
-        for pin in (427, 429, 453, 455):
-            SysFSGPIO.export_pin(pin)
-            SysFSGPIO.set_direction(pin, "out")
-
-        self.logger.info("Reset Zigbee module GPIOZ_1/GPIOZ_3...")
-        # Zigbee reset: DB_RSTN1/GPIOZ_1
-        # Zigbee boot: DB_BOOT1/GPIOZ_3
-        SysFSGPIO.write_value(429, 0)
-        time.sleep(0.5)
-        SysFSGPIO.write_value(427, 1)
-        time.sleep(0.5)
-        SysFSGPIO.write_value(427, 0)
-        time.sleep(0.5)
-        SysFSGPIO.write_value(427, 1)
-        time.sleep(0.5)
-
-        self.logger.info("Reset Thread module GPIOA_1/GPIOA_3 ...")
-        # Thread reset: DB_RSTN2/GPIOA_1
-        # Thread boot: DB_BOOT2/GPIOA_3 
-        SysFSGPIO.write_value(455, 0)
-        time.sleep(0.5)
-        SysFSGPIO.write_value(453, 1)
-        time.sleep(0.5)
-        SysFSGPIO.write_value(453, 0)
-        time.sleep(0.5)
-        SysFSGPIO.write_value(453, 1)
-        time.sleep(0.5)
-        
         # Check if thread.conf exists and contains device information
         thread_device_already_detected = False
         if os.path.exists(self.thread_conf_path):
@@ -284,7 +256,7 @@ class GpioHwController:
                 self.logger.error(f"Error reading Thread configuration file: {e}")
         else:
             # Check if Thread device is connected to /dev/ttyAML6
-            thread_device_detected = self.check_thread_device()
+            thread_device_detected = self._check_thread_device()
             
             # Create thread.conf file directory if it doesn't exist
             try:
@@ -304,41 +276,64 @@ class GpioHwController:
             except Exception as e:
                 self.logger.error(f"Failed to create Thread configuration file: {e}")
 
-    def check_thread_device(self):
+        # Initialize GPIO pins for Zigbee and Thread modules
+        self.logger.info("Reset Zigbee module GPIOZ_1/GPIOZ_3...")
+        # Zigbee reset: DB_RSTN1/GPIOZ_1
+        # Zigbee boot: DB_BOOT1/GPIOZ_3
+        try:
+            subprocess.run(["gpioset", "0", "3=0"], check=True)
+            time.sleep(0.5)
+            subprocess.run(["gpioset", "0", "1=1"], check=True)
+            time.sleep(0.5)
+            subprocess.run(["gpioset", "0", "1=0"], check=True)
+            time.sleep(0.5)
+            subprocess.run(["gpioset", "0", "1=1"], check=True)
+            
+            self.logger.info("Reset Thread module GPIOA_1/GPIOA_3 ...")
+            # Thread reset: DB_RSTN2/GPIOA_1
+            # Thread boot: DB_BOOT2/GPIOA_3 
+            subprocess.run(["gpioset", "0", "29=0"], check=True)
+            time.sleep(0.5)
+            subprocess.run(["gpioset", "0", "27=1"], check=True)
+            time.sleep(0.5)
+            subprocess.run(["gpioset", "0", "27=0"], check=True)
+            time.sleep(0.5)
+            subprocess.run(["gpioset", "0", "27=1"], check=True)
+        except subprocess.CalledProcessError as e:
+            self.logger.error(f"Error executing gpioset command: {e}")
+        except Exception as e:
+            self.logger.error(f"Error initializing GPIO pins: {e}")
+
+
+
+    def _check_thread_device(self):
         """
         Check if a Thread device is connected to /dev/ttyAML6
         Returns True if device is detected, False otherwise
+        
+        使用 gpioget 0 27 检测，如果得到的结果为0，则/dev/ttyAML6上没有连接设备
+        如果为1，则对接了设备
         """
         try:
-            # Check if the device file exists
-            if not os.path.exists("/dev/ttyAML6"):
-                self.logger.info("Thread device port /dev/ttyAML6 does not exist")
+            # 使用 gpioget 检查 GPIO 27 的状态
+            result = subprocess.run(["gpioget", "0", "27"], capture_output=True, text=True)
+            
+            # 检查命令是否成功执行
+            if result.returncode != 0:
+                self.logger.error(f"Failed to get GPIO 27 status: {result.stderr}")
                 return False
-                
-            # Try to open the serial port and read data
-            import serial
-            try:
-                # Open the serial port with a short timeout
-                ser = serial.Serial("/dev/ttyAML6", 115200, timeout=3)
-                
-                # Try to read some data
-                data = ser.read(100)
-                
-                # Close the port
-                ser.close()
-                
-                # Check if we received any data
-                if len(data) > 0:
-                    self.logger.info(f"Thread device detected on /dev/ttyAML6, received data: {data}")
-                    return True
-                else:
-                    self.logger.info("Thread device port /dev/ttyAML6 opened successfully, but no data received")
-                    # Still return True since we could open the port
-                    return False
-                
-            except serial.SerialException as e:
-                self.logger.info(f"No Thread device detected on /dev/ttyAML6: {e}")
+            
+            # 获取输出并去除空白字符
+            gpio_value = result.stdout.strip()
+            
+            # 检查 GPIO 值
+            if gpio_value == "1":
+                self.logger.info("Thread device detected (GPIO 27 = 1)")
+                return True
+            else:
+                self.logger.info("No Thread device detected (GPIO 27 = 0)")
                 return False
+            
         except Exception as e:
             self.logger.error(f"Error checking Thread device: {e}")
             return False

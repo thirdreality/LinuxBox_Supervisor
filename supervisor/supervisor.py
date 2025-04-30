@@ -17,18 +17,12 @@ from .hardware import GpioButton, GpioLed, LedState,GpioHwController
 from .utils.wifi_manager import WifiStatus, WifiManager
 from .ota.ota_server import SupervisorOTAServer
 
-
 from .ble.gattserver import SupervisorGattServer
 from .http_server import SupervisorHTTPServer  
 from .proxy import SupervisorProxy
 from .cli import SupervisorClient
 
-from .utils.utils import (
-    execute_system_command,
-    perform_reboot,
-    perform_power_off    
-)
-
+from .utils import utils
 from .utils.utils import SystemInfo, OtaStatus
 
 
@@ -123,41 +117,16 @@ class Supervisor:
     def onNetworkConnected(self):
         logger.info("checking Network onNetworkConnected() ...")
 
-    def _handle_socket_command(self, data, conn):
-        """处理来自Socket的命令"""
-        try:
-            command = data.decode('utf-8').strip()
-            logger.info(f"Received command: {command}")
-            
-            # 示例命令处理
-            if command == "status":
-                state = self.get_led_state().value
-                conn.sendall(f"LED State: {state}".encode('utf-8'))
-            elif command == "reboot":
-                conn.sendall(b"Rebooting...")
-                self.perform_reboot()
-            elif command == "factory_reset":
-                conn.sendall(b"Factory resetting...")
-                self.perform_factory_reset()
-            elif command == "wifi_status":
-                self.update_wifi_info()
-                conn.sendall(str(self.wifi_info).encode('utf-8'))
-            else:
-                conn.sendall(b"Unknown command")
-        except Exception as e:
-            logger.error(f"Error handling command: {e}")
-            try:
-                conn.sendall(f"Error: {str(e)}".encode('utf-8'))
-            except:
-                pass
-        finally:
-            try:
-                conn.close()
-            except:
-                pass
 
-    def update_wifi_info(self):
+    def update_wifi_info(self, ip_address, ssid):
         """更新WiFi信息缓存"""
+        logger.info(f"Update wifi info: {ip_address}")
+        self.wifi_status.ip_address = ip_address
+        self.wifi_status.ssid = ssid
+        if ip_address == "":
+            self.gatt_server.updateAdv("0.0.0.0")
+        else:
+            self.gatt_server.updateAdv(ip_address)
         return True
 
     def configure_wifi(self, ssid, password):
@@ -258,20 +227,26 @@ class Supervisor:
     def perform_reboot(self):
         logging.info("Performing reboot...")
         self.set_led_state(LedState.REBOOT)
-        perform_reboot()
+        utils.perform_reboot()
 
     def perform_factory_reset(self):
         logging.info("Performing factory reset...")
         self.set_led_state(LedState.REBOOT)
         # 这里可以添加清除配置的代码
-        perform_reboot()
+        utils.perform_factory_reset()
 
     def perform_power_off(self):
         logging.info("Performing power off...")
         self.set_led_state(LedState.POWER_OFF)
         # 这里可以启动一个脚本
-        perform_power_off()
+        utils.perform_power_off()
     
+    def perform_wifi_provision_prepare(self):
+        logging.info("Performing prepare wifi provision...")
+        self.set_led_state(LedState.REBOOT)
+        # 根据不同的情况，检查home-assistant是否正在运行并停止它，返回是否需要恢复
+        utils.perform_wifi_provision_prepare()
+
     def _signal_handler(self, sig, frame):
         logging.info("Signal received, stopping...")
         self.cleanup()
@@ -311,7 +286,7 @@ class Supervisor:
         self.led.start()
         self.hwinit.initialize_pin()
         if self._support_thread == False:
-            execute_system_command(["systemctl", "disable", "otbr-agent"])
+            utils.execute_system_command(["systemctl", "disable", "otbr-agent"])
 
         self.button.start()
         self.network_monitor.start()

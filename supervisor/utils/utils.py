@@ -112,6 +112,20 @@ def get_installed_version(package_name):
         logging.error(f"Error getting installed version for {package_name}: {e}")
         return ""
 
+def is_service_running(service_name):
+    # Check if a service is running using systemctl is-active
+    # Returns True if active, False otherwise
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", service_name],
+            capture_output=True,
+            text=True
+        )
+        return result.stdout.strip() == "active"
+    except Exception as e:
+        logging.error(f"Error checking service status for {service_name}: {e}")
+        return False
+
 def perform_reboot():
     """
     Safely stop necessary services and reboot the system.
@@ -159,3 +173,11 @@ def perform_factory_reset():
     
     execute_system_command(["systemctl", "stop", "docker"])
     return execute_system_command(["reboot"])
+
+def perform_wifi_provision_prepare():
+    execute_system_command(["systemctl", "stop", "home-assistant"])
+    return True
+
+def perform_wifi_provision_restore():
+    execute_system_command(["systemctl", "start", "home-assistant"])
+    return True

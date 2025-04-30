@@ -43,17 +43,16 @@ class Application(dbus.service.Object):
         def device_property_changed(interface, changed, invalidated, path):
             # 只关注 org.bluez.Device1 接口的 Connected 属性变化
             if interface == "org.bluez.Device1" and "Connected" in changed:
-                self.logger.info(f"[BLE] Device property changed: {interface}, {changed}, {invalidated}, {path}")
                 if changed["Connected"]:
-                    logger.info(f"[BLE] Device connected: {path}")
+                    self.logger.info(f"[BLE] Device connected: {path}")
                 else:
-                    logger.info(f"[BLE] Device disconnected: {path}")
+                    self.logger.info(f"[BLE] Device disconnected: {path}")
             
                 for cb in self.device_property_callbacks:
                     try:
                         cb(interface, changed, invalidated, path)
                     except Exception as e:
-                        logger.error(f"[BLE] Callback error: {e}")                    
+                        self.logger.error(f"[BLE] Callback error: {e}")                    
 
         self.bus.add_signal_receiver(
             device_property_changed,

@@ -60,15 +60,33 @@ class SupervisorGattServer:
         self.mainloop = None
         self.mainloop_thread = None
 
-    def updateAdv(self, ip_address):
+    def updateAdv(self, ip_address=None):
         try:
-            # Add IP address to advertisement
+            # 如果没有提供 IP 地址，检查当前连接状态
+            if ip_address is None:
+                # 从 supervisor 获取当前 WiFi 状态
+                if hasattr(self.supervisor, 'wifi_status') and hasattr(self.supervisor.wifi_status, 'connected'):
+                    if self.supervisor.wifi_status.connected:
+                        ip_address = self.supervisor.wifi_status.ip_address
+                    else:
+                        ip_address = "0.0.0.0"  # 断连状态使用 0.0.0.0
+                else:
+                    ip_address = "0.0.0.0"  # 默认使用 0.0.0.0
+            
+            # 将 IP 地址转换为字节列表
             ip_bytes = [int(part) for part in ip_address.split('.')]
             self.logger.info(f"Adding device IP address to advertisement: {ip_address} -> {ip_bytes}")
+            
+            # 更新广播数据
             if self.adv:
                 self.adv.add_manufacturer_data(0x0133, ip_bytes)
+                try:
+                    self.adv.unregister()
+                except Exception as e:
+                    self.logger.error(f"Error unregistering advertisement: {e}")                
+                self.adv.register()
         except Exception as e:
-            self.logger.error(f"Error setting up network services: {e}")
+            self.logger.error(f"Error updating advertisement with IP address: {e}")
 
     def start(self):
         if self.running:
@@ -147,16 +165,18 @@ class SupervisorGattServer:
         self.logger.info("[BLE] GATT server stopped.")
 
 def my_callback(interface, changed, invalidated, path):
-    logger = logging.getLogger("Supervisor")
-    logger.info(f"Custom BLE event: {interface} {changed} {path}")
+    print(f"Custom BLE event: {interface} {changed} {path}")
 
 class LinuxBoxAdvertisement(Advertisement):
     def __init__(self, index):
+        self.logger = logging.getLogger("Supervisor")
         Advertisement.__init__(self, index, "peripheral")
         mac_str = get_wlan0_mac_for_localname()
         if mac_str:
+            self.logger.info(f"[BLE] Adding local name: '3RHUB-{mac_str}'")
             self.add_local_name(f"3RHUB-{mac_str}")
         else:
+            self.logger.error(f"[BLE] Adding local name: '3RHUB-XXXXXXXX'")
             self.add_local_name("3RHUB-XXXXXXXX")
         self.include_tx_power = True
 
@@ -164,59 +184,56 @@ class LinuxBoxManagerService(Service):
     _LINUXBOX_SVC_UUID = "6e400000-0000-4e98-8024-bc5b71e0893e"
 
     def __init__(self, index):
-        self.farenheit = True
-
         Service.__init__(self, index, self._LINUXBOX_SVC_UUID, True)
-        self.add_characteristic(WifiStatusCharacteristic(self))
         self.add_characteristic(WIFIConfigCharacteristic(self))
 
-    def is_farenheit(self):
-        return self.farenheit
-
-    def set_farenheit(self, farenheit):
-        self.farenheit = farenheit
-
-class WifiStatusCharacteristic(Characteristic):
+class WIFIConfigCharacteristic(Characteristic):
     _CHARACTERISTIC_UUID = "6e400001-0000-4e98-8024-bc5b71e0893e"
 
     def __init__(self, service):
+        self.logger = logging.getLogger("Supervisor")
         self._notifying = False
-
         Characteristic.__init__(
                 self, self._CHARACTERISTIC_UUID,
                 ["notify", "write"], service)
-        self.add_descriptor(WifiStatusDescriptor(self))
-    
+        self.add_descriptor(WIFIConfigDescriptor(self))
+
     def WriteValue(self, value, options):
         self.logger.info(f"Write Value: {value}")
 
         command_str = "".join(chr(byte) for byte in value)
         process_thread = threading.Thread(target=self._process_command_and_notify, args=(command_str,))
-        process_thread.start()        
+        process_thread.start()    
 
     def _process_command_and_notify(self, command):
         self.logger.info(f"_process_command_and_notify: {command}")
-        
-        # Generate a proper result using wifi_manager
-        result = ""
-        if command == "GET_STATUS" and wifi_manager:
-            status = wifi_manager.get_status()
-            result = json.dumps({
-                "connected": status.connected,
-                "ssid": status.ssid,
-                "ip_address": status.ip_address,
-                "mac_address": status.mac_address,
-                "error_message": status.error_message
-            })
 
-            if result:
-                self.logger.info(f"_process_command_and_notify result: {result}")
-        
+        # Generate a proper result using wifi_manager
+        ret = False  # Default result
+        ip_address = ""
+        config = json.loads(command)
+        if "ssid" in config:
+            ssid = config["ssid"]
+            password = config.get("password", "")
+            restore = config.get("restore", False)
+            
+            if wifi_manager:
+                ret = wifi_manager.configure(ssid, password)
+                self.logger.info(f"WiFi configuration result: {ret}")
+                if ret:
+                    ip_address = get_wlan0_ip() or ""
+                    self.logger.info(f"WiFi IP address: {ip_address}")
+                    if restore:
+                        self.logger.info(f"Restore previous state ...")
+                        utils.perform_wifi_provision_restore()
+        else:
+            self.logger.info("WiFi manager not initialized")
+
+        # Format the response as requested
+        result = json.dumps({"connected": ret, "ip_address": ip_address})
+        self.logger.info(f"Sending result: {result}")
+
         if self._notifying:
-            # Ensure result is not empty to prevent D-Bus signature error
-            if not result:
-                result = "{}"
-                
             # Convert the result to a byte array and emit the signal
             value = [dbus.Byte(c) for c in result.encode('utf-8')]
             self.PropertiesChanged(
@@ -235,60 +252,6 @@ class WifiStatusCharacteristic(Characteristic):
         self._notifying = False
         self.logger.info("Stopping Notification")
 
-class WifiStatusDescriptor(Descriptor):
-    WIFI_STATUS_DESCRIPTOR_UUID = "2901"
-    WIFI_STATUS_DESCRIPTOR_VALUE = "Wifi Status"
-
-    def __init__(self, characteristic):
-        Descriptor.__init__(
-                self, self.WIFI_STATUS_DESCRIPTOR_UUID,
-                ["read"],
-                characteristic)
-
-    def ReadValue(self, options):
-        value = []
-        desc = self.WIFI_STATUS_DESCRIPTOR_VALUE
-
-        for c in desc:
-            value.append(dbus.Byte(c.encode()))
-
-        return value
-
-class WIFIConfigCharacteristic(Characteristic):
-    _CHARACTERISTIC_UUID = "6e400002-0000-4e98-8024-bc5b71e0893e"
-
-    def __init__(self, service):
-        Characteristic.__init__(
-                self, self._CHARACTERISTIC_UUID,
-                ["read", "write"], service)
-        self.add_descriptor(WIFIConfigDescriptor(self))
-
-    def WriteValue(self, value, options):
-        try:
-            data = bytes(value).decode('utf-8')
-            config = json.loads(data)
-            
-            if "ssid" in config:
-                ssid = config["ssid"]
-                password = config.get("password", "")
-                
-                if wifi_manager:
-                    result = wifi_manager.configure(ssid, password)
-                    self.logger.info(f"WiFi configuration result: {result}")
-            else:
-                self.logger.info("WiFi manager not initialized")
-        except Exception as e:
-            self.logger.error(f"Error processing WiFi config: {e}")
-        
-
-    def ReadValue(self, options):
-        value = []
-
-        if self.service.is_farenheit(): val = "F"
-        else: val = "C"
-        value.append(dbus.Byte(val.encode()))
-
-        return value
 
 class WIFIConfigDescriptor(Descriptor):
     _DESCRIPTOR_UUID = "2901"
@@ -303,6 +266,7 @@ class WIFIConfigDescriptor(Descriptor):
     def ReadValue(self, options):
         value = []
         desc = self._DESCRIPTOR_VALUE
+        print(desc)
 
         for c in desc:
             value.append(dbus.Byte(c.encode()))

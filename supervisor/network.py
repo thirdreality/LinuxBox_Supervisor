@@ -29,8 +29,11 @@ class NetworkMonitor:
         check_interval = 2
         time.sleep(check_interval)
         check_interval = 1
+
         disconnect_count = 0
+
         firstConnected=False
+        connected=False
 
         mac_address = None
 
@@ -50,11 +53,13 @@ class NetworkMonitor:
                     if firstConnected == False:
                         """获取SSID/IP并缓存"""
                         firstConnected=True
-                        self.supervisor.wifi_status.ip_address = get_wlan0_ip()
-                        self.supervisor.wifi_status.ssid = get_active_connection_name()
+                        connected = True
+                        self.supervisor.update_wifi_info(get_wlan0_ip(), get_active_connection_name())
                         self.supervisor.onNetworkFirstConnected()
-                    else:
+                    elif connected == False:
                         """wifi掉线并快速恢复"""
+                        connected = True
+                        self.supervisor.update_wifi_info(get_wlan0_ip(), get_active_connection_name())
                         self.supervisor.onNetworkConnected()
 
                     check_interval = 3 
@@ -64,12 +69,12 @@ class NetworkMonitor:
                     check_interval = 1
                     disconnect_count = disconnect_count + 1
 
-                    if disconnect_count > 5:
+                    if disconnect_count > 5 and connected == True:
                         """清除缓存"""
-                        firstConnected=False
-                        self.supervisor.wifi_status.ip_address = ""
-                        self.supervisor.wifi_status.ssid = ""
-                        
+                        connected=False
+                        self.supervisor.update_wifi_info("", "")
+                        self.supervisor.onNetworkDisconnect()
+
                     if has_active_connection():
                         self.supervisor.set_led_state(LedState.NETWORK_ERROR)
                     else:

@@ -3,14 +3,15 @@ Description=Supervisor Service
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 /absolute/path/to/your/project/bin/supervisor
+ExecStart=/usr/bin/python3 /root/LinuxBox_Supervisor/bin/supervisor
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=supervisor
-User=supervisor
-Group=supervisor
+# Removed User and Group settings to run as root
+# User=supervisor
+# Group=supervisor
 
 [Install]
 WantedBy=multi-user.target

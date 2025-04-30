@@ -13,6 +13,8 @@ import signal
 import sys
 import logging
 
+from .utils import utils
+
 # 使用与supervisor相同的logger
 
 class SupervisorHTTPServer:
@@ -112,7 +114,8 @@ class SupervisorHTTPServer:
                 # 系统信息特性
                 elif path == "/api/system/info":
                     self._handle_sys_info()
-                
+                elif path == "/api/system/status":
+                    self._handle_sys_info()                
                 # 处理未知路径
                 else:
                     self.send_response(404)
@@ -129,6 +132,8 @@ class SupervisorHTTPServer:
                 
                 # 读取请求正文
                 post_data = self.rfile.read(content_length).decode('utf-8')
+
+                self._logger.info(f"$post_data")
                 
                 # WiFi配置特性
                 if path == "/api/wifi/config":
@@ -136,8 +141,7 @@ class SupervisorHTTPServer:
                 
                 # 系统命令特性（写操作）
                 elif path == "/api/system/command":
-                    self._handle_sys_command(post_data)
-                
+                    self._handle_sys_command(post_data)          
                 # 处理未知路径
                 else:
                     self.send_response(404)
@@ -187,6 +191,24 @@ class SupervisorHTTPServer:
                 self._set_headers()
                 self.wfile.write(json.dumps(result).encode())
             
+            def _handle_sys_status(self):
+                """处理GET /api/system/status - 等同于SystemStatusCharacteristic"""
+                # 从supervisor获取系统状态
+                if hasattr(self._supervisor, 'system_status') and self._supervisor.system_status:
+                    system_status = self._supervisor.system_status
+                    result = system_status
+                else:
+                    # 默认系统状态
+                    result = {
+                        "model": "LinuxBox",
+                        "version": "1.0.0",
+                        "hostname": "linuxbox",
+                        "uptime": int(time.time() - self._supervisor.start_time) if hasattr(self._supervisor, 'start_time') else 0
+                    }
+                
+                self._set_headers()
+                self.wfile.write(json.dumps(result).encode())
+
             def _handle_wifi_config(self, post_data):
                 """处理POST /api/wifi/config - 等同于WifiConfigCharacteristic"""
                 try:
@@ -227,25 +249,37 @@ class SupervisorHTTPServer:
                     
                     # 处理系统命令
                     if command == "reboot":
-                        # 调用supervisor的重启方法
-                        if hasattr(self._supervisor, '_perform_reboot') and callable(self._supervisor._perform_reboot):
-                            self._set_headers()
-                            self.wfile.write(json.dumps({"success": True}).encode())
-                            # 设置定时任务，在响应发送后重启
-                            threading.Timer(1.0, self._supervisor._perform_reboot).start()
-                        else:
-                            self._send_error("Reboot not supported")
+                        # 直接调用supervisor的重启方法
+                        self._set_headers()
+                        self.wfile.write(json.dumps({"success": True}).encode())
+                        threading.Timer(1.0, self._supervisor.perform_reboot).start()
                     
                     elif command == "factory_reset":
-                        # 调用supervisor的出厂重置方法
-                        if hasattr(self._supervisor, '_perform_factory_reset') and callable(self._supervisor._perform_factory_reset):
-                            self._set_headers()
-                            self.wfile.write(json.dumps({"success": True}).encode())
-                            # 设置定时任务，在响应发送后重置
-                            threading.Timer(1.0, self._supervisor._perform_factory_reset).start()
-                        else:
-                            self._send_error("Factory reset not supported")
-                    
+                        # 直接调用supervisor的出厂重置方法
+                        self._set_headers()
+                        self.wfile.write(json.dumps({"success": True}).encode())
+                        threading.Timer(1.0, self._supervisor.perform_factory_reset).start()
+                    elif command == "prepare_wifi_provision":
+                        # 直接调用supervisor的准备配网方法
+                        restore_need = utils.is_service_running("home-assistant")
+                        result = {
+                            "restore": restore_need,
+                            "success": True,
+                        }
+
+                        self._set_headers()
+                        self.wfile.write(json.dumps(result).encode())
+                        if restore_need:
+                            threading.Timer(1.0, self._supervisor.perform_wifi_provision_prepare).start()
+                    elif command == "hello_world":
+                        self._set_headers()
+                        result = {
+                            "model": "LinuxBox",
+                            "success": True,
+                            "msg": "Hello ThirdReality"
+                        }
+                        self.wfile.write(json.dumps(result).encode())
+                                        
                     else:
                         self._send_error(f"Unknown command: {command}")
                 
