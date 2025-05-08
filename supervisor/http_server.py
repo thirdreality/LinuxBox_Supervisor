@@ -120,6 +120,10 @@ class SupervisorHTTPServer:
                     self._handle_software_info()           
                 elif path == "/api/service/info":
                     self._handle_service_info()
+                # 处理带有服务名称参数的服务信息请求
+                elif path.startswith("/api/service/info/"):
+                    service_name = path.split("/")[-1]
+                    self._handle_service_info(service_name)
                 elif path == "/api/firmware/info":
                     self._handle_firmware_info()            
                 # 处理未知路径
@@ -144,14 +148,14 @@ class SupervisorHTTPServer:
                 # 检查Content-Type
                 content_type = self.headers.get('Content-Type', '')
                 self._logger.info(f"Content-Type: {content_type}")
-                
-                # WiFi配置特性
-                if path == "/api/wifi/config":
-                    self._handle_wifi_config(post_data)
-                
+                                
                 # 系统命令特性（写操作）
-                elif path == "/api/system/command":
-                    self._handle_sys_command(post_data)          
+                if path == "/api/system/command":
+                    self._handle_sys_command(post_data)
+                elif path == "/api/service/control":
+                    self._handle_service_command(post_data)
+                elif path == "/api/software/command":
+                    self._handle_software_command(post_data)                               
                 # 处理未知路径
                 else:
                     self.send_response(404)
@@ -277,85 +281,69 @@ class SupervisorHTTPServer:
                 self._set_headers()
                 self.wfile.write(json.dumps(result).encode())                
 
-            def _handle_service_info(self): 
-                homeassistant_core_result={
-                    'name': 'Home Assistant'
-                }
-                zigbee2mqtt_result = {
-                    'name': 'zigbee2mqtt'
-                }
-                homekitbridge_result = {
-                    'name': 'Homekit Bridge'
-                }
-
-                # Define and check Home Assistant services
-                homeassistant_core_services_status = []
-                homeassistant_core_services = [
-                    "home-assistant.service",                                                  
-                    "matter-server.service",
-                    "otbr-agent.service",
-                ]
-
-                # Check status of each Home Assistant service
-                for service in homeassistant_core_services:
-                    is_running = utils.is_service_running(service)
-                    is_enabled = utils.is_service_enabled(service)
-                    service_info = {
-                        "name": service,
-                        "running": is_running,
-                        "enabled": is_enabled
+            def _handle_service_info(self, service_name=None): 
+                """处理服务信息请求，可选择指定特定服务"""
+                # 定义服务配置
+                service_configs = {
+                    "homeassistant_core": {
+                        "name": "Home Assistant",
+                        "services": [
+                            "home-assistant.service",
+                            "matter-server.service",
+                            "otbr-agent.service"
+                        ]
+                    },
+                    "zigbee2mqtt": {
+                        "name": "zigbee2mqtt",
+                        "services": [
+                            "zigbee2mqtt.service"
+                        ]
+                    },
+                    "homekitbridge": {
+                        "name": "Homekit Bridge",
+                        "services": [
+                            "homekit-bridge.service"
+                        ]
                     }
-                    homeassistant_core_services_status.append(service_info)
+                }
                 
-                homeassistant_core_result['service'] = homeassistant_core_services_status
-
-                # Define and check Zigbee2MQTT services
-                zigbee2mqtt_services_status = []
-                zigbee2mqtt_services = [
-                    "zigbee2mqtt.service"
-                ]
-
-                # Check status of each Zigbee2MQTT service
-                for service in zigbee2mqtt_services:
-                    is_running = utils.is_service_running(service)
-                    is_enabled = utils.is_service_enabled(service)
-                    service_info = {
-                        "name": service,
-                        "running": is_running,
-                        "enabled": is_enabled
+                # 如果指定了服务名称但不存在，返回404
+                if service_name and service_name not in service_configs:
+                    self.send_response(404)
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": f"Service '{service_name}' not found"}).encode())
+                    return
+                
+                # 确定需要处理的服务
+                services_to_process = [service_name] if service_name else service_configs.keys()
+                
+                # 结果字典
+                result = {}
+                
+                # 处理每个服务
+                for service_key in services_to_process:
+                    config = service_configs[service_key]
+                    service_result = {
+                        "name": config["name"]
                     }
-                    zigbee2mqtt_services_status.append(service_info)
-
-                zigbee2mqtt_result['service'] = zigbee2mqtt_services_status
-
-                # Define and check HomeKit Bridge services
-                homekitbridge_services_status = []
-                homekitbridge_services = [
-                    "homekit-bridge.service"
-                ]
-
-                # Check status of each HomeKit Bridge service
-                for service in homekitbridge_services:
-                    is_running = utils.is_service_running(service)
-                    is_enabled = utils.is_service_enabled(service)
-                    service_info = {
-                        "name": service,
-                        "running": is_running,
-                        "enabled": is_enabled
-                    }
-                    homekitbridge_services_status.append(service_info)
-
-                homekitbridge_result['service'] = homekitbridge_services_status
-
-                # Create final result
-                result = {
-                    "homeassistant_core": homeassistant_core_result,
-                    "zigbee2mqtt": zigbee2mqtt_result,
-                    "homekitbridge": homekitbridge_result
-                }
-
+                    
+                    # 检查服务状态
+                    services_status = []
+                    for service in config["services"]:
+                        is_running = utils.is_service_running(service)
+                        is_enabled = utils.is_service_enabled(service)
+                        service_info = {
+                            "name": service,
+                            "running": is_running,
+                            "enabled": is_enabled
+                        }
+                        services_status.append(service_info)
+                    
+                    service_result["service"] = services_status
+                    result[service_key] = service_result
+                
                 self._set_headers()
-                self.wfile.write(json.dumps(result).encode())                  
+                self.wfile.write(json.dumps(result).encode())
 
             def _handle_firmware_info(self):
                 homeassistant_core_result={
@@ -502,6 +490,153 @@ class SupervisorHTTPServer:
                     self._logger.error(f"Error processing system command: {str(e)}")
                     self._send_error(f"Error: {str(e)}")
             
+
+            def _handle_software_command(self, post_data):
+                try:
+                    # 解析POST数据（k=v&k=v的格式）
+                    self._logger.info(f"Processing Software Package command with data: {post_data}")
+                    
+                    # 解析参数
+                    params = {}
+                    signature = None
+                    
+                    # 按&分割参数
+                    param_pairs = post_data.split('&')
+                    for pair in param_pairs:
+                        if '=' in pair:
+                            key, value = pair.split('=', 1)
+                            if key == '_sig':
+                                signature = value
+                            else:
+                                params[key] = value
+                    
+                    # 验证必须有command参数
+                    if 'action' not in params:
+                        self._send_error("action is required")
+                        return
+                    
+                    # 验证签名
+                    if not signature:
+                        self._send_error("Signature is required")
+                        return
+                    
+                    # 按key排序并重新组装参数字符串（不包含_sig）
+                    sorted_keys = sorted(params.keys())
+                    param_string = '&'.join([f"{k}={params[k]}" for k in sorted_keys])
+                    
+                    # 添加安全密钥并计算MD5
+                    security_string = f"{param_string}&ThirdReality"
+                    calculated_md5 = hashlib.md5(security_string.encode()).hexdigest()
+                    
+                    self._logger.info(f"Calculated signature: {calculated_md5}")
+                    
+                    # 验证签名
+                    if calculated_md5 != signature:
+                        self._logger.warning("Security verification failed: Invalid signature")
+                        self.send_response(401)
+                        self.send_header('Content-type', 'application/json')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"error": "Unauthorized: Invalid signature"}).encode())
+                        return
+                    
+                    # 签名验证通过，处理命令
+                    action = params.get("action", "")
+                    
+                    # 处理系统命令
+                    if action == "install":
+                        self._set_headers()
+                        self.wfile.write(json.dumps({"success": True}).encode())                    
+                    elif action == "uninstall":
+                        self._set_headers()
+                        self.wfile.write(json.dumps({"success": True}).encode())
+                    elif action == "enable":
+                        self._set_headers()
+                        self.wfile.write(json.dumps({"success": True}).encode())                   
+                    elif action == "disable":
+                        self._set_headers()
+                        self.wfile.write(json.dumps({"success": True}).encode())    
+                    elif action == "upgrade":
+                        self._set_headers()
+                        self.wfile.write(json.dumps({"success": True}).encode())   
+                    else:
+                        self._send_error(f"Unknown action: {action}")
+                
+                except Exception as e:
+                    self._logger.error(f"Error processing system command: {str(e)}")
+                    self._send_error(f"Error: {str(e)}")
+
+            def _handle_service_command(self, post_data):
+                try:
+                    # 解析POST数据（k=v&k=v的格式）
+                    self._logger.info(f"Processing Service with data: {post_data}")
+                    
+                    # 解析参数
+                    params = {}
+                    signature = None
+                    
+                    # 按&分割参数
+                    param_pairs = post_data.split('&')
+                    for pair in param_pairs:
+                        if '=' in pair:
+                            key, value = pair.split('=', 1)
+                            if key == '_sig':
+                                signature = value
+                            else:
+                                params[key] = value
+                    
+                    # 验证必须有action参数
+                    if 'action' not in params:
+                        self._send_error("action is required")
+                        return
+                    
+                    # 验证签名
+                    if not signature:
+                        self._send_error("Signature is required")
+                        return
+                    
+                    # 按key排序并重新组装参数字符串（不包含_sig）
+                    sorted_keys = sorted(params.keys())
+                    param_string = '&'.join([f"{k}={params[k]}" for k in sorted_keys])
+                    
+                    # 添加安全密钥并计算MD5
+                    security_string = f"{param_string}&ThirdReality"
+                    calculated_md5 = hashlib.md5(security_string.encode()).hexdigest()
+                    
+                    self._logger.info(f"Calculated signature: {calculated_md5}")
+                    
+                    # 验证签名
+                    if calculated_md5 != signature:
+                        self._logger.warning("Security verification failed: Invalid signature")
+                        self.send_response(401)
+                        self.send_header('Content-type', 'application/json')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"error": "Unauthorized: Invalid signature"}).encode())
+                        return
+                    
+                    # 签名验证通过，处理命令
+                    action = params.get("action", "")
+                    
+                    # 处理系统命令
+                    if action == "enable":
+                        self._set_headers()
+                        self.wfile.write(json.dumps({"success": True}).encode())                   
+                    elif action == "disable":
+                        self._set_headers()
+                        self.wfile.write(json.dumps({"success": True}).encode())
+                    elif action == "start":
+                        self._set_headers()
+                        self.wfile.write(json.dumps({"success": True}).encode())               
+                    elif action == "stop":
+                        self._set_headers()
+                        self.wfile.write(json.dumps({"success": True}).encode())     
+                    else:
+                        self._send_error(f"Unknown action: {action}")
+                
+                except Exception as e:
+                    self._logger.error(f"Error processing system command: {str(e)}")
+                    self._send_error(f"Error: {str(e)}")
+
+
             def _send_error(self, message):
                 """发送错误响应"""
                 self.send_response(400)
