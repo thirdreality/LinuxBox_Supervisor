@@ -4,6 +4,7 @@ This server runs when WiFi is connected and provides the same APIs as the BLE se
 """
 
 import json
+import hashlib
 import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -133,7 +134,11 @@ class SupervisorHTTPServer:
                 # 读取请求正文
                 post_data = self.rfile.read(content_length).decode('utf-8')
 
-                self._logger.info(f"$post_data")
+                self._logger.info(f"POST data: {post_data}")
+                
+                # 检查Content-Type
+                content_type = self.headers.get('Content-Type', '')
+                self._logger.info(f"Content-Type: {content_type}")
                 
                 # WiFi配置特性
                 if path == "/api/wifi/config":
@@ -175,10 +180,17 @@ class SupervisorHTTPServer:
             
             def _handle_sys_info(self):
                 """处理GET /api/system/info - 等同于SystemInfoCharacteristic"""
+                result = {}
                 # 从supervisor获取系统信息
                 if hasattr(self._supervisor, 'system_info') and self._supervisor.system_info:
                     system_info = self._supervisor.system_info
-                    result = system_info
+                    # Convert SystemInfo object to dictionary
+                    result = {
+                        "model": system_info.model,
+                        "version": system_info.version,
+                        "software_mode": system_info.software_mode,
+                        "software_version": system_info.software_version
+                    }
                 else:
                     # 默认系统信息
                     result = {
@@ -188,6 +200,14 @@ class SupervisorHTTPServer:
                         "uptime": int(time.time() - self._supervisor.start_time) if hasattr(self._supervisor, 'start_time') else 0
                     }
                 
+                if hasattr(self._supervisor, 'wifi_status'):
+                    wifi_status = self._supervisor.wifi_status
+                    result['connected'] = wifi_status.connected
+                    result['ssid'] = wifi_status.ssid
+                    result['ip_address'] = wifi_status.ip_address
+                    result['mac_address'] = wifi_status.mac_address
+                    
+
                 self._set_headers()
                 self.wfile.write(json.dumps(result).encode())
             
@@ -238,14 +258,66 @@ class SupervisorHTTPServer:
                     self._send_error(f"Error: {str(e)}")
             
             def _handle_sys_command(self, post_data):
-                """处理POST /api/system/command - 等同于SystemCommandCharacteristic"""
+                """处理POST /api/system/command - 等同于SystemCommandCharacteristic
+                
+                安全校验流程：
+                1. post_data格式为k=v&k=v的形式，不再是JSON
+                2. 按&分割成多个key=value对
+                3. 排序所有key（除_sig外），组成key1=value1&key2=value2&...的形式
+                4. 将上述字符串加上"&&ThirdReality"后计算MD5
+                5. 比较计算出的MD5与_sig参数的值，一致则校验通过，否则返回401
+                """
                 try:
-                    data = json.loads(post_data)
-                    command = data.get("command", "")
+                    # 解析POST数据（k=v&k=v的格式）
+                    self._logger.info(f"Processing system command with data: {post_data}")
                     
-                    if not command:
+                    # 解析参数
+                    params = {}
+                    signature = None
+                    
+                    # 按&分割参数
+                    param_pairs = post_data.split('&')
+                    for pair in param_pairs:
+                        if '=' in pair:
+                            key, value = pair.split('=', 1)
+                            if key == '_sig':
+                                signature = value
+                            else:
+                                params[key] = value
+                    
+                    # 验证必须有command参数
+                    if 'command' not in params:
                         self._send_error("Command is required")
                         return
+                    
+                    # 验证签名
+                    if not signature:
+                        self._send_error("Signature is required")
+                        return
+                    
+                    # 按key排序并重新组装参数字符串（不包含_sig）
+                    sorted_keys = sorted(params.keys())
+                    param_string = '&'.join([f"{k}={params[k]}" for k in sorted_keys])
+                    
+                    # 添加安全密钥并计算MD5
+                    security_string = f"{param_string}&ThirdReality"
+                    calculated_md5 = hashlib.md5(security_string.encode()).hexdigest()
+                    
+                    self._logger.info(f"Security string: {security_string}")
+                    self._logger.info(f"Calculated MD5: {calculated_md5}")
+                    self._logger.info(f"Provided signature: {signature}")
+                    
+                    # 验证签名
+                    if calculated_md5 != signature:
+                        self._logger.warning("Security verification failed: Invalid signature")
+                        self.send_response(401)
+                        self.send_header('Content-type', 'application/json')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"error": "Unauthorized: Invalid signature"}).encode())
+                        return
+                    
+                    # 签名验证通过，处理命令
+                    command = params.get("command", "")
                     
                     # 处理系统命令
                     if command == "reboot":
@@ -259,6 +331,11 @@ class SupervisorHTTPServer:
                         self._set_headers()
                         self.wfile.write(json.dumps({"success": True}).encode())
                         threading.Timer(1.0, self._supervisor.perform_factory_reset).start()
+                    elif command == "delete_networks":
+                        # 直接调用supervisor的删除网络配置方法
+                        self._set_headers()
+                        self.wfile.write(json.dumps({"success": True}).encode())
+                        threading.Timer(1.0, self._supervisor.perform_delete_networks).start()                        
                     elif command == "prepare_wifi_provision":
                         # 直接调用supervisor的准备配网方法
                         restore_need = utils.is_service_running("home-assistant")
@@ -283,9 +360,8 @@ class SupervisorHTTPServer:
                     else:
                         self._send_error(f"Unknown command: {command}")
                 
-                except json.JSONDecodeError:
-                    self._send_error("Invalid JSON")
                 except Exception as e:
+                    self._logger.error(f"Error processing system command: {str(e)}")
                     self._send_error(f"Error: {str(e)}")
             
             def _send_error(self, message):

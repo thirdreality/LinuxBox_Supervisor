@@ -35,7 +35,7 @@ except ImportError:
 from .advertisement import Advertisement
 from .service import Application, Service, Characteristic, Descriptor
 from ..utils.wifi_manager import WifiManager
-from ..utils.wifi_utils import get_wlan0_mac_for_localname
+from ..utils.wifi_utils import get_wlan0_mac_for_localname,get_wlan0_ip
 
 #define HUBV3_CONFIG_SERVICE_UUID "6e400000-0000-4e98-8024-bc5b71e0893e"
 
@@ -104,7 +104,7 @@ class SupervisorGattServer:
             self.app = Application()
             self.app.add_device_property_callback(my_callback)
 
-            self.manager_service = LinuxBoxManagerService(0)
+            self.manager_service = LinuxBoxManagerService(0, self.supervisor)
             self.app.add_service(self.manager_service)
             
             # Register Advertisement and Application
@@ -183,8 +183,9 @@ class LinuxBoxAdvertisement(Advertisement):
 class LinuxBoxManagerService(Service):
     _LINUXBOX_SVC_UUID = "6e400000-0000-4e98-8024-bc5b71e0893e"
 
-    def __init__(self, index):
+    def __init__(self, index, supervisor=None):
         Service.__init__(self, index, self._LINUXBOX_SVC_UUID, True)
+        self.supervisor = supervisor
         self.add_characteristic(WIFIConfigCharacteristic(self))
 
 class WIFIConfigCharacteristic(Characteristic):
@@ -193,6 +194,7 @@ class WIFIConfigCharacteristic(Characteristic):
     def __init__(self, service):
         self.logger = logging.getLogger("Supervisor")
         self._notifying = False
+        self.service = service
         Characteristic.__init__(
                 self, self._CHARACTERISTIC_UUID,
                 ["notify", "write"], service)
@@ -208,29 +210,40 @@ class WIFIConfigCharacteristic(Characteristic):
     def _process_command_and_notify(self, command):
         self.logger.info(f"_process_command_and_notify: {command}")
 
-        # Generate a proper result using wifi_manager
+        # Default values
         ret = False  # Default result
         ip_address = ""
-        config = json.loads(command)
-        if "ssid" in config:
-            ssid = config["ssid"]
-            password = config.get("password", "")
-            restore = config.get("restore", False)
-            
-            if wifi_manager:
-                ret = wifi_manager.configure(ssid, password)
-                self.logger.info(f"WiFi configuration result: {ret}")
-                if ret:
-                    ip_address = get_wlan0_ip() or ""
-                    self.logger.info(f"WiFi IP address: {ip_address}")
-                    if restore:
-                        self.logger.info(f"Restore previous state ...")
-                        utils.perform_wifi_provision_restore()
-        else:
-            self.logger.info("WiFi manager not initialized")
+        ssid = ""
+        password = ""
+        restore = False
+        result = ""
 
-        # Format the response as requested
-        result = json.dumps({"connected": ret, "ip_address": ip_address})
+        # Process all commands as JSON
+        # Try to parse as JSON for WiFi configuration commands
+        try:
+            config = json.loads(command)
+            if "ssid" in config:
+                ssid = config["ssid"]
+                password = config.get("password", "")
+                restore = config.get("restore", False)
+                
+                # Get wifi_manager from supervisor if available
+                if hasattr(self.service, 'supervisor') and self.service.supervisor and hasattr(self.service.supervisor, 'wifi_manager'):
+                    wifi_manager = self.service.supervisor.wifi_manager
+                    ret = wifi_manager.configure(ssid, password)
+                    self.logger.info(f"WiFi configuration result: {ret}")
+                    if ret == 0:
+                        ip_address = get_wlan0_ip() or ""
+                        self.logger.info(f"WiFi IP address: {ip_address}")
+                else:
+                    self.logger.info("WiFi manager not initialized")
+
+            # Format the response for WiFi configuration
+            result = json.dumps({"connected": ret==0, "ip_address": ip_address})
+        except json.JSONDecodeError:
+            self.logger.error(f"Invalid command format: {command}")
+            result = json.dumps({"error": "Invalid command format"})
+
         self.logger.info(f"Sending result: {result}")
 
         if self._notifying:
@@ -241,6 +254,10 @@ class WIFIConfigCharacteristic(Characteristic):
                 {"Value": dbus.Array(value, signature='y')},
                 []
             )
+
+        if restore:
+            self.logger.info(f"Restore previous state ...")
+            utils.perform_wifi_provision_restore()            
 
     def StartNotify(self):
         if self._notifying:
