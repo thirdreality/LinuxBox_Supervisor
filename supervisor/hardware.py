@@ -21,6 +21,7 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %
 class LedState(Enum):
     REBOOT = "reboot"
     POWER_OFF = "power_off"
+    FACTORY_RESET = "factory_reset"
     NORMAL = "normal"
     NETWORK_ERROR = "network_error"
     NETWORK_LOST = "network_lost"
@@ -150,7 +151,11 @@ class GpioLed:
                     self.green()
                 else:
                     self.off()
-
+            elif state == LedState.FACTORY_RESET:
+                if blink_counter == 0:
+                    self.red()
+                else:
+                    self.off()
             time.sleep(0.5)
     
     def start(self):

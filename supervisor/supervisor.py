@@ -21,10 +21,10 @@ from .ble.gattserver import SupervisorGattServer
 from .http_server import SupervisorHTTPServer  
 from .proxy import SupervisorProxy
 from .cli import SupervisorClient
+from .sysinfo import SystemInfoUpdater, SystemInfo, HomeAssistantInfo, Zigbee2mqttInfo, homekitbridgeInfo
 
 from .utils import utils
-from .utils.utils import SystemInfo, OtaStatus
-
+from .utils.utils import OtaStatus
 
 # Configure logging
 logging.basicConfig(
@@ -38,8 +38,6 @@ logging.basicConfig(
 logger = logging.getLogger("Supervisor")
 
 class Supervisor:
-    _support_zigbee=True
-    _support_thread=False
     #zigbee2mqtt, homekitbridge, homeassistant-core
     _worker_mode="homeassistant-core"
 
@@ -68,16 +66,16 @@ class Supervisor:
         self.gatt_server = None
 
         self.network_monitor = NetworkMonitor(self)
+        self.sysinfo_update = SystemInfoUpdater(self)
         self.ota_server = SupervisorOTAServer(self)
 
-        
         # boot up time
         self.start_time = time.time()
 
     def set_led_state(self, state):
         with self.state_lock:
             # 最高优先级：如果新状态是 REBOOT 或 POWER_OFF，则无条件地设置状态
-            if state in [LedState.REBOOT, LedState.POWER_OFF]:
+            if state in [LedState.REBOOT, LedState.POWER_OFF, LedState.FACTORY_RESET]:
                 self.current_led_state = state
             else:
                 # 如果当前状态是 PARING 且新状态是 PARED 或 NORMAL，则转换为 NORMAL
@@ -94,13 +92,13 @@ class Supervisor:
             return self.current_led_state
         
     def isThreadSupported(self):
-        return self._support_thread
+        return self.system_info.support_thread
 
     def isZigbeeSupported(self):
         return self._support_zigbee
 
     def enableThreadSupported(self):
-        self._support_thread = True
+        self.system_info.support_thread = True
 
     def enableZigbeeSupported(self):
         self._support_zigbee = True
@@ -136,19 +134,6 @@ class Supervisor:
             
         try:
             logger.info(f"Configuring WiFi: SSID={ssid}")
-            # 这里实现WiFi配置逻辑，例如写入wpa_supplicant.conf
-            # 或者使用NetworkManager等工具
-            
-            # 示例: 使用wpa_cli (需要根据实际环境调整)
-            # commands = [
-            #    f'wpa_cli -i wlan0 add_network',
-            #    f'wpa_cli -i wlan0 set_network 0 ssid \\"{ssid}\\"',
-            #    f'wpa_cli -i wlan0 set_network 0 psk \\"{password}\\"',
-            #    f'wpa_cli -i wlan0 enable_network 0',
-            #    f'wpa_cli -i wlan0 save_config'
-            # ]
-            # for cmd in commands:
-            #    subprocess.check_call(cmd, shell=True)
             
             # 触发网络状态更新 - 实际环境中可能需要延迟
             time.sleep(5)  # 等待WiFi连接
@@ -176,8 +161,6 @@ class Supervisor:
         """启动HTTP服务器"""
         if not self.http_server:
             try:
-
-                # 创建并启动HTTP服务器
                 self.http_server = SupervisorHTTPServer(self, port=8086)
                 self.http_server.start()
                 logger.info("HTTP server started")
@@ -202,7 +185,6 @@ class Supervisor:
     def _start_gatt_server(self):
         if not self.gatt_server:
             try:
-                # 创建并启动GATT服务器
                 self.gatt_server = SupervisorGattServer(self)
                 self.gatt_server.start()
                 logger.info("GATT server started")
@@ -226,25 +208,20 @@ class Supervisor:
 
     def perform_reboot(self):
         logging.info("Performing reboot...")
-        self.set_led_state(LedState.REBOOT)
         utils.perform_reboot()
 
     def perform_factory_reset(self):
         logging.info("Performing factory reset...")
-        self.set_led_state(LedState.REBOOT)
         # 这里可以添加清除配置的代码
         utils.perform_factory_reset()
 
     def perform_power_off(self):
         logging.info("Performing power off...")
-        self.set_led_state(LedState.POWER_OFF)
         # 这里可以启动一个脚本
         utils.perform_power_off()
     
     def perform_wifi_provision_prepare(self):
         logging.info("Performing prepare wifi provision...")
-        self.set_led_state(LedState.REBOOT)
-        # 根据不同的情况，检查home-assistant是否正在运行并停止它，返回是否需要恢复
         utils.perform_wifi_provision_prepare()
 
     def _signal_handler(self, sig, frame):
@@ -266,7 +243,6 @@ class Supervisor:
 
         self.network_monitor.stop()
 
-        # 关闭硬件
         try:
             self.led.off()  # 确保LED关闭
         except:
@@ -285,7 +261,7 @@ class Supervisor:
 
         self.led.start()
         self.hwinit.initialize_pin()
-        if self._support_thread == False:
+        if self.system_info.support_thread == False:
             utils.execute_system_command(["systemctl", "disable", "otbr-agent"])
 
         self.button.start()
@@ -293,6 +269,8 @@ class Supervisor:
 
         self._start_http_server()
         self._start_gatt_server()
+
+        self.sysinfo_update.start()
 
         self.proxy.run()
 

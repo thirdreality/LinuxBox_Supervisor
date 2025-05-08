@@ -98,7 +98,7 @@ class SupervisorGattServer:
             self.mainloop = GObject.MainLoop()
             
             # Initialize BLE Advertisement
-            self.adv = LinuxBoxAdvertisement(0)
+            self.adv = LinuxBoxAdvertisement(self.supervisor, 0)
             
             # Initialize BLE Application and Service
             self.app = Application()
@@ -168,16 +168,19 @@ def my_callback(interface, changed, invalidated, path):
     print(f"Custom BLE event: {interface} {changed} {path}")
 
 class LinuxBoxAdvertisement(Advertisement):
-    def __init__(self, index):
+    def __init__(self, supervisor, index):
+        self.supervisor = supervisor
         self.logger = logging.getLogger("Supervisor")
         Advertisement.__init__(self, index, "peripheral")
         mac_str = get_wlan0_mac_for_localname()
         if mac_str:
             self.logger.info(f"[BLE] Adding local name: '3RHUB-{mac_str}'")
             self.add_local_name(f"3RHUB-{mac_str}")
+            self.supervisor.system_info.name = f"3RHUB-{mac_str}"
         else:
             self.logger.error(f"[BLE] Adding local name: '3RHUB-XXXXXXXX'")
             self.add_local_name("3RHUB-XXXXXXXX")
+            self.supervisor.system_info.name = "3RHUB-XXXXXXXX"
         self.include_tx_power = True
 
 class LinuxBoxManagerService(Service):

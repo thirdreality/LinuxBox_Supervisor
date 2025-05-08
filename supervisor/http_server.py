@@ -15,6 +15,7 @@ import sys
 import logging
 
 from .utils import utils
+from .hardware import LedState
 
 # 使用与supervisor相同的logger
 
@@ -115,8 +116,12 @@ class SupervisorHTTPServer:
                 # 系统信息特性
                 elif path == "/api/system/info":
                     self._handle_sys_info()
-                elif path == "/api/system/status":
-                    self._handle_sys_info()                
+                elif path == "/api/software/info":
+                    self._handle_software_info()           
+                elif path == "/api/service/info":
+                    self._handle_service_info()
+                elif path == "/api/firmware/info":
+                    self._handle_firmware_info()            
                 # 处理未知路径
                 else:
                     self.send_response(404)
@@ -184,50 +189,192 @@ class SupervisorHTTPServer:
                 # 从supervisor获取系统信息
                 if hasattr(self._supervisor, 'system_info') and self._supervisor.system_info:
                     system_info = self._supervisor.system_info
-                    # Convert SystemInfo object to dictionary
                     result = {
-                        "model": system_info.model,
-                        "version": system_info.version,
-                        "software_mode": system_info.software_mode,
-                        "software_version": system_info.software_version
+                        "Device Model": system_info.model,
+                        "Device Name": system_info.name,
+                        "Current Version": system_info.version,
+                        "Build Number": system_info.build_number,
+                        "Uptime": int(time.time() - self._supervisor.start_time) if hasattr(self._supervisor, 'start_time') else 0
                     }
                 else:
                     # 默认系统信息
                     result = {
                         "model": "LinuxBox",
                         "version": "1.0.0",
-                        "hostname": "linuxbox",
+                        "name": "3RHUB-Unknown",
                         "uptime": int(time.time() - self._supervisor.start_time) if hasattr(self._supervisor, 'start_time') else 0
                     }
                 
                 if hasattr(self._supervisor, 'wifi_status'):
                     wifi_status = self._supervisor.wifi_status
-                    result['connected'] = wifi_status.connected
-                    result['ssid'] = wifi_status.ssid
-                    result['ip_address'] = wifi_status.ip_address
-                    result['mac_address'] = wifi_status.mac_address
+                    result['Connected'] = wifi_status.connected
+                    result['SSID'] = wifi_status.ssid
+                    result['Ip Address'] = wifi_status.ip_address
+                    result['Mac Address'] = wifi_status.mac_address
                     
-
                 self._set_headers()
                 self.wfile.write(json.dumps(result).encode())
             
-            def _handle_sys_status(self):
-                """处理GET /api/system/status - 等同于SystemStatusCharacteristic"""
-                # 从supervisor获取系统状态
-                if hasattr(self._supervisor, 'system_status') and self._supervisor.system_status:
-                    system_status = self._supervisor.system_status
-                    result = system_status
-                else:
-                    # 默认系统状态
-                    result = {
-                        "model": "LinuxBox",
-                        "version": "1.0.0",
-                        "hostname": "linuxbox",
-                        "uptime": int(time.time() - self._supervisor.start_time) if hasattr(self._supervisor, 'start_time') else 0
-                    }
-                
+
+            def _handle_software_info(self): 
+                homeassistant_core_result={
+                    'name': 'Home Assistant'
+                }
+                zigbee2mqtt_result = {
+                    'name': 'zigbee2mqtt'
+                }
+                homekitbridge_result = {
+                    'name': 'Homekit Bridge'
+                }
+
+                if hasattr(self._supervisor, 'system_info') and self._supervisor.system_info:
+                    system_info = self._supervisor.system_info
+                    homeassistant_core_items = [
+                        {
+                            "name": "hacore-config",
+                            "version":system_info.hainfo.config
+                        },
+                        {
+                            "name": "python3",
+                            "version":system_info.hainfo.python
+                        },
+                        {
+                            "name": "hacore",
+                            "version":system_info.hainfo.core
+                        },
+                        {
+                            "name": "otbr-agent",
+                            "version":system_info.hainfo.otbr
+                        },                                                                        
+                    ]
+
+                    homeassistant_core_result['installed'] = system_info.hainfo.installed
+                    homeassistant_core_result['enabled'] = system_info.hainfo.enabled
+                    homeassistant_core_result['software'] = homeassistant_core_items
+
+                    zigbee2mqtt_items = [
+                        {
+                            "name": "zigbee2mqt",
+                            "version":system_info.z2minfo.zigbee2mqtt
+                        },
+                    ]
+                    zigbee2mqtt_result['installed'] = system_info.z2minfo.installed
+                    zigbee2mqtt_result['enabled'] = system_info.z2minfo.enabled
+                    zigbee2mqtt_result['software'] = zigbee2mqtt_items
+
+                    homekitbridge_items = [
+                    ]
+                    homekitbridge_result['installed'] = system_info.hbinfo.installed
+                    homekitbridge_result['enabled'] = system_info.hbinfo.enabled
+                    homekitbridge_result['software'] = homekitbridge_items
+
+                result = {
+                    "homeassistant_core":homeassistant_core_result,
+                    "zigbee2mqtt":zigbee2mqtt_result,
+                    "homekitbridge":homekitbridge_result
+                }
+
                 self._set_headers()
-                self.wfile.write(json.dumps(result).encode())
+                self.wfile.write(json.dumps(result).encode())                
+
+            def _handle_service_info(self): 
+                homeassistant_core_result={
+                    'name': 'Home Assistant'
+                }
+                zigbee2mqtt_result = {
+                    'name': 'zigbee2mqtt'
+                }
+                homekitbridge_result = {
+                    'name': 'Homekit Bridge'
+                }
+
+                # Define and check Home Assistant services
+                homeassistant_core_services_status = []
+                homeassistant_core_services = [
+                    "home-assistant.service",                                                  
+                    "matter-server.service",
+                    "otbr-agent.service",
+                ]
+
+                # Check status of each Home Assistant service
+                for service in homeassistant_core_services:
+                    is_running = utils.is_service_running(service)
+                    is_enabled = utils.is_service_enabled(service)
+                    service_info = {
+                        "name": service,
+                        "running": is_running,
+                        "enabled": is_enabled
+                    }
+                    homeassistant_core_services_status.append(service_info)
+                
+                homeassistant_core_result['service'] = homeassistant_core_services_status
+
+                # Define and check Zigbee2MQTT services
+                zigbee2mqtt_services_status = []
+                zigbee2mqtt_services = [
+                    "zigbee2mqtt.service"
+                ]
+
+                # Check status of each Zigbee2MQTT service
+                for service in zigbee2mqtt_services:
+                    is_running = utils.is_service_running(service)
+                    is_enabled = utils.is_service_enabled(service)
+                    service_info = {
+                        "name": service,
+                        "running": is_running,
+                        "enabled": is_enabled
+                    }
+                    zigbee2mqtt_services_status.append(service_info)
+
+                zigbee2mqtt_result['service'] = zigbee2mqtt_services_status
+
+                # Define and check HomeKit Bridge services
+                homekitbridge_services_status = []
+                homekitbridge_services = [
+                    "homekit-bridge.service"
+                ]
+
+                # Check status of each HomeKit Bridge service
+                for service in homekitbridge_services:
+                    is_running = utils.is_service_running(service)
+                    is_enabled = utils.is_service_enabled(service)
+                    service_info = {
+                        "name": service,
+                        "running": is_running,
+                        "enabled": is_enabled
+                    }
+                    homekitbridge_services_status.append(service_info)
+
+                homekitbridge_result['service'] = homekitbridge_services_status
+
+                # Create final result
+                result = {
+                    "homeassistant_core": homeassistant_core_result,
+                    "zigbee2mqtt": zigbee2mqtt_result,
+                    "homekitbridge": homekitbridge_result
+                }
+
+                self._set_headers()
+                self.wfile.write(json.dumps(result).encode())                  
+
+            def _handle_firmware_info(self):
+                homeassistant_core_result={
+                    'name': 'Home Assistant'
+                }
+                zigbee2mqtt_result = {
+                    'name': 'zigbee2mqtt'
+                }
+                homekitbridge_result = {
+                    'name': 'Homekit Bridge'
+                }
+
+                result = {
+                    "homeassistant_core":homeassistant_core_result,
+                    "zigbee2mqtt":zigbee2mqtt_result,
+                    "homekitbridge":homekitbridge_result
+                }
+                self._set_headers()
+                self.wfile.write(json.dumps(result).encode())                
 
             def _handle_wifi_config(self, post_data):
                 """处理POST /api/wifi/config - 等同于WifiConfigCharacteristic"""
@@ -258,15 +405,6 @@ class SupervisorHTTPServer:
                     self._send_error(f"Error: {str(e)}")
             
             def _handle_sys_command(self, post_data):
-                """处理POST /api/system/command - 等同于SystemCommandCharacteristic
-                
-                安全校验流程：
-                1. post_data格式为k=v&k=v的形式，不再是JSON
-                2. 按&分割成多个key=value对
-                3. 排序所有key（除_sig外），组成key1=value1&key2=value2&...的形式
-                4. 将上述字符串加上"&&ThirdReality"后计算MD5
-                5. 比较计算出的MD5与_sig参数的值，一致则校验通过，否则返回401
-                """
                 try:
                     # 解析POST数据（k=v&k=v的格式）
                     self._logger.info(f"Processing system command with data: {post_data}")
@@ -303,9 +441,7 @@ class SupervisorHTTPServer:
                     security_string = f"{param_string}&ThirdReality"
                     calculated_md5 = hashlib.md5(security_string.encode()).hexdigest()
                     
-                    self._logger.info(f"Security string: {security_string}")
-                    self._logger.info(f"Calculated MD5: {calculated_md5}")
-                    self._logger.info(f"Provided signature: {signature}")
+                    self._logger.info(f"Calculated signature: {calculated_md5}")
                     
                     # 验证签名
                     if calculated_md5 != signature:
@@ -322,15 +458,17 @@ class SupervisorHTTPServer:
                     # 处理系统命令
                     if command == "reboot":
                         # 直接调用supervisor的重启方法
+                        self._supervisor.set_led_state(LedState.REBOOT)
                         self._set_headers()
                         self.wfile.write(json.dumps({"success": True}).encode())
-                        threading.Timer(1.0, self._supervisor.perform_reboot).start()
+                        threading.Timer(3.0, self._supervisor.perform_reboot).start()
                     
                     elif command == "factory_reset":
                         # 直接调用supervisor的出厂重置方法
+                        self._supervisor.set_led_state(LedState.FACTORY_RESET)
                         self._set_headers()
                         self.wfile.write(json.dumps({"success": True}).encode())
-                        threading.Timer(1.0, self._supervisor.perform_factory_reset).start()
+                        threading.Timer(3.0, self._supervisor.perform_factory_reset).start()
                     elif command == "delete_networks":
                         # 直接调用supervisor的删除网络配置方法
                         self._set_headers()
