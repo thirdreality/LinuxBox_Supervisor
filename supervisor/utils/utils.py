@@ -239,24 +239,11 @@ def perform_power_off():
 
 
 def perform_factory_reset():
-    """
-    Perform a factory reset by clearing configurations and rebooting.
-    
-    This function removes all configuration files in the /config directory,
-    stops Docker service, and reboots the system to complete the reset.
-    
-    Returns:
-        bool: True if all commands were executed successfully, False otherwise
-    """
+
     logging.info("Performing factory reset...")
-    # Remove configuration files
-    success = execute_system_command(["rm", "-rf", "/config/*"])
-    if not success:
-        logging.error("Failed to remove configuration files")
-        return False
-    
-    execute_system_command(["systemctl", "stop", "docker"])
-    return execute_system_command(["reboot"])
+    execute_system_command(["systemctl", "start", "hubv3-factory-reset.service"])
+
+    return True
 
 def perform_wifi_provision_prepare():
     execute_system_command(["systemctl", "stop", "home-assistant"])

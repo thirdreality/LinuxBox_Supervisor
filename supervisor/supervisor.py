@@ -198,7 +198,7 @@ class Supervisor:
                     return False
             
             # Try to start the GATT server with retries
-            max_retries = 5
+            max_retries = 30
             retry_delay = 3  # seconds
             for attempt in range(max_retries):
                 try:
@@ -243,7 +243,8 @@ class Supervisor:
 
     def perform_factory_reset(self):
         logging.info("Performing factory reset...")
-        # 这里可以添加清除配置的代码
+
+        self.set_led_state(LedState.FACTORY_RESET)
         utils.perform_factory_reset()
 
     def perform_power_off(self):
