@@ -9,10 +9,10 @@ import threading
 import subprocess
 
 from enum import Enum
-from .const import LINUXBOX_LED_R_PIN
-from .const import LINUXBOX_LED_G_PIN
-from .const import LINUXBOX_LED_B_PIN
-from .const import LINUXBOX_BUTTON_PIN
+from .const import LINUXBOX_LED_R_CHIP, LINUXBOX_LED_R_LINE
+from .const import LINUXBOX_LED_G_CHIP, LINUXBOX_LED_G_LINE
+from .const import LINUXBOX_LED_B_CHIP, LINUXBOX_LED_B_LINE
+from .const import LINUXBOX_BUTTON_CHIP, LINUXBOX_BUTTON_LINE
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -32,73 +32,53 @@ class LedState(Enum):
     MQTT_NORMAL = "mqtt_normal"
 
 # -----------------------------------------------------------------------------
-class SysFSGPIO:
-    BASE_PATH = "/sys/class/gpio"
-
-    @staticmethod
-    def export_pin(pin):
-        if not os.path.exists(f"{SysFSGPIO.BASE_PATH}/gpio{pin}"):
-            try:
-                with open(f"{SysFSGPIO.BASE_PATH}/export", "w") as f:
-                    f.write(str(pin))
-                time.sleep(0.1)
-            except IOError as e:
-                logging.error(f"Exporting GPIO pin {pin} failed: {e}")
-
-    @staticmethod
-    def write_value(pin, value):
-        try:
-            with open(f"{SysFSGPIO.BASE_PATH}/gpio{pin}/value", "w") as f:
-                f.write(str(value))
-        except IOError as e:
-            logging.error(f"Writing to GPIO pin {pin} failed: {e}")
-
-    @staticmethod
-    def read_value(pin):
-        try:
-            with open(f"{SysFSGPIO.BASE_PATH}/gpio{pin}/value", "r") as f:
-                return f.read().strip()
-        except IOError as e:
-            logging.error(f"Reading from GPIO pin {pin} failed: {e}")
-            return None
-
-    @staticmethod
-    def set_direction(pin, direction):
-        try:
-            with open(f"{SysFSGPIO.BASE_PATH}/gpio{pin}/direction", "w") as f:
-                f.write(direction)
-        except IOError as e:
-            logging.error(f"Setting direction for GPIO pin {pin} failed: {e}")
-
-# -----------------------------------------------------------------------------
 class GpioLed:
     def __init__(self, supervisor=None):
         self.supervisor = supervisor
         self.logger = logging.getLogger("Supervisor")
         
-        self.pins = {
-            'RED': LINUXBOX_LED_R_PIN,
-            'GREEN': LINUXBOX_LED_G_PIN,
-            'BLUE': LINUXBOX_LED_B_PIN
+        # Define LED configuration with chip and line numbers
+        self.leds = {
+            'RED': {'chip': LINUXBOX_LED_R_CHIP, 'line': LINUXBOX_LED_R_LINE},
+            'GREEN': {'chip': LINUXBOX_LED_G_CHIP, 'line': LINUXBOX_LED_G_LINE},
+            'BLUE': {'chip': LINUXBOX_LED_B_CHIP, 'line': LINUXBOX_LED_B_LINE}
         }
-        self._initialize_pins()
         
         # Thread control
         self.led_thread = None
 
-    def _initialize_pins(self):
-        for pin in self.pins.values():
-            SysFSGPIO.export_pin(pin)
-            SysFSGPIO.set_direction(pin, "out")
+    def _set_gpio_value(self, chip, line, value):
+        """Set GPIO value using gpioset command"""
+        try:
+            cmd = ["gpioset", str(chip), f"{line}={value}"]
+            subprocess.run(cmd, check=True)
+            return True
+        except subprocess.SubprocessError as e:
+            self.logger.error(f"Failed to set GPIO chip {chip} line {line} to {value}: {e}")
+            return False
 
     def set_color(self, red, green, blue):
-        pin_states = {
-            self.pins['RED']: red,
-            self.pins['GREEN']: green,
-            self.pins['BLUE']: blue
-        }
-        for pin, state in pin_states.items():
-            SysFSGPIO.write_value(pin, 1 if state else 0)
+        """Set LED colors using gpioset"""
+        # Set RED LED
+        self._set_gpio_value(
+            self.leds['RED']['chip'], 
+            self.leds['RED']['line'], 
+            1 if red else 0
+        )
+        
+        # Set GREEN LED
+        self._set_gpio_value(
+            self.leds['GREEN']['chip'], 
+            self.leds['GREEN']['line'], 
+            1 if green else 0
+        )
+        
+        # Set BLUE LED
+        self._set_gpio_value(
+            self.leds['BLUE']['chip'], 
+            self.leds['BLUE']['line'], 
+            1 if blue else 0
+        )
 
     def off(self): self.set_color(False, False, False)
     def red(self): self.set_color(True, False, False)
@@ -176,18 +156,28 @@ class GpioButton:
         self.supervisor = supervisor
         self.logger = logging.getLogger("Supervisor")
         
-        self.BUTTON_PIN = LINUXBOX_BUTTON_PIN
-        self._initialize_pin()
+        # Button configuration with chip and line numbers
+        self.button = {
+            'chip': LINUXBOX_BUTTON_CHIP,
+            'line': LINUXBOX_BUTTON_LINE
+        }
         
         # Thread control
         self.button_thread = None
 
     def _initialize_pin(self):
-        SysFSGPIO.export_pin(self.BUTTON_PIN)
-        SysFSGPIO.set_direction(self.BUTTON_PIN, "in")
+        # No initialization needed for gpioget approach
+        pass
 
     def is_pressed(self):
-        return SysFSGPIO.read_value(self.BUTTON_PIN) == "1"
+        """Check if button is pressed using gpioget command"""
+        try:
+            cmd = ["gpioget", str(self.button['chip']), str(self.button['line'])]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            return result.stdout.strip() == "1"
+        except subprocess.SubprocessError as e:
+            self.logger.error(f"Failed to get button state from GPIO chip {self.button['chip']} line {self.button['line']}: {e}")
+            return False
     
     def button_control_task(self):
         """Button monitoring thread"""
