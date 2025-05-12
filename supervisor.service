@@ -3,7 +3,7 @@ Description=Supervisor Service
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 /root/LinuxBox_Supervisor/bin/supervisor
+ExecStart=/usr/bin/python3 /usr/local/bin/supervisor
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal

@@ -124,10 +124,13 @@ class Supervisor:
         logger.info(f"Update wifi info: {ip_address}")
         self.wifi_status.ip_address = ip_address
         self.wifi_status.ssid = ssid
-        if ip_address == "":
-            self.gatt_server.updateAdv("0.0.0.0")
+        if self.gatt_server:
+            if ip_address == "":
+                self.gatt_server.updateAdv("0.0.0.0")
+            else:
+                self.gatt_server.updateAdv(ip_address)
         else:
-            self.gatt_server.updateAdv(ip_address)
+            logger.info("gatt_server not initialized, skipping updateAdv operation")
         return True
 
     def configure_wifi(self, ssid, password, restore):
@@ -197,32 +200,39 @@ class Supervisor:
                     logger.error(f"Error checking bluetooth service: {e}")
                     return False
             
-            # Try to start the GATT server with retries
-            max_retries = 30
-            retry_delay = 3  # seconds
-            for attempt in range(max_retries):
-                try:
-                    # Check if bluetooth service is active
-                    if not check_bluetooth_service():
-                        logger.warning(f"Bluetooth service not active yet, waiting {retry_delay} seconds (attempt {attempt+1}/{max_retries})")
-                        time.sleep(retry_delay)
-                        continue
-                    
-                    # Try to start the GATT server
-                    self.gatt_server = SupervisorGattServer(self)
-                    self.gatt_server.start()
-                    logger.info("GATT server started successfully")
-                    return True
-                except Exception as e:
-                    if "org.freedesktop.DBus.Error.ServiceUnknown" in str(e):
-                        logger.warning(f"DBus service not ready yet, retrying in {retry_delay} seconds (attempt {attempt+1}/{max_retries})")
-                        time.sleep(retry_delay)
-                    else:
-                        logger.error(f"Failed to start GATT server: {e}")
-                        return False
+            # Function to be run in a separate thread to monitor bluetooth service
+            def bluetooth_monitor_thread():
+                max_retries = 30
+                retry_delay = 3  # seconds
+                
+                for attempt in range(max_retries):
+                    try:
+                        # Check if bluetooth service is active
+                        if not check_bluetooth_service():
+                            logger.warning(f"Bluetooth service not active yet, waiting {retry_delay} seconds (attempt {attempt+1}/{max_retries})")
+                            time.sleep(retry_delay)
+                            continue
+                        
+                        # Try to start the GATT server
+                        self.gatt_server = SupervisorGattServer(self)
+                        self.gatt_server.start()
+                        logger.info("GATT server started successfully")
+                        return
+                    except Exception as e:
+                        if "org.freedesktop.DBus.Error.ServiceUnknown" in str(e):
+                            logger.warning(f"DBus service not ready yet, retrying in {retry_delay} seconds (attempt {attempt+1}/{max_retries})")
+                            time.sleep(retry_delay)
+                        else:
+                            logger.error(f"Failed to start GATT server: {e}")
+                            return
+                
+                logger.error(f"Failed to start GATT server after {max_retries} attempts")
             
-            logger.error(f"Failed to start GATT server after {max_retries} attempts")
-            return False
+            # Start the bluetooth monitor in a separate thread
+            bluetooth_thread = threading.Thread(target=bluetooth_monitor_thread, daemon=True)
+            bluetooth_thread.start()
+            logger.info("Started bluetooth service monitor thread for GATT server")
+            return True
         return True
 
     def _stop_gatt_server(self):

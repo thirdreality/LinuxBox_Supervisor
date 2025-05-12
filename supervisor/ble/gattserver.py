@@ -108,6 +108,7 @@ class SupervisorGattServer:
             self.manager_service = LinuxBoxManagerService(0, self.supervisor)
             self.app.add_service(self.manager_service)
             
+            self.updateAdv(None)
             # Register Advertisement and Application
             self.adv.register()
             self.app.register()
