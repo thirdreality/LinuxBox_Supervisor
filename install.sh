@@ -10,10 +10,10 @@ mkdir -p /usr/local/bin
 mkdir -p /var/log
 
 # Install dependencies
-pip3 install -r requirements.txt
+# pip3 install -r requirements.txt
 
 # Copy all Supervisor source files (including submodules)
-cp -r supervisor /usr/local/lib/python3/dist-packages/
+cp -r supervisor /usr/local/lib/python3.11/dist-packages/
 cp bin/supervisor /usr/local/bin/
 chmod +x /usr/local/bin/supervisor
 
