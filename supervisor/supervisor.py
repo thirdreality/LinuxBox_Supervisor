@@ -187,14 +187,42 @@ class Supervisor:
 
     def _start_gatt_server(self):
         if not self.gatt_server:
-            try:
-                self.gatt_server = SupervisorGattServer(self)
-                self.gatt_server.start()
-                logger.info("GATT server started")
-                return True
-            except Exception as e:
-                logger.error(f"Failed to start GATT server: {e}")
-                return False
+            # Check if bluetooth service is running
+            def check_bluetooth_service():
+                try:
+                    import subprocess
+                    result = subprocess.run(['systemctl', 'is-active', 'bluetooth'], capture_output=True, text=True)
+                    return result.stdout.strip() == 'active'
+                except Exception as e:
+                    logger.error(f"Error checking bluetooth service: {e}")
+                    return False
+            
+            # Try to start the GATT server with retries
+            max_retries = 5
+            retry_delay = 3  # seconds
+            for attempt in range(max_retries):
+                try:
+                    # Check if bluetooth service is active
+                    if not check_bluetooth_service():
+                        logger.warning(f"Bluetooth service not active yet, waiting {retry_delay} seconds (attempt {attempt+1}/{max_retries})")
+                        time.sleep(retry_delay)
+                        continue
+                    
+                    # Try to start the GATT server
+                    self.gatt_server = SupervisorGattServer(self)
+                    self.gatt_server.start()
+                    logger.info("GATT server started successfully")
+                    return True
+                except Exception as e:
+                    if "org.freedesktop.DBus.Error.ServiceUnknown" in str(e):
+                        logger.warning(f"DBus service not ready yet, retrying in {retry_delay} seconds (attempt {attempt+1}/{max_retries})")
+                        time.sleep(retry_delay)
+                    else:
+                        logger.error(f"Failed to start GATT server: {e}")
+                        return False
+            
+            logger.error(f"Failed to start GATT server after {max_retries} attempts")
+            return False
         return True
 
     def _stop_gatt_server(self):

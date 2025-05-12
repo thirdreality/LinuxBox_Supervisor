@@ -2,6 +2,7 @@ import subprocess
 import os
 import time
 import logging
+import shutil
 
 class WifiStatus:
     """
@@ -33,11 +34,20 @@ class WifiManager:
             tuple: (result string, status code) - status code 0 indicates success
         """
         try:
+            # Check if the command exists before running it
+            if command.startswith("nmcli") and not shutil.which("nmcli"):
+                return "Command 'nmcli' not found", 127
+                
             result = subprocess.run(command, shell=True, capture_output=True, text=True, check=True)
             return result.stdout.strip(), 0
         except subprocess.CalledProcessError as e:
-            logging.error(f"Command failed: {command}, Error: {e.stderr.strip()}")
-            return e.stderr.strip(), e.returncode
+            error_msg = e.stderr.strip()
+            if "NetworkManager is not running" in error_msg:
+                logging.error(f"Command '{command.split()[0]}' failed with exit code {e.returncode}")
+                logging.error(f"Error: NetworkManager is not running.")
+            else:
+                logging.error(f"Command failed: {command}, Error: {error_msg}")
+            return error_msg, e.returncode
     
     def init(self):
         """
@@ -47,7 +57,45 @@ class WifiManager:
             int: 0 for success, non-zero for failure
         """
         logging.info("Initializing WiFi manager")
+        
+        # Check if NetworkManager is running
+        if not self._is_networkmanager_running():
+            logging.warning("NetworkManager is not running, attempting to start it")
+            self._start_networkmanager()
+            
+            # Wait for NetworkManager to start (up to 10 seconds)
+            for _ in range(10):
+                if self._is_networkmanager_running():
+                    logging.info("NetworkManager started successfully")
+                    break
+                time.sleep(1)
+            else:
+                logging.error("Failed to start NetworkManager")
+                return 1
+                
         return 0
+        
+    def _is_networkmanager_running(self):
+        """
+        Check if NetworkManager service is running
+        
+        Returns:
+            bool: True if running, False otherwise
+        """
+        command = "systemctl is-active NetworkManager"
+        result, status = self.execute_command(command)
+        return status == 0 and result == "active"
+        
+    def _start_networkmanager(self):
+        """
+        Attempt to start the NetworkManager service
+        
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        command = "systemctl start NetworkManager"
+        _, status = self.execute_command(command)
+        return status == 0
     
     def cleanup(self):
         """
@@ -68,6 +116,16 @@ class WifiManager:
             int: 0 for success, -1 for connection failure, -2 for timeout
         """
         logging.info(f"Configuring WiFi. SSID: {ssid}")
+        
+        # Check if NetworkManager is running before attempting to use nmcli
+        if not self._is_networkmanager_running():
+            logging.error("NetworkManager is not running, attempting to start it")
+            if not self._start_networkmanager():
+                logging.error("Failed to start NetworkManager, cannot configure WiFi")
+                return -1
+            # Give NetworkManager time to initialize
+            time.sleep(2)
+            
         command = f"nmcli device wifi connect '{ssid}'"
         if password:
             command += f" password '{password}'"
@@ -77,7 +135,7 @@ class WifiManager:
             logging.error("Failed to connect to WiFi network, retry again ...")
 
             command2 = f"nmcli device wifi list > /dev/null"
-            _, status = self.execute_command(command)
+            _, status = self.execute_command(command2)  # Fixed: was using 'command' instead of 'command2'
             if status != 0:
                 logging.error("Failed to connect to WiFi network.")
                 return -1
@@ -99,7 +157,15 @@ class WifiManager:
         Returns:
             WifiStatus: Object containing WiFi connection information
         """
+        logging.info(f"Get Wifi Status ...")
         status = WifiStatus()
+        
+        # Check if NetworkManager is running
+        if not self._is_networkmanager_running():
+            logging.warning("NetworkManager is not running, WiFi status may be inaccurate")
+            status.error_message = "NetworkManager is not running"
+            return status
+            
         command = "nmcli -t -f active,ssid dev wifi | grep '^yes' | cut -d: -f2"
         result, state = self.execute_command(command)
         
@@ -129,6 +195,16 @@ class WifiManager:
             int: 0 for success, -1 for failure
         """
         logging.info("Deleting all saved WiFi networks")
+        
+        # Check if NetworkManager is running
+        if not self._is_networkmanager_running():
+            logging.error("NetworkManager is not running, attempting to start it")
+            if not self._start_networkmanager():
+                logging.error("Failed to start NetworkManager, cannot delete networks")
+                return -1
+            # Give NetworkManager time to initialize
+            time.sleep(2)
+            
         command = "nmcli -t -f uuid connection"
         result, state = self.execute_command(command)
         
@@ -161,6 +237,15 @@ class WifiManager:
             "restart_device": "reboot",
             "factory_reset": "rm -rf /config/* && reboot",
         }
+        
+        # For nmcli commands, check if NetworkManager is running
+        if command == "restart_wifi" and not self._is_networkmanager_running():
+            logging.error("NetworkManager is not running, attempting to start it")
+            if not self._start_networkmanager():
+                logging.error("Failed to start NetworkManager, cannot restart WiFi")
+                return "NetworkManager is not running and could not be started", -1
+            # Give NetworkManager time to initialize
+            time.sleep(2)
 
         if command in special_commands:
             cmd = special_commands[command]
@@ -199,6 +284,11 @@ class WifiManager:
         Returns:
             bool: True if connected, False otherwise
         """
+        # Check if NetworkManager is running
+        if not self._is_networkmanager_running():
+            logging.warning("NetworkManager is not running, cannot check WiFi connection status")
+            return False
+            
         command = "nmcli -t -f GENERAL.STATE device show wlan0"
         result, state = self.execute_command(command)
         return state == 0 and "(connected)" in result
