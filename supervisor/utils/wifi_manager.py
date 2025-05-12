@@ -74,8 +74,13 @@ class WifiManager:
         
         _, status = self.execute_command(command)
         if status != 0:
-            logging.error("Failed to connect to WiFi network")
-            return -1
+            logging.error("Failed to connect to WiFi network, retry again ...")
+
+            command2 = f"nmcli device wifi list > /dev/null"
+            _, status = self.execute_command(command)
+            if status != 0:
+                logging.error("Failed to connect to WiFi network.")
+                return -1
         
         # Wait for the connection to be established
         for _ in range(20): # 20 seconds timeout

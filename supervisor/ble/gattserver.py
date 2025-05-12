@@ -24,6 +24,7 @@ SOFTWARE.
 import dbus
 import dbus.mainloop.glib
 import threading
+import time
 import json
 import logging
 
@@ -236,6 +237,7 @@ class WIFIConfigCharacteristic(Characteristic):
                     ret = wifi_manager.configure(ssid, password)
                     self.logger.info(f"WiFi configuration result: {ret}")
                     if ret == 0:
+                        time.sleep(3)  # 等待WiFi连接
                         ip_address = get_wlan0_ip() or ""
                         self.logger.info(f"WiFi IP address: {ip_address}")
                 else:

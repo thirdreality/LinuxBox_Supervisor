@@ -17,6 +17,8 @@ import logging
 from .utils import utils
 from .hardware import LedState
 
+from .sysinfo import get_package_version
+
 # 使用与supervisor相同的logger
 
 class SupervisorHTTPServer:
@@ -198,7 +200,9 @@ class SupervisorHTTPServer:
                         "Device Name": system_info.name,
                         "Current Version": system_info.version,
                         "Build Number": system_info.build_number,
-                        "Uptime": int(time.time() - self._supervisor.start_time) if hasattr(self._supervisor, 'start_time') else 0
+                        "Uptime": int(time.time() - self._supervisor.start_time) if hasattr(self._supervisor, 'start_time') else 0,
+                        "Zigbee Support": system_info.support_zigbee,
+                        "Thread Support": system_info.support_thread
                     }
                 else:
                     # 默认系统信息
@@ -211,7 +215,7 @@ class SupervisorHTTPServer:
                 
                 if hasattr(self._supervisor, 'wifi_status'):
                     wifi_status = self._supervisor.wifi_status
-                    result['Connected'] = wifi_status.connected
+                    result['WIFI Connected'] = wifi_status.connected
                     result['SSID'] = wifi_status.ssid
                     result['Ip Address'] = wifi_status.ip_address
                     result['Mac Address'] = wifi_status.mac_address
@@ -233,6 +237,16 @@ class SupervisorHTTPServer:
 
                 if hasattr(self._supervisor, 'system_info') and self._supervisor.system_info:
                     system_info = self._supervisor.system_info
+
+                    if not system_info.hainfo.config:
+                        system_info.hainfo.config = get_package_version("thirdreality-hacore-config")
+                    if not system_info.hainfo.python:
+                        system_info.hainfo.python = get_package_version("thirdreality-python3")
+                    if not system_info.hainfo.core:
+                        system_info.hainfo.core = get_package_version("thirdreality-hacore")
+                    if not system_info.hainfo.otbr:
+                        system_info.hainfo.otbr = get_package_version("thirdreality-otbr-agent")
+
                     homeassistant_core_items = [
                         {
                             "name": "hacore-config",

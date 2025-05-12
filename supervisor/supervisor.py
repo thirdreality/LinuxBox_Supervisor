@@ -87,6 +87,9 @@ class Supervisor:
                 elif self.current_led_state not in [LedState.REBOOT, LedState.POWER_OFF, LedState.MQTT_PARING, LedState.MQTT_ERROR]:
                     self.current_led_state = state
 
+    def set_ota_command(self, cmd):
+        logger.info(f"OTA Command: param={cmd}")
+
     def get_led_state(self):
         with self.state_lock:
             return self.current_led_state
@@ -127,7 +130,7 @@ class Supervisor:
             self.gatt_server.updateAdv(ip_address)
         return True
 
-    def configure_wifi(self, ssid, password):
+    def configure_wifi(self, ssid, password, restore):
         """配置WiFi连接"""
         if not ssid:
             return False
@@ -278,7 +281,7 @@ class Supervisor:
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Supervisor Service")
-    parser.add_argument('command', nargs='?', default='daemon', choices=['daemon', 'led', 'sysinfo'], help="Command to run: daemon | led <color> | sysinfo")
+    parser.add_argument('command', nargs='?', default='daemon', choices=['daemon', 'led', 'ota', 'sysinfo'], help="Command to run: daemon | led <color> | sysinfo")
     parser.add_argument('arg', nargs='?', default=None, help="Argument for command (e.g., color for led)")
     args = parser.parse_args()
 
@@ -308,6 +311,13 @@ def main():
             print(f"LED set to {color}")
         except Exception as e:
             print(f"Error setting LED color: {e}")
+            sys.exit(1)
+    elif args.command == 'ota': 
+        param = args.arg
+        try:
+            client = SupervisorClient()
+            client.set_ota_cmd(param)
+        except Exception as e:
             sys.exit(1)
     elif args.command == 'sysinfo':
         print(json.dumps(supervisor.system_info, indent=2, ensure_ascii=False))

@@ -45,6 +45,24 @@ class SystemInfo:
         self.z2minfo = Zigbee2mqttInfo()
         self.hbinfo = homekitbridgeInfo()
 
+def get_package_version(package_name):
+    """查询指定包的版本号"""
+    try:
+        # 使用dpkg-query命令查询包版本
+        result = subprocess.run(
+            ["dpkg-query", "-W", "-f=${Version}", package_name],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+            
+        if result.returncode == 0:
+            return result.stdout.strip()
+        else:
+            return ""
+    except Exception as e:
+        return ""
+
 class SystemInfoUpdater:
     def __init__(self, supervisor=None):
         self.supervisor = supervisor
@@ -70,19 +88,19 @@ class SystemInfoUpdater:
             ha_info = sys_info.hainfo
             
             # 查询thirdreality-hacore-config包版本
-            ha_info.config = self._get_package_version("thirdreality-hacore-config")
+            ha_info.config = get_package_version("thirdreality-hacore-config")
             self.logger.info(f"thirdreality-hacore-config version: {ha_info.config}")
             
             # 查询thirdreality-python3包版本
-            ha_info.python = self._get_package_version("thirdreality-python3")
+            ha_info.python = get_package_version("thirdreality-python3")
             self.logger.info(f"thirdreality-python3 version: {ha_info.python}")
             
             # 查询thirdreality-hacore包版本
-            ha_info.core = self._get_package_version("thirdreality-hacore")
+            ha_info.core = get_package_version("thirdreality-hacore")
             self.logger.info(f"thirdreality-hacore version: {ha_info.core}")
             
             # 查询thirdreality-otbr-agent包版本
-            ha_info.otbr = self._get_package_version("thirdreality-otbr-agent")
+            ha_info.otbr = get_package_version("thirdreality-otbr-agent")
             self.logger.info(f"thirdreality-otbr-agent version: {ha_info.otbr}")
             
             # 设置installed状态
@@ -96,26 +114,6 @@ class SystemInfoUpdater:
         
         # 任务完成，线程将退出
     
-    def _get_package_version(self, package_name):
-        """查询指定包的版本号"""
-        try:
-            # 使用dpkg-query命令查询包版本
-            result = subprocess.run(
-                ["dpkg-query", "-W", "-f=${Version}", package_name],
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            
-            if result.returncode == 0:
-                return result.stdout.strip()
-            else:
-                self.logger.warning(f"Package {package_name} not found")
-                return ""
-        except Exception as e:
-            self.logger.error(f"Error getting version for {package_name}: {e}")
-            return ""
-
     
     def start(self):
         """启动线程执行一次系统信息更新任务"""

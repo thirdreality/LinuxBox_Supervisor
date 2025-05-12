@@ -111,6 +111,20 @@ class SupervisorProxy:
                     error_msg = f"Invalid LED state: {state_str}"
                     self.logger.error(error_msg)
                     return error_msg
+            elif "cmd-ota" in payload:
+                command_str = payload["cmd-ota"].strip().lower()
+                try:
+                    if self.supervisor and hasattr(self.supervisor, 'set_ota_command'):
+                        self.supervisor.set_ota_command(command_str)
+                        return "OTA command successfully"
+                    else:
+                        error_msg = "Supervisor not available or missing set_ota_command method"
+                        self.logger.error(error_msg)
+                        return error_msg
+                except ValueError:
+                    error_msg = f"Invalid OTA command: {command_str}"
+                    self.logger.error(error_msg)
+                    return error_msg                
             else:
                 error_msg = "Missing cmd-led in request"
                 self.logger.error(error_msg)
