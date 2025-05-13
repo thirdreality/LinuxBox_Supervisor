@@ -108,9 +108,9 @@ class Advertisement(dbus.service.Object):
         self.is_registered = True
         self.logger.info("GATT advertisement registered")
 
-    def register_ad_error_callback(self):
+    def register_ad_error_callback(self, error):
         self.is_registered = False
-        self.logger.error("Failed to register GATT advertisement")
+        self.logger.error(f"Failed to register GATT advertisement: {error}")
 
     def register(self):
         bus = BleTools.get_bus()
