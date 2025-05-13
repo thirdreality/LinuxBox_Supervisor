@@ -26,6 +26,7 @@ class Advertisement(dbus.service.Object):
         self.service_data = None
         self.include_tx_power = None
         self.is_registered = False
+        self.is_registering = False
         dbus.service.Object.__init__(self, self.bus, self.path)
 
     def get_properties(self):
@@ -106,13 +107,22 @@ class Advertisement(dbus.service.Object):
 
     def register_ad_callback(self):
         self.is_registered = True
+        self.is_registering = False
         self.logger.info("GATT advertisement registered")
 
     def register_ad_error_callback(self, error):
         self.is_registered = False
-        self.logger.error(f"Failed to register GATT advertisement: {error}")
+        self.is_registering = False
+        self.logger.info(f"Failed to register GATT advertisement: {error}")
 
     def register(self):
+        self.logger.info(f"Advertisement register ...")
+        # Skip registration if already registered
+        if self.is_registered or self.is_registering:
+            self.logger.info(f"Advertisement {self.get_path()} is already registering/registered, skipping register")
+            return
+        
+        self.is_registering = True
         bus = BleTools.get_bus()
         adapter = BleTools.find_adapter(bus)
 
@@ -123,6 +133,7 @@ class Advertisement(dbus.service.Object):
                                      error_handler=self.register_ad_error_callback)
 
     def unregister(self):
+        self.logger.info(f"Advertisement unregister ...")
         # Only attempt to unregister if the advertisement is registered
         if not self.is_registered:
             self.logger.info(f"Advertisement {self.get_path()} is not registered, skipping unregister")

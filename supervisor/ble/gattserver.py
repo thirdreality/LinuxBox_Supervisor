@@ -62,6 +62,7 @@ class SupervisorGattServer:
         self.mainloop_thread = None
 
     def updateAdv(self, ip_address=None):
+        self.logger.info(f"[BLE] Updating advertisement with IP address: {ip_address}")
         try:
             # 如果没有提供 IP 地址，检查当前连接状态
             if ip_address is None:
@@ -108,7 +109,9 @@ class SupervisorGattServer:
             self.manager_service = LinuxBoxManagerService(0, self.supervisor)
             self.app.add_service(self.manager_service)
             
-            self.updateAdv(None)
+            #self.updateAdv(None)
+            ip_bytes = [0, 0, 0, 0]
+            self.adv.add_manufacturer_data(0x0133, ip_bytes)
             # Register Advertisement and Application
             self.adv.register()
             self.app.register()
