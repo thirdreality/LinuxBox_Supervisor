@@ -167,7 +167,8 @@ class SupervisorGattServer:
         self.logger.info("[BLE] GATT server stopped.")
 
 def my_callback(interface, changed, invalidated, path):
-    self.logger.info(f"Custom BLE event: {interface} {changed} {path}")
+    logger = logging.getLogger("Supervisor")
+    logger.info(f"Custom BLE event: {interface} {changed} {path}")
 
 class LinuxBoxAdvertisement(Advertisement):
     def __init__(self, supervisor, index):
