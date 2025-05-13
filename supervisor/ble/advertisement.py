@@ -25,6 +25,7 @@ class Advertisement(dbus.service.Object):
         self.manufacturer_data = None
         self.service_data = None
         self.include_tx_power = None
+        self.is_registered = False
         dbus.service.Object.__init__(self, self.bus, self.path)
 
     def get_properties(self):
@@ -104,9 +105,11 @@ class Advertisement(dbus.service.Object):
         self.logger.info(f"{self.path}: Released!")
 
     def register_ad_callback(self):
+        self.is_registered = True
         self.logger.info("GATT advertisement registered")
 
     def register_ad_error_callback(self):
+        self.is_registered = False
         self.logger.error("Failed to register GATT advertisement")
 
     def register(self):
@@ -120,6 +123,11 @@ class Advertisement(dbus.service.Object):
                                      error_handler=self.register_ad_error_callback)
 
     def unregister(self):
+        # Only attempt to unregister if the advertisement is registered
+        if not self.is_registered:
+            self.logger.info(f"Advertisement {self.get_path()} is not registered, skipping unregister")
+            return
+            
         bus = BleTools.get_bus()
         adapter = BleTools.find_adapter(bus)
 
@@ -129,6 +137,7 @@ class Advertisement(dbus.service.Object):
         # Unregister the advertisement
         try:
             ad_manager.UnregisterAdvertisement(self.get_path())
+            self.is_registered = False
             self.logger.info(f"Advertisement {self.get_path()} successfully unregistered")
         except dbus.DBusException as e:
             self.logger.error(f"Failed to unregister advertisement: {e}")
