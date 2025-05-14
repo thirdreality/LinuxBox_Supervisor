@@ -126,7 +126,7 @@ class WifiManager:
             # Give NetworkManager time to initialize
             time.sleep(2)
             
-        command = f"nmcli device wifi connect '{ssid}'"
+        command = f"nmcli device wifi list > /dev/null; nmcli device wifi connect '{ssid}'"
         if password:
             command += f" password '{password}'"
         
@@ -134,8 +134,8 @@ class WifiManager:
         if status != 0:
             logging.error("Failed to connect to WiFi network, retry again ...")
 
-            command2 = f"nmcli device wifi list > /dev/null"
-            _, status = self.execute_command(command2)  # Fixed: was using 'command' instead of 'command2'
+            #command2 = f"nmcli device wifi list > /dev/null; nmcli device wifi connect '{ssid}'"
+            _, status = self.execute_command(command)  # Fixed: was using 'command' instead of 'command2'
             if status != 0:
                 logging.error("Failed to connect to WiFi network.")
                 return -1
