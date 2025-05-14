@@ -11,6 +11,7 @@ import tempfile
 import platform
 import json
 import sys
+import subprocess
 
 from .network import NetworkMonitor
 from .hardware import GpioButton, GpioLed, LedState,GpioHwController
@@ -71,6 +72,9 @@ class Supervisor:
 
         # boot up time
         self.start_time = time.time()
+        
+        # Flag to indicate if home-assistant needs to be resumed
+        self.ha_resume_need = False
 
     def set_led_state(self, state):
         with self.state_lock:
@@ -83,8 +87,14 @@ class Supervisor:
                     self.current_led_state = LedState.NORMAL
                 elif self.current_led_state == LedState.MQTT_ERROR and state == LedState.MQTT_NORMAL:
                     self.current_led_state = LedState.NORMAL                    
+                elif self.current_led_state == LedState.MQTT_ZIGEBB and state == LedState.MQTT_NORMAL:
+                    self.current_led_state = LedState.NORMAL        
+                elif self.current_led_state == LedState.MQTT_ZIGEBB and state == LedState.MQTT_NETWORK:
+                    self.current_led_state = LedState.MQTT_NETWORK                        
+                elif self.current_led_state == LedState.MQTT_NETWORK and state == LedState.MQTT_NORMAL:
+                    self.current_led_state = LedState.NORMAL                                                
                 # 否则，如果当前状态不是 REBOOT, POWER_OFF, 或 PARING，则更新状态
-                elif self.current_led_state not in [LedState.REBOOT, LedState.POWER_OFF, LedState.MQTT_PARING, LedState.MQTT_ERROR]:
+                elif self.current_led_state not in [LedState.REBOOT, LedState.POWER_OFF, LedState.MQTT_PARING, LedState.MQTT_ZIGEBB, LedState.MQTT_NETWORK, LedState.MQTT_ERROR]:
                     self.current_led_state = state
 
     def set_ota_command(self, cmd):
@@ -117,6 +127,22 @@ class Supervisor:
 
     def onNetworkConnected(self):
         logger.info("checking Network onNetworkConnected() ...")
+        
+        # Check if we need to resume home-assistant
+        if self.ha_resume_need:
+            logger.info("Resuming home-assistant service...")
+            # Start home-assistant in a separate thread
+            def start_ha_service():
+                logger.info("Starting home-assistant service...")
+                utils.execute_system_command(["systemctl", "start", "home-assistant"])
+                logger.info("home-assistant service started")
+                # Reset the flag
+                self.ha_resume_need = False
+            
+            # Create and start the thread
+            ha_thread = threading.Thread(target=start_ha_service)
+            ha_thread.daemon = True
+            ha_thread.start()
 
 
     def update_wifi_info(self, ip_address, ssid):
@@ -264,7 +290,22 @@ class Supervisor:
     
     def perform_wifi_provision_prepare(self):
         logging.info("Performing prepare wifi provision...")
-        utils.perform_wifi_provision_prepare()
+        
+        # Check if home-assistant is running using subprocess directly to get output
+        try:
+            result = subprocess.run(["systemctl", "is-active", "home-assistant"], 
+                                   capture_output=True, text=True, check=False)
+            if result.stdout.strip() == "active":
+                # Set the flag to resume home-assistant later
+                self.ha_resume_need = True
+                logging.info("home-assistant is running, will resume after network connected")
+        except Exception as e:
+            logging.error(f"Error checking home-assistant status: {e}")
+        
+        # Start thread to stop home-assistant
+        thread = threading.Thread(target=utils.perform_wifi_provision_prepare)
+        thread.daemon = True
+        thread.start()
 
     def _signal_handler(self, sig, frame):
         logging.info("Signal received, stopping...")

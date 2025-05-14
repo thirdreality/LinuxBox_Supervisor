@@ -30,6 +30,8 @@ class LedState(Enum):
     MQTT_PARED = "mqtt_pared"
     MQTT_ERROR = "mqtt_error"
     MQTT_NORMAL = "mqtt_normal"
+    MQTT_ZIGEBB = "mqtt_zigbee"
+    MQTT_NETWORK = "mqtt_network"
 
 # -----------------------------------------------------------------------------
 class GpioLed:
@@ -106,6 +108,10 @@ class GpioLed:
                 self.blue()
             elif state == LedState.MQTT_NORMAL:
                 self.blue()                
+            elif state == LedState.MQTT_ZIGEBB:
+                self.green()         
+            elif state == LedState.MQTT_NETWORK:
+                self.yellow()                                         
             elif state == LedState.NETWORK_ERROR:
                 if blink_counter == 0:
                     self.yellow()
@@ -181,31 +187,60 @@ class GpioButton:
     
     def button_control_task(self):
         """Button monitoring thread"""
-        press_start, reboot_triggered, power_off_triggered = None, False, False
+        press_start = None
+        action_triggered = None
         self.logger.info("Starting button monitor...")
 
         while self.supervisor and hasattr(self.supervisor, 'running') and self.supervisor.running.is_set():
             if self.is_pressed():
                 if press_start is None: 
                     press_start = time.time()
+                    action_triggered = None
+                
                 press_duration = time.time() - press_start
 
-                if press_duration >= 15:
+                # Update LED state based on press duration
+                if press_duration >= 15 and action_triggered != 'factory_reset':
                     if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
-                        self.supervisor.set_led_state(LedState.REBOOT)
-                    reboot_triggered, power_off_triggered = True, False
-                elif press_duration >= 5:
+                        self.supervisor.set_led_state(LedState.FACTORY_RESET)
+                    action_triggered = 'factory_reset'
+                elif press_duration >= 9 and action_triggered not in ['factory_reset', 'blue']:
                     if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
-                        self.supervisor.set_led_state(LedState.POWER_OFF)
-                    power_off_triggered = True
+                        self.supervisor.set_led_state(LedState.MQTT_NORMAL)  # Blue light for 9-15 seconds
+                    action_triggered = 'blue'
+                elif press_duration >= 6 and action_triggered not in ['factory_reset', 'blue', 'network_setup']:
+                    if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
+                        self.supervisor.set_led_state(LedState.MQTT_NETWORK)  # Yellow for network setup
+                    action_triggered = 'network_setup'
+                elif press_duration >= 3 and action_triggered not in ['factory_reset', 'blue', 'network_setup', 'zigbee_pairing']:
+                    if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
+                        self.supervisor.set_led_state(LedState.MQTT_ZIGEBB) # Green for Zigbee pairing
+                    action_triggered = 'zigbee_pairing'
 
             else:
-                if press_start:
-                    if power_off_triggered and self.supervisor and hasattr(self.supervisor, 'perform_power_off'):
-                        self.supervisor.perform_power_off()
-                    elif reboot_triggered and self.supervisor and hasattr(self.supervisor, 'perform_factory_reset'):
-                        self.supervisor.perform_factory_reset()
-                press_start, reboot_triggered, power_off_triggered = None, False, False
+                if press_start is not None:
+                    press_duration = time.time() - press_start
+                    
+                    # Handle button release actions
+                    if action_triggered == 'factory_reset' and press_duration >= 15:
+                        if self.supervisor and hasattr(self.supervisor, 'perform_factory_reset'):
+                            self.supervisor.perform_factory_reset()
+                    elif action_triggered == 'network_setup' and 6 <= press_duration < 9:
+                        if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
+                            self.supervisor.set_led_state(LedState.MQTT_NORMAL) 
+                        # Stop Home Assistant and set network setup flag
+                        if self.supervisor and hasattr(self.supervisor, 'perform_wifi_provision_prepare'):
+                            self.supervisor.perform_wifi_provision_prepare()
+                    elif action_triggered == 'zigbee_pairing' and 3 <= press_duration < 6:
+                        # Enter Zigbee pairing mode
+                        if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
+                            self.supervisor.set_led_state(LedState.MQTT_NORMAL)        
+                        if self.supervisor and hasattr(self.supervisor, 'start_zigbee_pairing'):
+                            self.supervisor.start_zigbee_pairing()
+                    
+                    # Reset state
+                    press_start = None
+                    action_triggered = None
 
             time.sleep(0.5)
     
