@@ -128,6 +128,8 @@ class Supervisor:
     def onNetworkConnected(self):
         logger.info("checking Network onNetworkConnected() ...")
         
+
+    def check_ha_resume(self):
         # Check if we need to resume home-assistant
         if self.ha_resume_need:
             logger.info("Resuming home-assistant service...")
