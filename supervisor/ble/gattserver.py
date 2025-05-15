@@ -169,9 +169,12 @@ class SupervisorGattServer:
         self.running = False
         self.logger.info("[BLE] GATT server stopped.")
 
-def my_callback(interface, changed, invalidated, path):
-    #logger = logging.getLogger("Supervisor")
-    print(f"Custom BLE event: {interface} {changed} {path}")
+def my_callback(interface, path, is_connected):
+    logger = logging.getLogger("Supervisor")
+    if is_connected:
+        logger.info(f"[BLE] Device connected: {interface}:{path}")
+    else:
+        logger.info(f"[BLE] Device disconnected: {interface}:{path}")    
 
 class LinuxBoxAdvertisement(Advertisement):
     def __init__(self, supervisor, index):
@@ -210,7 +213,7 @@ class WIFIConfigCharacteristic(Characteristic):
         self.add_descriptor(WIFIConfigDescriptor(self))
 
     def WriteValue(self, value, options):
-        self.logger.info(f"Write Value: {value}")
+        #self.logger.info(f"Write Value: {value}")
 
         command_str = "".join(chr(byte) for byte in value)
         process_thread = threading.Thread(target=self._process_command_and_notify, args=(command_str,))
@@ -245,6 +248,7 @@ class WIFIConfigCharacteristic(Characteristic):
                         time.sleep(3)  # 等待WiFi连接
                         ip_address = get_wlan0_ip() or ""
                         self.logger.info(f"WiFi IP address: {ip_address}")
+                        self.service.supervisor.update_wifi_info(ip_address, ssid)  
                         self.service.supervisor.check_ha_resume()
                 else:
                     self.logger.info("WiFi manager not initialized")

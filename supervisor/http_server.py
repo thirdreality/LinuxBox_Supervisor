@@ -202,7 +202,9 @@ class SupervisorHTTPServer:
                         "Build Number": system_info.build_number,
                         "Uptime": int(time.time() - self._supervisor.start_time) if hasattr(self._supervisor, 'start_time') else 0,
                         "Zigbee Support": system_info.support_zigbee,
-                        "Thread Support": system_info.support_thread
+                        "Thread Support": system_info.support_thread,
+                        "Memory": f"{system_info.memory_size} MB",
+                        "Storage": f"{system_info.storage_space['available']}/{system_info.storage_space['total']}"   
                     }
                 else:
                     # 默认系统信息
@@ -377,34 +379,6 @@ class SupervisorHTTPServer:
                 }
                 self._set_headers()
                 self.wfile.write(json.dumps(result).encode())                
-
-            def _handle_wifi_config(self, post_data):
-                """处理POST /api/wifi/config - 等同于WifiConfigCharacteristic"""
-                try:
-                    data = json.loads(post_data)
-                    ssid = data.get("ssid", "")
-                    password = data.get("password", "")
-                    
-                    if not ssid:
-                        self._send_error("SSID is required")
-                        return
-                    
-                    # 调用supervisor的WiFi配置方法
-                    if hasattr(self._supervisor, 'configure_wifi') and callable(self._supervisor.configure_wifi):
-                        success = self._supervisor.configure_wifi(ssid, password)
-                        if success:
-                            self._set_headers()
-                            self.wfile.write(json.dumps({"success": True}).encode())
-                        else:
-                            self._send_error("Failed to configure WiFi")
-                    else:
-                        # 如果supervisor没有WiFi配置方法，返回错误
-                        self._send_error("WiFi configuration not supported")
-                
-                except json.JSONDecodeError:
-                    self._send_error("Invalid JSON")
-                except Exception as e:
-                    self._send_error(f"Error: {str(e)}")
             
             def _handle_sys_command(self, post_data):
                 try:

@@ -143,7 +143,7 @@ class WifiManager:
         # Wait for the connection to be established
         for _ in range(20): # 20 seconds timeout
             if self.check_wifi_connected():
-                logging.info(f"Successfully connected to WiFi network: {ssid}")
+                logging.info(f"Successfully connected to WiFi network: {ssid}")             
                 return 0
             time.sleep(1)
         

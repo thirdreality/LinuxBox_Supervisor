@@ -4,6 +4,8 @@ import logging
 import threading
 import subprocess
 import time
+import os
+import re
 
 from .const import DEVICE_MODEL_NAME,DEVICE_CURRENT_VERSION,DEVICE_BUILD_NUMBER
 
@@ -41,6 +43,8 @@ class SystemInfo:
         self.support_zigbee=True
         self.support_thread=False        
         self.mode = "homeassistant-core"
+        self.memory_size = ""  # 设备内存大小，单位为MB
+        self.storage_space = ""  # 存储空间大小，单位为GB
         self.hainfo = HomeAssistantInfo()
         self.z2minfo = Zigbee2mqttInfo()
         self.hbinfo = homekitbridgeInfo()
@@ -62,6 +66,53 @@ def get_package_version(package_name):
             return ""
     except Exception as e:
         return ""
+
+def get_memory_size():
+    """获取设备内存大小，单位为MB"""
+    try:
+        # 使用/proc/meminfo获取内存信息
+        with open('/proc/meminfo', 'r') as f:
+            meminfo = f.read()
+        
+        # 使用正则表达式提取MemTotal值
+        match = re.search(r'MemTotal:\s+(\d+)\s+kB', meminfo)
+        if match:
+            # 将kB转换为MB并返回
+            mem_kb = int(match.group(1))
+            mem_mb = mem_kb // 1024
+            return str(mem_mb)
+        else:
+            return ""
+    except Exception as e:
+        logging.error(f"Error getting memory size: {e}")
+        return ""
+
+def get_storage_space():
+    """获取存储空间大小，返回总空间(GB)和可用空间(GB)"""
+    try:
+        # 使用df命令获取根分区信息
+        result = subprocess.run(
+            ["df", "-h", "/"],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        
+        if result.returncode == 0:
+            # 解析输出，跳过标题行
+            lines = result.stdout.strip().split('\n')
+            if len(lines) >= 2:
+                # 分割行并获取总大小和可用大小
+                parts = lines[1].split()
+                if len(parts) >= 4:
+                    total_size = parts[1]  # 例如：7.8G
+                    avail_size = parts[3]  # 例如：3.2G
+                    return {"total": total_size, "available": avail_size}
+        
+        return {"total": "", "available": ""}
+    except Exception as e:
+        logging.error(f"Error getting storage space: {e}")
+        return {"total": "", "available": ""}
 
 class SystemInfoUpdater:
     def __init__(self, supervisor=None):
@@ -107,6 +158,15 @@ class SystemInfoUpdater:
             ha_info.installed = bool(ha_info.core and ha_info.python and ha_info.config)
 
             ha_info.enabled = ha_info.installed
+            
+            # 获取设备内存大小
+            sys_info.memory_size = get_memory_size()
+            self.logger.info(f"Device memory size: {sys_info.memory_size} MB")
+            
+            # 获取存储空间信息
+            storage_info = get_storage_space()
+            sys_info.storage_space = storage_info
+            self.logger.info(f"Storage space - Total: {storage_info['total']}, Available: {storage_info['available']}")
             
             self.logger.info("System information update completed")
         except Exception as e:

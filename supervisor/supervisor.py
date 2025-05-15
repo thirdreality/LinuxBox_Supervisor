@@ -161,31 +161,6 @@ class Supervisor:
             logger.info("gatt_server not initialized, skipping updateAdv operation")
         return True
 
-    def configure_wifi(self, ssid, password, restore):
-        """配置WiFi连接"""
-        if not ssid:
-            return False
-            
-        try:
-            logger.info(f"Configuring WiFi: SSID={ssid}")
-            
-            # 触发网络状态更新 - 实际环境中可能需要延迟
-            time.sleep(5)  # 等待WiFi连接
-            self.update_wifi_info()
-            
-            # 如果连接成功，更新LED状态
-            if self.wifi_info['connected']:
-                self.set_led_state(LedState.NORMAL)
-                return True
-            else:
-                self.set_led_state(LedState.NETWORK_ERROR)
-                return False
-        except Exception as e:
-            logger.error(f"WiFi configuration failed: {e}")
-            self.wifi_info['error_message'] = str(e)
-            self.set_led_state(LedState.NETWORK_ERROR)
-            return False
-
     def update_system_uptime(self):
         """更新系统运行时间"""
         if 'uptime' in self.system_info:
