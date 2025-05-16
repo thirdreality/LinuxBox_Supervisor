@@ -92,7 +92,7 @@ class SupervisorProxy:
             # 解析JSON数据
             payload = json.loads(data)
             
-            # 检查是否包含cmd-led指令
+            # 处理LED命令（特殊处理，因为需要转换为LedState枚举）
             if "cmd-led" in payload:
                 state_str = payload["cmd-led"].strip().lower()
                 try:
@@ -111,24 +111,48 @@ class SupervisorProxy:
                     error_msg = f"Invalid LED state: {state_str}"
                     self.logger.error(error_msg)
                     return error_msg
-            elif "cmd-ota" in payload:
-                command_str = payload["cmd-ota"].strip().lower()
-                try:
-                    if self.supervisor and hasattr(self.supervisor, 'set_ota_command'):
-                        self.supervisor.set_ota_command(command_str)
-                        return "OTA command successfully"
-                    else:
-                        error_msg = "Supervisor not available or missing set_ota_command method"
+            
+            # 处理其他命令类型
+            # 定义命令类型和对应的方法映射
+            command_mapping = {
+                "cmd-ota": "set_ota_command",
+                "cmd-thread": "set_thread_command",
+                "cmd-zigbee": "set_zigbee_command"
+            }
+            
+            # 查找匹配的命令类型
+            for cmd_key, method_name in command_mapping.items():
+                if cmd_key in payload:
+                    command_str = payload[cmd_key].strip().lower()
+                    cmd_type = cmd_key.replace("cmd-", "")
+                    
+                    try:
+                        # 检查supervisor是否有对应的方法
+                        if self.supervisor and hasattr(self.supervisor, method_name):
+                            # 动态调用对应的方法
+                            getattr(self.supervisor, method_name)(command_str)
+                            self.logger.info(f"{cmd_type.capitalize()} command executed: {command_str}")
+                            return f"{cmd_type} command successfully"
+                        else:
+                            error_msg = f"Supervisor not available or missing {method_name} method"
+                            self.logger.error(error_msg)
+                            return error_msg
+                    except ValueError:
+                        error_msg = f"Invalid {cmd_type} command: {command_str}"
                         self.logger.error(error_msg)
                         return error_msg
-                except ValueError:
-                    error_msg = f"Invalid OTA command: {command_str}"
-                    self.logger.error(error_msg)
-                    return error_msg                
-            else:
-                error_msg = "Missing cmd-led in request"
-                self.logger.error(error_msg)
-                return error_msg
+                    except Exception as e:
+                        error_msg = f"Error executing {cmd_type} command: {e}"
+                        self.logger.error(error_msg)
+                        return error_msg
+                    
+                    # 如果找到并处理了命令，就不需要继续检查其他命令类型
+                    return
+            
+            # 如果没有找到支持的命令
+            error_msg = "Missing valid command in request. Supported commands: cmd-led, cmd-ota, cmd-thread, cmd-zigbee"
+            self.logger.error(error_msg)
+            return error_msg
         except json.JSONDecodeError:
             error_msg = f"Invalid JSON format: {data}"
             self.logger.error(error_msg)

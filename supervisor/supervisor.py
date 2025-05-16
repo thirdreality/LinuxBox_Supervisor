@@ -100,6 +100,22 @@ class Supervisor:
     def set_ota_command(self, cmd):
         logger.info(f"OTA Command: param={cmd}")
 
+    def set_zigbee_command(self, cmd):
+        logger.info(f"zigbee Command: param={cmd}")
+
+    def set_thread_command(self, cmd):
+        logger.info(f"thread Command: param={cmd}")
+        
+        # 如果命令是enable，则启用Thread支持
+        if cmd.lower() == "enable":
+            logger.info("Enabling Thread support")
+            self.enableThreadSupported()
+            return "Thread support enabled"
+        elif cmd.lower() == "disable":
+            logger.info("Disabling Thread support")
+            self.disableThreadSupported()
+            return "Thread support disabled"
+
     def get_led_state(self):
         with self.state_lock:
             return self.current_led_state
@@ -112,6 +128,9 @@ class Supervisor:
 
     def enableThreadSupported(self):
         self.system_info.support_thread = True
+
+    def disableThreadSupported(self):
+        self.system_info.support_thread = False
 
     def enableZigbeeSupported(self):
         self._support_zigbee = True
@@ -321,8 +340,6 @@ class Supervisor:
 
         self.led.start()
         self.hwinit.initialize_pin()
-        if self.system_info.support_thread == False:
-            utils.execute_system_command(["systemctl", "disable", "otbr-agent"])
 
         self.button.start()
         self.network_monitor.start()
@@ -338,7 +355,7 @@ class Supervisor:
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Supervisor Service")
-    parser.add_argument('command', nargs='?', default='daemon', choices=['daemon', 'led', 'ota', 'sysinfo'], help="Command to run: daemon | led <color> | sysinfo")
+    parser.add_argument('command', nargs='?', default='daemon', choices=['daemon', 'led', 'ota', 'zigbee','thread','sysinfo'], help="Command to run: daemon | led <color> | sysinfo")
     parser.add_argument('arg', nargs='?', default=None, help="Argument for command (e.g., color for led)")
     args = parser.parse_args()
 
@@ -364,18 +381,32 @@ def main():
                 print(f"Unknown color: {color}, support [mqtt_paring|mqtt_pared|mqtt_error|mqtt_normal|reboot|power_off|normal|network_error|network_lost|startup")
                 sys.exit(1)
             client = SupervisorClient()
-            client.set_led_state(color.upper())
+            client.send_command("led", color.upper(), "Led command")
+            #client.set_led_state(color.upper())
             print(f"LED set to {color}")
         except Exception as e:
             print(f"Error setting LED color: {e}")
             sys.exit(1)
-    elif args.command == 'ota': 
+    # Handle command types that follow the same pattern (ota, zigbee, thread)
+    elif args.command in ['ota', 'zigbee', 'thread']:
         param = args.arg
+        if param is None:
+            print(f"Usage: supervisor.py {args.command} <parameter>")
+            sys.exit(1)
+            
         try:
             client = SupervisorClient()
-            client.set_ota_cmd(param)
+            # Directly use the_send_command method for simplicity and flexibility
+            response = client.send_command(args.command, param, f"{args.command} command")
+            
+            if response is None:
+                print(f"Error: Failed to send {args.command} command")
+                sys.exit(1)
+                
+            print(f"{args.command.capitalize()} command sent successfully: {param}")
         except Exception as e:
-            sys.exit(1)
+            print(f"Error sending {args.command} command: {e}")
+            sys.exit(1)               
     elif args.command == 'sysinfo':
         print(json.dumps(supervisor.system_info, indent=2, ensure_ascii=False))
 
