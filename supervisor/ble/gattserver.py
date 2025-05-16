@@ -60,6 +60,7 @@ class SupervisorGattServer:
         self.running = False
         self.mainloop = None
         self.mainloop_thread = None
+        self._previous_ip_address = "0.0.0.0"
 
     def updateAdv(self, ip_address=None):
         self.logger.info(f"[BLE] Updating advertisement with IP address: {ip_address}")
@@ -79,14 +80,29 @@ class SupervisorGattServer:
             ip_bytes = [int(part) for part in ip_address.split('.')]
             self.logger.info(f"Adding device IP address to advertisement: {ip_address} -> {ip_bytes}")
             
+            # 检查IP地址是否与之前的相同
+            ip_changed = self._previous_ip_address != ip_address
+            
             # 更新广播数据
             if self.adv:
                 self.adv.add_manufacturer_data(0x0133, ip_bytes)
-                try:
-                    self.adv.unregister()
-                except Exception as e:
-                    self.logger.error(f"Error unregistering advertisement: {e}")                
-                self.adv.register()
+                
+                # 只有当IP地址发生变化时才进行unregister和register操作
+                if ip_changed:
+                    self.logger.info(f"IP address changed from {getattr(self, '_previous_ip_address', 'None')} to {ip_address}, re-registering advertisement")
+                    try:
+                        self.adv.unregister()
+                    except Exception as e:
+                        self.logger.error(f"Error unregistering advertisement: {e}")
+                    try:
+                        self.adv.register()
+                    except Exception as e:
+                        self.logger.error(f"Error registering advertisement: {e}")
+                else:
+                    self.logger.info(f"IP address unchanged ({ip_address}), skipping advertisement re-registration")
+                    
+            # 保存当前IP地址以便下次比较
+            self._previous_ip_address = ip_address
         except Exception as e:
             self.logger.error(f"Error updating advertisement with IP address: {e}")
 

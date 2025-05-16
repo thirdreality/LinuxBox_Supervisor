@@ -139,7 +139,7 @@ class GpioLed:
                     self.off()
             elif state == LedState.FACTORY_RESET:
                 if blink_counter == 0:
-                    self.red()
+                    self.white()
                 else:
                     self.off()
             time.sleep(0.5)
@@ -262,7 +262,6 @@ class GpioHwController:
         self.supervisor = supervisor
         self.logger = logging.getLogger("Supervisor")
         self.thread_conf_path = "/var/lib/homeassistant/thread.conf"
-
     
     # chip 0: gpiochip426
     # refer to pinctrl-meson-axg.c
@@ -270,41 +269,41 @@ class GpioHwController:
         """
         Initialize GPIO pins for Zigbee and Thread modules
         """
-        # Check if thread.conf exists and contains device information
-        thread_device_already_detected = False
-        if os.path.exists(self.thread_conf_path):
-            try:
-                with open(self.thread_conf_path, 'r') as f:
-                    content = f.read()
-                    if "/dev/ttyAML" in content:
-                        self.logger.info(f"Thread device previously detected in {self.thread_conf_path}, skipping device detection")
-                        thread_device_already_detected = True
-                        self.supervisor.enableThreadSupported()
-                    else:
-                        self.logger.info(f"Thread configuration file exists but no device detected previously")
-            except Exception as e:
-                self.logger.error(f"Error reading Thread configuration file: {e}")
-        else:
-            # Check if Thread device is connected to /dev/ttyAML6
-            thread_device_detected = self._check_thread_device()
+        # # Check if thread.conf exists and contains device information
+        # thread_device_already_detected = False
+        # if os.path.exists(self.thread_conf_path):
+        #     try:
+        #         with open(self.thread_conf_path, 'r') as f:
+        #             content = f.read()
+        #             if "/dev/ttyAML" in content:
+        #                 self.logger.info(f"Thread device previously detected in {self.thread_conf_path}, skipping device detection")
+        #                 thread_device_already_detected = True
+        #                 self.supervisor.enableThreadSupported()
+        #             else:
+        #                 self.logger.info(f"Thread configuration file exists but no device detected previously")
+        #     except Exception as e:
+        #         self.logger.error(f"Error reading Thread configuration file: {e}")
+        # else:
+        #     # Check if Thread device is connected to /dev/ttyAML6
+        #     thread_device_detected = self._check_thread_device()
             
-            # Create thread.conf file directory if it doesn't exist
-            try:
-                os.makedirs(os.path.dirname(self.thread_conf_path), exist_ok=True)
+        #     # Create thread.conf file directory if it doesn't exist
+        #     try:
+        #         os.makedirs(os.path.dirname(self.thread_conf_path), exist_ok=True)
                 
-                # Create the thread.conf file
-                with open(self.thread_conf_path, 'w') as f:
-                    f.write(f"# Thread configuration created at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                    if thread_device_detected:
-                        # Write device path if device is detected
-                        f.write("/dev/ttyAML6\n")
-                        self.logger.info(f"Created Thread configuration file with device path at {self.thread_conf_path}")
-                        self.supervisor.enableThreadSupported()
-                    else:
-                        # Create empty file if no device is detected
-                        self.logger.info(f"Created empty Thread configuration file at {self.thread_conf_path}")
-            except Exception as e:
-                self.logger.error(f"Failed to create Thread configuration file: {e}")
+        #         # Create the thread.conf file
+        #         with open(self.thread_conf_path, 'w') as f:
+        #             f.write(f"# Thread configuration created at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        #             if thread_device_detected:
+        #                 # Write device path if device is detected
+        #                 f.write("/dev/ttyAML6\n")
+        #                 self.logger.info(f"Created Thread configuration file with device path at {self.thread_conf_path}")
+        #                 self.supervisor.enableThreadSupported()
+        #             else:
+        #                 # Create empty file if no device is detected
+        #                 self.logger.info(f"Created empty Thread configuration file at {self.thread_conf_path}")
+        #     except Exception as e:
+        #         self.logger.error(f"Failed to create Thread configuration file: {e}")
 
         # Initialize GPIO pins for Zigbee and Thread modules
         self.logger.info("Reset Zigbee module GPIOZ_1/GPIOZ_3...")
@@ -312,23 +311,23 @@ class GpioHwController:
         # Zigbee boot: DB_BOOT1/GPIOZ_3
         try:
             subprocess.run(["gpioset", "0", "3=0"], check=True)
-            time.sleep(0.5)
+            time.sleep(0.2)
             subprocess.run(["gpioset", "0", "1=1"], check=True)
-            time.sleep(0.5)
+            time.sleep(0.2)
             subprocess.run(["gpioset", "0", "1=0"], check=True)
-            time.sleep(0.5)
+            time.sleep(0.2)
             subprocess.run(["gpioset", "0", "1=1"], check=True)
             
-            self.logger.info("Reset Thread module GPIOA_1/GPIOA_3 ...")
-            # Thread reset: DB_RSTN2/GPIOA_1
-            # Thread boot: DB_BOOT2/GPIOA_3 
-            subprocess.run(["gpioset", "0", "29=0"], check=True)
-            time.sleep(0.5)
-            subprocess.run(["gpioset", "0", "27=1"], check=True)
-            time.sleep(0.5)
-            subprocess.run(["gpioset", "0", "27=0"], check=True)
-            time.sleep(0.5)
-            subprocess.run(["gpioset", "0", "27=1"], check=True)
+            # self.logger.info("Reset Thread module GPIOA_1/GPIOA_3 ...")
+            # # Thread reset: DB_RSTN2/GPIOA_1
+            # # Thread boot: DB_BOOT2/GPIOA_3 
+            # subprocess.run(["gpioset", "0", "29=0"], check=True)
+            # time.sleep(0.2)
+            # subprocess.run(["gpioset", "0", "27=1"], check=True)
+            # time.sleep(0.2)
+            # subprocess.run(["gpioset", "0", "27=0"], check=True)
+            # time.sleep(0.2)
+            # subprocess.run(["gpioset", "0", "27=1"], check=True)
         except subprocess.CalledProcessError as e:
             self.logger.error(f"Error executing gpioset command: {e}")
         except Exception as e:
@@ -336,34 +335,34 @@ class GpioHwController:
 
 
 
-    def _check_thread_device(self):
-        """
-        Check if a Thread device is connected to /dev/ttyAML6
-        Returns True if device is detected, False otherwise
+    # def _check_thread_device(self):
+    #     """
+    #     Check if a Thread device is connected to /dev/ttyAML6
+    #     Returns True if device is detected, False otherwise
         
-        使用 gpioget 0 27 检测，如果得到的结果为0，则/dev/ttyAML6上没有连接设备
-        如果为1，则对接了设备
-        """
-        try:
-            # 使用 gpioget 检查 GPIO 27 的状态
-            result = subprocess.run(["gpioget", "0", "27"], capture_output=True, text=True)
+    #     使用 gpioget 0 27 检测，如果得到的结果为0，则/dev/ttyAML6上没有连接设备
+    #     如果为1，则对接了设备
+    #     """
+    #     try:
+    #         # 使用 gpioget 检查 GPIO 27 的状态
+    #         result = subprocess.run(["gpioget", "0", "27"], capture_output=True, text=True)
             
-            # 检查命令是否成功执行
-            if result.returncode != 0:
-                self.logger.error(f"Failed to get GPIO 27 status: {result.stderr}")
-                return False
+    #         # 检查命令是否成功执行
+    #         if result.returncode != 0:
+    #             self.logger.error(f"Failed to get GPIO 27 status: {result.stderr}")
+    #             return False
             
-            # 获取输出并去除空白字符
-            gpio_value = result.stdout.strip()
+    #         # 获取输出并去除空白字符
+    #         gpio_value = result.stdout.strip()
             
-            # 检查 GPIO 值
-            if gpio_value == "1":
-                self.logger.info("Thread device detected (GPIO 27 = 1)")
-                return True
-            else:
-                self.logger.info("No Thread device detected (GPIO 27 = 0)")
-                return False
+    #         # 检查 GPIO 值
+    #         if gpio_value == "1":
+    #             self.logger.info("Thread device detected (GPIO 27 = 1)")
+    #             return True
+    #         else:
+    #             self.logger.info("No Thread device detected (GPIO 27 = 0)")
+    #             return False
             
-        except Exception as e:
-            self.logger.error(f"Error checking Thread device: {e}")
-            return False
+    #     except Exception as e:
+    #         self.logger.error(f"Error checking Thread device: {e}")
+    #         return False

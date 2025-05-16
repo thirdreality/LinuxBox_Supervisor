@@ -7,7 +7,7 @@ import time
 import os
 import re
 
-from .const import DEVICE_MODEL_NAME,DEVICE_CURRENT_VERSION,DEVICE_BUILD_NUMBER
+from .const import DEVICE_MODEL_NAME,DEVICE_BUILD_NUMBER
 
 class HomeAssistantInfo:
     def __init__(self):
@@ -37,7 +37,6 @@ class homekitbridgeInfo:
 class SystemInfo:
     def __init__(self):
         self.model = DEVICE_MODEL_NAME
-        self.version = DEVICE_CURRENT_VERSION
         self.build_number = DEVICE_BUILD_NUMBER
         self.name = "3RHUB-XXXX"
         self.support_zigbee=True

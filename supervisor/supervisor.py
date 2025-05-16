@@ -94,7 +94,7 @@ class Supervisor:
                 elif self.current_led_state == LedState.MQTT_NETWORK and state == LedState.MQTT_NORMAL:
                     self.current_led_state = LedState.NORMAL                                                
                 # 否则，如果当前状态不是 REBOOT, POWER_OFF, 或 PARING，则更新状态
-                elif self.current_led_state not in [LedState.REBOOT, LedState.POWER_OFF, LedState.MQTT_PARING, LedState.MQTT_ZIGEBB, LedState.MQTT_NETWORK, LedState.MQTT_ERROR]:
+                elif self.current_led_state not in [LedState.REBOOT, LedState.FACTORY_RESET, LedState.POWER_OFF, LedState.MQTT_PARING, LedState.MQTT_ZIGEBB, LedState.MQTT_NETWORK, LedState.MQTT_ERROR]:
                     self.current_led_state = state
 
     def set_ota_command(self, cmd):

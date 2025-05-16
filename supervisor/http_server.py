@@ -7,6 +7,9 @@ import json
 import hashlib
 import threading
 import time
+import base64
+import urllib.parse
+import subprocess
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 import os
@@ -198,9 +201,7 @@ class SupervisorHTTPServer:
                     result = {
                         "Device Model": system_info.model,
                         "Device Name": system_info.name,
-                        "Current Version": system_info.version,
                         "Build Number": system_info.build_number,
-                        "Uptime": int(time.time() - self._supervisor.start_time) if hasattr(self._supervisor, 'start_time') else 0,
                         "Zigbee Support": system_info.support_zigbee,
                         "Thread Support": system_info.support_thread,
                         "Memory": f"{system_info.memory_size} MB",
@@ -211,8 +212,7 @@ class SupervisorHTTPServer:
                     result = {
                         "model": "LinuxBox",
                         "version": "1.0.0",
-                        "name": "3RHUB-Unknown",
-                        "uptime": int(time.time() - self._supervisor.start_time) if hasattr(self._supervisor, 'start_time') else 0
+                        "name": "3RHUB-Unknown"
                     }
                 
                 if hasattr(self._supervisor, 'wifi_status'):
@@ -248,6 +248,12 @@ class SupervisorHTTPServer:
                         system_info.hainfo.core = get_package_version("thirdreality-hacore")
                     if not system_info.hainfo.otbr:
                         system_info.hainfo.otbr = get_package_version("thirdreality-otbr-agent")
+                        
+                    # 如果所有四个包版本都不为空，则设置installed和enabled为True
+                    if (system_info.hainfo.config and system_info.hainfo.python and 
+                        system_info.hainfo.core and system_info.hainfo.otbr):
+                        system_info.hainfo.installed = True
+                        system_info.hainfo.enabled = True
 
                     homeassistant_core_items = [
                         {
@@ -450,22 +456,10 @@ class SupervisorHTTPServer:
                         self._set_headers()
                         self.wfile.write(json.dumps({"success": True}).encode())
                         threading.Timer(1.0, self._supervisor.perform_delete_networks).start()                        
-                    elif command == "prepare_wifi_provision":
-                        # 直接调用supervisor的准备配网方法
-                        restore_need = utils.is_service_running("home-assistant")
-                        result = {
-                            "restore": restore_need,
-                            "success": True,
-                        }
-
-                        self._set_headers()
-                        self.wfile.write(json.dumps(result).encode())
-                        if restore_need:
-                            threading.Timer(1.0, self._supervisor.perform_wifi_provision_prepare).start()
                     elif command == "hello_world":
                         self._set_headers()
                         result = {
-                            "model": "LinuxBox",
+                            "model": const.DEVICE_MODEL_NAME,
                             "success": True,
                             "msg": "Hello ThirdReality"
                         }
@@ -529,6 +523,31 @@ class SupervisorHTTPServer:
                     
                     # 签名验证通过，处理命令
                     action = params.get("action", "")
+                    param = params.get("param", "")
+                    
+                    # 处理param参数
+                    package_name = ""
+                    if param:
+                        try:
+                            # 1. URL解码
+                            url_decoded = urllib.parse.unquote(param)
+                            self._logger.info(f"URL decoded param: {url_decoded}")
+                            
+                            # 2. Base64解码
+                            base64_decoded = base64.b64decode(url_decoded).decode('utf-8')
+                            self._logger.info(f"Base64 decoded param: {base64_decoded}")
+                            
+                            # 3. 解析JSON
+                            param_json = json.loads(base64_decoded)
+                            self._logger.info(f"Parsed JSON param: {param_json}")
+                            
+                            # 4. 提取package和service信息
+                            package_name = param_json.get("package", "")
+                            self._logger.info(f"Extracted package: {package_name}")
+                        except Exception as e:
+                            self._logger.error(f"Error processing param: {e}")
+                            self._send_error(f"Invalid param format: {str(e)}")
+                            return
                     
                     # 处理系统命令
                     if action == "install":
@@ -603,22 +622,100 @@ class SupervisorHTTPServer:
                     
                     # 签名验证通过，处理命令
                     action = params.get("action", "")
+                    param = params.get("param", "")
+                    
+                    # 处理param参数
+                    package_name = ""
+                    service_name = ""
+                    if param:
+                        try:
+                            # 1. URL解码
+                            url_decoded = urllib.parse.unquote(param)
+                            self._logger.info(f"URL decoded param: {url_decoded}")
+                            
+                            # 2. Base64解码
+                            base64_decoded = base64.b64decode(url_decoded).decode('utf-8')
+                            self._logger.info(f"Base64 decoded param: {base64_decoded}")
+                            
+                            # 3. 解析JSON
+                            param_json = json.loads(base64_decoded)
+                            self._logger.info(f"Parsed JSON param: {param_json}")
+                            
+                            # 4. 提取package和service信息
+                            package_name = param_json.get("package", "")
+                            service_name = param_json.get("service", "")
+                            self._logger.info(f"Extracted package: {package_name}, service: {service_name}")
+                        except Exception as e:
+                            self._logger.error(f"Error processing param: {e}")
+                            self._send_error(f"Invalid param format: {str(e)}")
+                            return
                     
                     # 处理系统命令
-                    if action == "enable":
-                        self._set_headers()
-                        self.wfile.write(json.dumps({"success": True}).encode())                   
-                    elif action == "disable":
-                        self._set_headers()
-                        self.wfile.write(json.dumps({"success": True}).encode())
-                    elif action == "start":
-                        self._set_headers()
-                        self.wfile.write(json.dumps({"success": True}).encode())               
-                    elif action == "stop":
-                        self._set_headers()
-                        self.wfile.write(json.dumps({"success": True}).encode())     
-                    else:
-                        self._send_error(f"Unknown action: {action}")
+                    if not service_name:
+                        self._send_error("Service name is required")
+                        return
+                        
+                    result = {"success": False, "message": ""}
+                    
+                    try:
+                        if action == "enable":
+                            # 启用服务
+                            self._logger.info(f"Enabling service: {service_name}")
+                            process = subprocess.run(["systemctl", "enable", service_name], 
+                                                    capture_output=True, text=True, check=False)
+                            
+                            if process.returncode == 0:
+                                result["success"] = True
+                                result["message"] = f"Service {service_name} enabled successfully"
+                            else:
+                                result["message"] = f"Failed to enable service: {process.stderr}"
+                                
+                        elif action == "disable":
+                            # 禁用服务
+                            self._logger.info(f"Disabling service: {service_name}")
+                            process = subprocess.run(["systemctl", "disable", service_name], 
+                                                    capture_output=True, text=True, check=False)
+                            
+                            if process.returncode == 0:
+                                result["success"] = True
+                                result["message"] = f"Service {service_name} disabled successfully"
+                            else:
+                                result["message"] = f"Failed to disable service: {process.stderr}"
+                                
+                        elif action == "start":
+                            # 启动服务
+                            self._logger.info(f"Starting service: {service_name}")
+                            process = subprocess.run(["systemctl", "start", service_name], 
+                                                    capture_output=True, text=True, check=False)
+                            
+                            if process.returncode == 0:
+                                result["success"] = True
+                                result["message"] = f"Service {service_name} started successfully"
+                            else:
+                                result["message"] = f"Failed to start service: {process.stderr}"
+                                
+                        elif action == "stop":
+                            # 停止服务
+                            self._logger.info(f"Stopping service: {service_name}")
+                            process = subprocess.run(["systemctl", "stop", service_name], 
+                                                    capture_output=True, text=True, check=False)
+                            
+                            if process.returncode == 0:
+                                result["success"] = True
+                                result["message"] = f"Service {service_name} stopped successfully"
+                            else:
+                                result["message"] = f"Failed to stop service: {process.stderr}"
+                        else:
+                            self._send_error(f"Unknown action: {action}")
+                            return
+                            
+                    except Exception as e:
+                        self._logger.error(f"Error executing systemctl command: {e}")
+                        result["message"] = f"Error: {str(e)}"
+                    
+                    # 返回结果
+                    self._set_headers()
+                    self.wfile.write(json.dumps(result).encode())
                 
                 except Exception as e:
                     self._logger.error(f"Error processing system command: {str(e)}")
