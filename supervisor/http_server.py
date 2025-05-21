@@ -16,6 +16,8 @@ import os
 import signal
 import sys
 import logging
+import mimetypes
+from concurrent.futures import ThreadPoolExecutor
 
 from .utils import utils
 from .hardware import LedState
@@ -34,6 +36,7 @@ class SupervisorHTTPServer:
         self.server = None
         self.server_thread = None
         self.running = threading.Event()
+        self.thread_pool = ThreadPoolExecutor(max_workers=5)  # 创建线程池用于处理文件下载
     
     def start(self):
         """启动HTTP服务器"""
@@ -69,6 +72,7 @@ class SupervisorHTTPServer:
             self.running.clear()
             self.server.shutdown()
             self.server = None
+            self.thread_pool.shutdown(wait=False)  # 关闭线程池
             self.logger.info("HTTP Server stopped")
     
     def _run_server(self):
@@ -113,6 +117,7 @@ class SupervisorHTTPServer:
                 """处理GET请求"""
                 parsed_path = urlparse(self.path)
                 path = parsed_path.path
+                query_params = parse_qs(parsed_path.query)
                 
                 # WiFi状态特性
                 if path == "/api/wifi/status":
@@ -130,7 +135,10 @@ class SupervisorHTTPServer:
                     service_name = path.split("/")[-1]
                     self._handle_service_info(service_name)
                 elif path == "/api/firmware/info":
-                    self._handle_firmware_info()            
+                    self._handle_firmware_info()
+                # 处理文件下载请求
+                elif path == "/api/example/file_node":
+                    self._handle_file_download(query_params)
                 # 处理未知路径
                 else:
                     self.send_response(404)
@@ -728,6 +736,87 @@ class SupervisorHTTPServer:
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": message}).encode())
+                
+            def _handle_file_download(self, query_params):
+                """处理文件下载请求，只允许下载/home目录下的文件"""
+                # 获取文件路径参数
+                if 'file_path' not in query_params:
+                    self._send_error("Missing file_path parameter")
+                    return
+                    
+                file_path = query_params['file_path'][0]
+                
+                # 验证文件路径是否在/home目录下
+                real_path = os.path.realpath(file_path)  # 解析符号链接并获取绝对路径
+                if not real_path.startswith('/home/'):
+                    self._logger.warning(f"Attempted to access restricted file: {file_path}")
+                    self._send_error("Access denied: Only files in /home directory can be downloaded")
+                    return
+                
+                # 检查文件是否存在
+                if not os.path.isfile(real_path):
+                    self._send_error(f"File not found: {file_path}")
+                    return
+                
+                # 创建一个线程来处理文件下载，但在当前请求上下文中完成响应
+                # 这样可以保证响应头和数据在同一个请求处理流程中发送
+                try:
+                    # 获取文件大小
+                    file_size = os.path.getsize(real_path)
+                    
+                    # 获取文件名
+                    file_name = os.path.basename(real_path)
+                    
+                    # 确定文件的MIME类型
+                    content_type, _ = mimetypes.guess_type(real_path)
+                    if content_type is None:
+                        content_type = 'application/octet-stream'
+                    
+                    # 设置响应头
+                    self.send_response(200)
+                    self.send_header('Content-Type', content_type)
+                    self.send_header('Content-Length', str(file_size))
+                    self.send_header('Content-Disposition', f'attachment; filename="{file_name}"')
+                    self.send_header('Access-Control-Allow-Origin', '*')  # 启用CORS
+                    self.end_headers()
+                    
+                    # 启动一个后台线程来处理大文件的读取和发送，避免阻塞主线程
+                    def send_file_in_background():
+                        try:
+                            # 读取并发送文件内容
+                            with open(real_path, 'rb') as file:
+                                # 分块读取和发送文件，避免内存问题
+                                chunk_size = 8192  # 8KB 块
+                                while True:
+                                    chunk = file.read(chunk_size)
+                                    if not chunk:
+                                        break
+                                    self.wfile.write(chunk)
+                            
+                            self._logger.info(f"File downloaded successfully: {real_path}")
+                        except Exception as e:
+                            self._logger.error(f"Error sending file {real_path}: {str(e)}")
+                    
+                    # 直接在当前线程中发送文件，而不是提交到线程池
+                    # 这样可以确保响应头和数据在同一个请求上下文中处理
+                    with open(real_path, 'rb') as file:
+                        # 分块读取和发送文件，避免内存问题
+                        chunk_size = 8192  # 8KB 块
+                        while True:
+                            chunk = file.read(chunk_size)
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                    
+                    self._logger.info(f"File downloaded successfully: {real_path}")
+                    
+                except Exception as e:
+                    self._logger.error(f"Error downloading file {real_path}: {str(e)}")
+                    # 如果还没有发送响应头，则发送错误
+                    try:
+                        self._send_error(f"Error downloading file: {str(e)}")
+                    except:
+                        pass  # 可能已经发送了部分响应，忽略错误
         
         return LinuxBoxHTTPHandler
 
