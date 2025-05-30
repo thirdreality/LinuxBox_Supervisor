@@ -13,7 +13,7 @@ from .hardware import LedState
 
 class SupervisorProxy:
     '''通过本地socket，连接SupervisorClient和Supervisor, 方便本地调试，以及其他模块服用本地功能'''
-    SOCKET_PATH = "/tmp/led_socket"
+    SOCKET_PATH = "/run/led_socket"  # 使用/run目录，这是一个内存文件系统，通常总是可写的
 
     def __init__(self, supervisor):
         self.supervisor = supervisor
@@ -57,15 +57,31 @@ class SupervisorProxy:
         return False
 
     def _setup_socket(self):
-        self._ensure_tmp_ready()
-        time.sleep(1)
-
-        if os.path.exists(self.SOCKET_PATH):
-            os.remove(self.SOCKET_PATH)
-        self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.server.bind(self.SOCKET_PATH)
-        self.server.listen(1)
-        self.server.settimeout(1.0)
+        # 直接尝试创建socket，不再检查/tmp目录
+        try:
+            # 确保目录存在
+            socket_dir = os.path.dirname(self.SOCKET_PATH)
+            if not os.path.exists(socket_dir):
+                try:
+                    # 尝试创建目录，如果需要的话
+                    os.makedirs(socket_dir, exist_ok=True)
+                except Exception as e_dir:
+                    self.logger.warning(f"Could not create directory {socket_dir}: {e_dir}")
+            
+            # 移除已存在的socket文件
+            if os.path.exists(self.SOCKET_PATH):
+                os.remove(self.SOCKET_PATH)
+                
+            # 创建和绑定socket
+            self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.server.bind(self.SOCKET_PATH)
+            self.server.listen(1)
+            self.server.settimeout(1.0)
+            self.logger.info(f"Socket created at {self.SOCKET_PATH}")
+        except Exception as e:
+            self.logger.error(f"Failed to create socket at {self.SOCKET_PATH}: {e}")
+            # 如果创建失败，直接抛出异常
+            raise
 
     def run(self):
         self._setup_socket()

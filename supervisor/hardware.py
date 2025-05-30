@@ -19,9 +19,19 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %
 
 # -----------------------------------------------------------------------------
 class LedState(Enum):
+    # 系统级状态（最高优先级）
     REBOOT = "reboot"
     POWER_OFF = "power_off"
     FACTORY_RESET = "factory_reset"
+    
+    # 用户按键事件状态（次高优先级）
+    USER_EVENT_RED = "user_event_red"      # 15秒以上按键 - 红灯
+    USER_EVENT_BLUE = "user_event_blue"    # 9-15秒按键 - 蓝灯
+    USER_EVENT_YELLOW = "user_event_yellow"  # 6-9秒按键 - 黄灯
+    USER_EVENT_GREEN = "user_event_green"   # 3-6秒按键 - 绿灯
+    USER_EVENT_WHITE = "user_event_white"   # 0-3秒按键 - 白灯
+    
+    # 普通状态
     NORMAL = "normal"
     NETWORK_ERROR = "network_error"
     NETWORK_LOST = "network_lost"
@@ -30,7 +40,7 @@ class LedState(Enum):
     MQTT_PARED = "mqtt_pared"
     MQTT_ERROR = "mqtt_error"
     MQTT_NORMAL = "mqtt_normal"
-    MQTT_ZIGEBB = "mqtt_zigbee"
+    MQTT_ZIGBEE = "mqtt_zigbee"
     MQTT_NETWORK = "mqtt_network"
 
 # -----------------------------------------------------------------------------
@@ -48,12 +58,30 @@ class GpioLed:
         
         # Thread control
         self.led_thread = None
+        # Store the current LED state
+        self.current_led_state = LedState.STARTUP
+        # Add a lock for thread safety
+        self.state_lock = threading.Lock()
+        # Cache for last LED values
+        self.last_led_values = {'red': None, 'green': None, 'blue': None}
+        # LED control variables
+        self.blink_counter = 0
+        self.step_counter = 0
 
-    def _set_gpio_value(self, chip, line, value):
+    def _set_gpio_value(self, chip, line, value, led_name):
         """Set GPIO value using gpioset command"""
+        # 获取这个LED的上一次值
+        last_value = self.last_led_values.get(led_name.lower())
+        
+        # 如果新值与上一次相同，则跳过
+        if last_value is not None and last_value == value:
+            return True
+            
         try:
             cmd = ["gpioset", str(chip), f"{line}={value}"]
             subprocess.run(cmd, check=True)
+            # 缓存新值
+            self.last_led_values[led_name.lower()] = value
             return True
         except subprocess.SubprocessError as e:
             self.logger.error(f"Failed to set GPIO chip {chip} line {line} to {value}: {e}")
@@ -65,21 +93,24 @@ class GpioLed:
         self._set_gpio_value(
             self.leds['RED']['chip'], 
             self.leds['RED']['line'], 
-            1 if red else 0
+            1 if red else 0,
+            'red'
         )
         
         # Set GREEN LED
         self._set_gpio_value(
             self.leds['GREEN']['chip'], 
             self.leds['GREEN']['line'], 
-            1 if green else 0
+            1 if green else 0,
+            'green'
         )
         
         # Set BLUE LED
         self._set_gpio_value(
             self.leds['BLUE']['chip'], 
             self.leds['BLUE']['line'], 
-            1 if blue else 0
+            1 if blue else 0,
+            'blue'
         )
 
     def off(self): self.set_color(False, False, False)
@@ -93,56 +124,81 @@ class GpioLed:
     
     def led_control_task(self):
         """LED control thread"""
-        blink_counter = 0
+        self.blink_counter = 0
+        self.step_counter = 0
         self.logger.info("Starting LED controller...")
         
+        # 间隔时间配置
+        blink_interval = 0.5  # 闪烁间隔保持为0.5秒
+        check_interval = 0.05  # 状态检查间隔为0.05秒
+        steps_per_blink = int(blink_interval / check_interval)  # 每个闪烁周期的检查次数
+        
         while self.supervisor and hasattr(self.supervisor, 'running') and self.supervisor.running.is_set():
-            state = self.supervisor.get_led_state()
-            blink_counter = (blink_counter + 1) % 2
-
-            if state == LedState.REBOOT:
-                self.red()
-            elif state == LedState.POWER_OFF:
-                self.yellow()
-            elif state == LedState.NORMAL:
-                self.blue()
-            elif state == LedState.MQTT_NORMAL:
-                self.blue()                
-            elif state == LedState.MQTT_ZIGEBB:
-                self.green()         
-            elif state == LedState.MQTT_NETWORK:
-                self.yellow()                                         
-            elif state == LedState.NETWORK_ERROR:
-                if blink_counter == 0:
+            # 每完成一个闪烁周期才更新LED状态
+            if self.step_counter == 0:
+                with self.state_lock:
+                    state = self.current_led_state
+                self.blink_counter = (self.blink_counter + 1) % 2
+                
+                # 系统级状态
+                if state == LedState.REBOOT:
+                    self.red()
+                elif state == LedState.POWER_OFF:
                     self.yellow()
-                else:
-                    self.off()
-            elif state == LedState.MQTT_ERROR:
-                if blink_counter == 0:
+                elif state == LedState.FACTORY_RESET:
+                    if self.blink_counter == 0:
+                        self.white()
+                    else:
+                        self.off()
+                # 用户事件状态
+                elif state == LedState.USER_EVENT_RED:
+                    self.red()
+                elif state == LedState.USER_EVENT_BLUE:
                     self.blue()
-                else:
-                    self.off()                    
-            elif state == LedState.NETWORK_LOST:
-                if blink_counter == 0:
+                elif state == LedState.USER_EVENT_YELLOW:
                     self.yellow()
-                else:
-                    self.off()
-            elif state == LedState.STARTUP:
-                if blink_counter == 0:
-                    self.white()
-                else:
-                    self.off()
-            elif state == LedState.MQTT_PARING:
-                if blink_counter == 0:
+                elif state == LedState.USER_EVENT_GREEN:
                     self.green()
-                else:
-                    self.off()
-            elif state == LedState.FACTORY_RESET:
-                if blink_counter == 0:
+                elif state == LedState.USER_EVENT_WHITE:
                     self.white()
-                else:
-                    self.off()
-            time.sleep(0.5)
+                # 普通状态
+                elif state == LedState.NORMAL:
+                    self.blue()
+                elif state == LedState.MQTT_NORMAL:
+                    self.blue()                
+                elif state == LedState.MQTT_ZIGBEE:
+                    self.green()         
+                elif state == LedState.MQTT_NETWORK:
+                    self.yellow()                                         
+                elif state == LedState.NETWORK_ERROR:
+                    if self.blink_counter == 0:
+                        self.yellow()
+                    else:
+                        self.off()
+                elif state == LedState.MQTT_ERROR:
+                    if self.blink_counter == 0:
+                        self.blue()
+                    else:
+                        self.off()                    
+                elif state == LedState.NETWORK_LOST:
+                    if self.blink_counter == 0:
+                        self.yellow()
+                    else:
+                        self.off()
+                elif state == LedState.STARTUP:
+                    if self.blink_counter == 0:
+                        self.white()
+                    else:
+                        self.off()
+                elif state == LedState.MQTT_PARING:
+                    if self.blink_counter == 0:
+                        self.green()
+                    else:
+                        self.off()
+            
+            # 使用短的睡眠间隔，提高响应性
+            time.sleep(check_interval)
+            self.step_counter = (self.step_counter + 1) % steps_per_blink
     
     def start(self):
         """Start LED control thread"""
@@ -152,8 +208,80 @@ class GpioLed:
         
     def stop(self):
         """Stop LED controller"""
+        if self.led_thread and self.led_thread.is_alive():
+            self.led_thread = None
         self.off()  # Turn off LED
         self.logger.info("LED controller stopped")
+
+    def set_led_state(self, state):
+        """Set the current LED state"""
+        with self.state_lock:
+            # 定义状态优先级
+            system_states = [LedState.REBOOT, LedState.POWER_OFF, LedState.FACTORY_RESET]
+            user_event_states = [
+                LedState.USER_EVENT_RED, LedState.USER_EVENT_BLUE, 
+                LedState.USER_EVENT_YELLOW, LedState.USER_EVENT_GREEN, 
+                LedState.USER_EVENT_WHITE
+            ]
+            
+            # 检查是否需要更新状态
+            state_changed = False
+            
+            # 最高优先级：系统级状态（重启、关机、出厂重置）
+            if state in system_states:
+                if self.current_led_state != state:
+                    self.current_led_state = state
+                    state_changed = True
+                    self.logger.info(f"Setting LED to system state: {state}")
+                return
+                
+            # 次高优先级：用户事件状态
+            if state in user_event_states:
+                # 如果当前状态是系统级，则不更新
+                if self.current_led_state in system_states:
+                    self.logger.info(f"Not updating LED: current system state {self.current_led_state} has higher priority than user event {state}")
+                    return
+                # 否则设置为用户事件状态
+                if self.current_led_state != state:
+                    self.current_led_state = state
+                    state_changed = True
+                    self.logger.info(f"Setting LED to user event state: {state}")
+                return
+                
+            # 如果当前状态是系统级或用户事件，则不更新
+            if self.current_led_state in system_states or self.current_led_state in user_event_states:
+                self.logger.info(f"Not updating LED: current state {self.current_led_state} has higher priority than {state}")
+                return
+                
+            # 处理特殊状态转换
+            old_state = self.current_led_state
+            if self.current_led_state == LedState.MQTT_PARING and state == LedState.MQTT_PARED:
+                self.current_led_state = LedState.NORMAL
+            elif self.current_led_state == LedState.MQTT_ERROR and state == LedState.MQTT_NORMAL:
+                self.current_led_state = LedState.NORMAL                    
+            elif self.current_led_state == LedState.MQTT_ZIGBEE and state == LedState.MQTT_NORMAL:
+                self.current_led_state = LedState.NORMAL        
+            elif self.current_led_state == LedState.MQTT_ZIGBEE and state == LedState.MQTT_NETWORK:
+                self.current_led_state = LedState.MQTT_NETWORK                        
+            elif self.current_led_state == LedState.MQTT_NETWORK and state == LedState.MQTT_NORMAL:
+                self.current_led_state = LedState.NORMAL
+            else:
+                # 其他普通状态更新
+                self.current_led_state = state
+            
+            # 检查状态是否发生变化
+            if old_state != self.current_led_state:
+                state_changed = True
+                self.logger.info(f"Setting LED to normal state: {state}")
+            
+            # 如果状态发生变化，重置step_counter以立即响应
+            if state_changed:
+                self.step_counter = 0
+
+    def get_led_state(self):
+        """Get the current LED state"""
+        with self.state_lock:
+            return self.current_led_state
 
 # -----------------------------------------------------------------------------
 
@@ -170,6 +298,10 @@ class GpioButton:
         
         # Thread control
         self.button_thread = None
+        self.timer_thread = None
+        self.stop_event = threading.Event()
+        self.button_pressed = threading.Event()
+        self.press_start_time = 0
 
     def _initialize_pin(self):
         # No initialization needed for gpioget approach
@@ -185,64 +317,132 @@ class GpioButton:
             self.logger.error(f"Failed to get button state from GPIO chip {self.button['chip']} line {self.button['line']}: {e}")
             return False
     
-    def button_control_task(self):
-        """Button monitoring thread"""
-        press_start = None
-        action_triggered = None
-        self.logger.info("Starting button monitor...")
-
-        while self.supervisor and hasattr(self.supervisor, 'running') and self.supervisor.running.is_set():
-            if self.is_pressed():
-                if press_start is None: 
-                    press_start = time.time()
-                    action_triggered = None
-                
-                press_duration = time.time() - press_start
-
-                # Update LED state based on press duration
-                if press_duration >= 15 and action_triggered != 'factory_reset':
-                    if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
-                        self.supervisor.set_led_state(LedState.FACTORY_RESET)
-                    action_triggered = 'factory_reset'
-                elif press_duration >= 9 and action_triggered not in ['factory_reset', 'blue']:
-                    if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
-                        self.supervisor.set_led_state(LedState.MQTT_NORMAL)  # Blue light for 9-15 seconds
-                    action_triggered = 'blue'
-                elif press_duration >= 6 and action_triggered not in ['factory_reset', 'blue', 'network_setup']:
-                    if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
-                        self.supervisor.set_led_state(LedState.MQTT_NETWORK)  # Yellow for network setup
-                    action_triggered = 'network_setup'
-                elif press_duration >= 3 and action_triggered not in ['factory_reset', 'blue', 'network_setup', 'zigbee_pairing']:
-                    if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
-                        self.supervisor.set_led_state(LedState.MQTT_ZIGEBB) # Green for Zigbee pairing
-                    action_triggered = 'zigbee_pairing'
-
+    def _monitor_button_events(self):
+        """监控按键按下和释放事件的主线程"""
+        self.logger.info("Starting button event monitor thread...")
+        
+        while not self.stop_event.is_set():
+            # 检测按键按下
+            if not self.button_pressed.is_set():
+                try:
+                    cmd = ["gpiomon", "-n", "1", "-r", str(self.button['chip']), str(self.button['line'])]
+                    result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=1.0)
+                    
+                    if result.returncode == 0:
+                        # 按键被按下
+                        self.logger.info("Button pressed")
+                        self.button_pressed.set()
+                        self.press_start_time = time.time()
+                        
+                        # 启动计时线程
+                        if self.timer_thread is None or not self.timer_thread.is_alive():
+                            self.timer_thread = threading.Thread(target=self._button_timer_task)
+                            self.timer_thread.daemon = True
+                            self.timer_thread.start()
+                except subprocess.TimeoutExpired:
+                    # 正常超时，继续等待
+                    pass
+                except Exception as e:
+                    self.logger.error(f"Error monitoring button press: {e}")
+                    time.sleep(1)  # 出错时等待一会再重试
+            
+            # 检测按键释放
             else:
-                if press_start is not None:
-                    press_duration = time.time() - press_start
+                try:
+                    cmd = ["gpiomon", "-n", "1", "-f", str(self.button['chip']), str(self.button['line'])]
+                    result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=1.0)
                     
-                    # Handle button release actions
-                    if action_triggered == 'factory_reset' and press_duration >= 15:
-                        if self.supervisor and hasattr(self.supervisor, 'perform_factory_reset'):
-                            self.supervisor.perform_factory_reset()
-                    elif action_triggered == 'network_setup' and 6 <= press_duration < 9:
-                        if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
-                            self.supervisor.set_led_state(LedState.MQTT_NORMAL) 
-                        # Stop Home Assistant and set network setup flag
-                        if self.supervisor and hasattr(self.supervisor, 'perform_wifi_provision_prepare'):
-                            self.supervisor.perform_wifi_provision_prepare()
-                    elif action_triggered == 'zigbee_pairing' and 3 <= press_duration < 6:
-                        # Enter Zigbee pairing mode
-                        if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
-                            self.supervisor.set_led_state(LedState.MQTT_NORMAL)        
-                        if self.supervisor and hasattr(self.supervisor, 'start_zigbee_pairing'):
-                            self.supervisor.start_zigbee_pairing()
-                    
-                    # Reset state
-                    press_start = None
-                    action_triggered = None
-
-            time.sleep(0.5)
+                    if result.returncode == 0:
+                        # 按键被释放
+                        press_duration = time.time() - self.press_start_time
+                        self.logger.info(f"Button released after {press_duration:.2f} seconds")
+                        self.button_pressed.clear()
+                        
+                        # 根据按键时间执行相应操作
+                        self._handle_button_release(press_duration)
+                except subprocess.TimeoutExpired:
+                    # 正常超时，继续等待
+                    pass
+                except Exception as e:
+                    self.logger.error(f"Error monitoring button release: {e}")
+                    time.sleep(1)  # 出错时等待一会再重试
+    
+    def _button_timer_task(self):
+        """按键计时线程，根据按键时间显示不同的LED颜色"""
+        last_action = None
+        
+        # 初始状态：白灯
+        if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
+            self.supervisor.set_led_state(LedState.USER_EVENT_WHITE)  # 白灯
+        
+        while self.button_pressed.is_set() and not self.stop_event.is_set():
+            press_duration = time.time() - self.press_start_time
+            
+            # 根据按键时间设置LED颜色，使用专用的高优先级用户事件状态
+            if press_duration >= 15 and last_action != 'red':
+                if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
+                    self.supervisor.set_led_state(LedState.USER_EVENT_RED)  # 红灯
+                last_action = 'red'
+                self.logger.info("Timer: 15+ seconds - Red light (factory reset)")
+            elif 9 <= press_duration < 15 and last_action != 'blue':
+                if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
+                    self.supervisor.set_led_state(LedState.USER_EVENT_BLUE)  # 蓝灯
+                last_action = 'blue'
+                self.logger.info("Timer: 9-15 seconds - Blue light")
+            elif 6 <= press_duration < 9 and last_action != 'yellow':
+                if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
+                    self.supervisor.set_led_state(LedState.USER_EVENT_YELLOW)  # 黄灯
+                last_action = 'yellow'
+                self.logger.info("Timer: 6-9 seconds - Yellow light (network setup)")
+            elif 3 <= press_duration < 6 and last_action != 'green':
+                if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
+                    self.supervisor.set_led_state(LedState.USER_EVENT_GREEN)  # 绿灯
+                last_action = 'green'
+                self.logger.info("Timer: 3-6 seconds - Green light (Zigbee pairing)")
+            elif 0 <= press_duration < 3 and last_action != 'white':
+                if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
+                    self.supervisor.set_led_state(LedState.USER_EVENT_WHITE)  # 白灯
+                last_action = 'white'
+                self.logger.info("Timer: 0-3 seconds - White light")
+            
+            time.sleep(0.1)  # 小的睡眠间隔以减少CPU使用
+    
+    def _handle_button_release(self, press_duration):
+        """处理按键释放事件"""
+        # 根据按键时间执行相应操作
+        if press_duration >= 15:
+            # 15秒以上：执行出厂重置
+            if self.supervisor and hasattr(self.supervisor, 'perform_factory_reset'):
+                self.logger.info("Executing factory reset")
+                self.supervisor.perform_factory_reset()
+        elif 9 <= press_duration < 15:
+            # 9-15秒：蓝灯操作
+            self.logger.info("Blue light action completed")
+            if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
+                self.supervisor.set_led_state(LedState.NORMAL)
+        elif 6 <= press_duration < 9:
+            # 6-9秒：网络设置
+            self.logger.info("Network setup action triggered")
+            if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
+                self.supervisor.set_led_state(LedState.NORMAL)
+            if self.supervisor and hasattr(self.supervisor, 'perform_wifi_provision_prepare'):
+                self.supervisor.perform_wifi_provision_prepare()
+        elif 3 <= press_duration < 6:
+            # 3-6秒：Zigbee配对
+            self.logger.info("Zigbee pairing action triggered")
+            if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
+                self.supervisor.set_led_state(LedState.NORMAL)
+            if self.supervisor and hasattr(self.supervisor, 'start_zigbee_pairing'):
+                self.supervisor.start_zigbee_pairing()
+        else:
+            # 0-3秒：恢复正常状态
+            self.logger.info("Short press detected, returning to normal state")
+            if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
+                self.supervisor.set_led_state(LedState.NORMAL)
+    
+    def button_control_task(self):
+        """启动按键监控线程"""
+        self._monitor_button_events()
     
     def start(self):
         """Start button monitoring thread"""

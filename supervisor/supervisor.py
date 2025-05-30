@@ -49,7 +49,6 @@ class Supervisor:
         self.button = GpioButton(self)        
 
         # LED state and running state
-        self.current_led_state = LedState.STARTUP
         self.state_lock = threading.Lock()
         self.running = threading.Event()
         self.running.set()
@@ -77,25 +76,8 @@ class Supervisor:
         self.ha_resume_need = False
 
     def set_led_state(self, state):
-        with self.state_lock:
-            # 最高优先级：如果新状态是 REBOOT 或 POWER_OFF，则无条件地设置状态
-            if state in [LedState.REBOOT, LedState.POWER_OFF, LedState.FACTORY_RESET]:
-                self.current_led_state = state
-            else:
-                # 如果当前状态是 PARING 且新状态是 PARED 或 NORMAL，则转换为 NORMAL
-                if self.current_led_state == LedState.MQTT_PARING and state == LedState.MQTT_PARED:
-                    self.current_led_state = LedState.NORMAL
-                elif self.current_led_state == LedState.MQTT_ERROR and state == LedState.MQTT_NORMAL:
-                    self.current_led_state = LedState.NORMAL                    
-                elif self.current_led_state == LedState.MQTT_ZIGEBB and state == LedState.MQTT_NORMAL:
-                    self.current_led_state = LedState.NORMAL        
-                elif self.current_led_state == LedState.MQTT_ZIGEBB and state == LedState.MQTT_NETWORK:
-                    self.current_led_state = LedState.MQTT_NETWORK                        
-                elif self.current_led_state == LedState.MQTT_NETWORK and state == LedState.MQTT_NORMAL:
-                    self.current_led_state = LedState.NORMAL                                                
-                # 否则，如果当前状态不是 REBOOT, POWER_OFF, 或 PARING，则更新状态
-                elif self.current_led_state not in [LedState.REBOOT, LedState.FACTORY_RESET, LedState.POWER_OFF, LedState.MQTT_PARING, LedState.MQTT_ZIGEBB, LedState.MQTT_NETWORK, LedState.MQTT_ERROR]:
-                    self.current_led_state = state
+        # Forward the LED state to the GpioLed instance
+        self.led.set_led_state(state)
 
     def set_ota_command(self, cmd):
         logger.info(f"OTA Command: param={cmd}")
@@ -117,8 +99,8 @@ class Supervisor:
             return "Thread support disabled"
 
     def get_led_state(self):
-        with self.state_lock:
-            return self.current_led_state
+        # Get the LED state from the GpioLed instance
+        return self.led.get_led_state()
         
     def isThreadSupported(self):
         return self.system_info.support_thread
