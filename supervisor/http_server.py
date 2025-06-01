@@ -29,6 +29,12 @@ from .sysinfo import get_package_version
 class SupervisorHTTPServer:
     """HTTP Server that integrates with Supervisor for shared state"""
     
+    # 集中管理API密钥和安全配置
+    API_SECRET_KEY = "ThirdReality"  # 理想情况下应从环境变量或配置文件加载
+    MAX_RETRIES = 3  # 服务器错误最大重试次数
+    RETRY_DELAY = 5  # 重试延迟（秒）
+    ALLOWED_DOWNLOAD_PATHS = ["/home/"]  # 允许下载的路径前缀
+    
     def __init__(self, supervisor, port=8086):
         self.logger = logging.getLogger("Supervisor")
         self.supervisor = supervisor
@@ -37,6 +43,7 @@ class SupervisorHTTPServer:
         self.server_thread = None
         self.running = threading.Event()
         self.thread_pool = ThreadPoolExecutor(max_workers=5)  # 创建线程池用于处理文件下载
+        self.start_time = time.time()  # 记录启动时间，用于健康检查
     
     def start(self):
         """启动HTTP服务器"""
@@ -76,14 +83,25 @@ class SupervisorHTTPServer:
             self.logger.info("HTTP Server stopped")
     
     def _run_server(self):
-        """在一个单独的线程中运行HTTP服务器"""
+        """在一个单独的线程中运行HTTP服务器，添加重试机制"""
+        retry_count = 0
+        
         while self.running.is_set():
             try:
                 self.server.serve_forever()
             except Exception as e:
                 if self.running.is_set():  # 仅当仍应该运行时记录错误
-                    self.logger.error(f"HTTP Server error: {e}")
-                    time.sleep(5)  # 等待一段时间再重试
+                    retry_count += 1
+                    if retry_count > self.MAX_RETRIES:
+                        self.logger.error(f"HTTP Server failed after {self.MAX_RETRIES} retries: {e}")
+                        self.running.clear()  # 停止服务器
+                        # 通知supervisor HTTP服务器失败
+                        if hasattr(self.supervisor, 'on_http_server_failure'):
+                            self.supervisor.on_http_server_failure(e)
+                        break
+                    
+                    self.logger.warning(f"HTTP Server error (retry {retry_count}/{self.MAX_RETRIES}): {e}")
+                    time.sleep(self.RETRY_DELAY)  # 使用配置的延迟时间
     
     def _create_handler(self):
         """创建一个能访问supervisor的HTTP请求处理器类"""
@@ -115,35 +133,44 @@ class SupervisorHTTPServer:
             
             def do_GET(self):
                 """处理GET请求"""
-                parsed_path = urlparse(self.path)
-                path = parsed_path.path
-                query_params = parse_qs(parsed_path.query)
-                
-                # WiFi状态特性
-                if path == "/api/wifi/status":
-                    self._handle_wifi_status()
-                
-                # 系统信息特性
-                elif path == "/api/system/info":
-                    self._handle_sys_info()
-                elif path == "/api/software/info":
-                    self._handle_software_info()           
-                elif path == "/api/service/info":
-                    self._handle_service_info()
-                # 处理带有服务名称参数的服务信息请求
-                elif path.startswith("/api/service/info/"):
-                    service_name = path.split("/")[-1]
-                    self._handle_service_info(service_name)
-                elif path == "/api/firmware/info":
-                    self._handle_firmware_info()
-                # 处理文件下载请求
-                elif path == "/api/example/file_node":
-                    self._handle_file_download(query_params)
-                # 处理未知路径
-                else:
-                    self.send_response(404)
+                try:
+                    # 解析URL和查询参数
+                    parsed_url = urllib.parse.urlparse(self.path)
+                    path = parsed_url.path
+                    query_params = urllib.parse.parse_qs(parsed_url.query)
+                    
+                    self._logger.info(f"GET request: {path}")
+                    
+                    # 处理不同的API端点
+                    if path == "/api/wifi/status":
+                        self._handle_wifi_status()
+                    elif path == "/api/system/info":
+                        self._handle_system_info()
+                    elif path == "/api/software/info":
+                        self._handle_software_info()
+                    elif path == "/api/service/info":
+                        # 检查是否有服务名参数
+                        service_name = query_params.get('service', [None])[0]
+                        self._handle_service_info(service_name)
+                    elif path == "/api/firmware/info":
+                        self._handle_firmware_info()
+                    elif path == "/api/file/download":
+                        self._handle_file_download(query_params)
+                    elif path == "/api/health" or path == "/health":
+                        # 处理健康检查请求
+                        self._handle_health_check()
+                    else:
+                        # 返回404 Not Found
+                        self.send_response(404)
+                        self.end_headers()
+                        self.wfile.write(b"Not Found")
+                        
+                except Exception as e:
+                    self._logger.error(f"Error handling GET request: {str(e)}")
+                    self.send_response(500)
+                    self.send_header('Content-type', 'application/json')
                     self.end_headers()
-                    self.wfile.write(json.dumps({"error": "Not found"}).encode())
+                    self.wfile.write(json.dumps({"error": "Internal Server Error"}).encode())
             
             def do_POST(self):
                 """处理POST请求"""
@@ -279,33 +306,26 @@ class SupervisorHTTPServer:
                         {
                             "name": "otbr-agent",
                             "version":system_info.hainfo.otbr
-                        },                                                                        
+                        }, 
+                        {
+                            "name": "zigbee-mqtt",
+                            "version":system_info.hainfo.z2m
+                        }, 
                     ]
 
                     homeassistant_core_result['installed'] = system_info.hainfo.installed
                     homeassistant_core_result['enabled'] = system_info.hainfo.enabled
                     homeassistant_core_result['software'] = homeassistant_core_items
 
-                    zigbee2mqtt_items = [
-                        {
-                            "name": "zigbee2mqt",
-                            "version":system_info.z2minfo.zigbee2mqtt
-                        },
+                    openhab_items = [
                     ]
-                    zigbee2mqtt_result['installed'] = system_info.z2minfo.installed
-                    zigbee2mqtt_result['enabled'] = system_info.z2minfo.enabled
-                    zigbee2mqtt_result['software'] = zigbee2mqtt_items
-
-                    homekitbridge_items = [
-                    ]
-                    homekitbridge_result['installed'] = system_info.hbinfo.installed
-                    homekitbridge_result['enabled'] = system_info.hbinfo.enabled
-                    homekitbridge_result['software'] = homekitbridge_items
+                    openhab_result['installed'] = system_info.openhabinfo.installed
+                    openhab_result['enabled'] = system_info.openhabinfo.enabled
+                    openhab_result['software'] = openhab_items
 
                 result = {
                     "homeassistant_core":homeassistant_core_result,
-                    "zigbee2mqtt":zigbee2mqtt_result,
-                    "homekitbridge":homekitbridge_result
+                    "openhab":openhab_result,
                 }
 
                 self._set_headers()
@@ -320,21 +340,17 @@ class SupervisorHTTPServer:
                         "services": [
                             "home-assistant.service",
                             "matter-server.service",
-                            "otbr-agent.service"
-                        ]
-                    },
-                    "zigbee2mqtt": {
-                        "name": "zigbee2mqtt",
-                        "services": [
+                            "otbr-agent.service",
+                            "mosquitto.service",
                             "zigbee2mqtt.service"
                         ]
                     },
-                    "homekitbridge": {
-                        "name": "Homekit Bridge",
+                    "openhab": {
+                        "name": "openhab",
                         "services": [
-                            "homekit-bridge.service"
+                            "openhab.service"
                         ]
-                    }
+                    },
                 }
                 
                 # 如果指定了服务名称但不存在，返回404
@@ -379,39 +395,137 @@ class SupervisorHTTPServer:
                 homeassistant_core_result={
                     'name': 'Home Assistant'
                 }
-                zigbee2mqtt_result = {
-                    'name': 'zigbee2mqtt'
-                }
-                homekitbridge_result = {
-                    'name': 'Homekit Bridge'
+                openhab_result = {
+                    'name': 'openhab'
                 }
 
                 result = {
                     "homeassistant_core":homeassistant_core_result,
-                    "zigbee2mqtt":zigbee2mqtt_result,
-                    "homekitbridge":homekitbridge_result
+                    "openhab":openhab_result
                 }
                 self._set_headers()
                 self.wfile.write(json.dumps(result).encode())                
             
-            def _handle_sys_command(self, post_data):
+            def _handle_health_check(self):
+                """处理健康检查请求，返回服务器状态信息"""
+                # 计算服务器运行时间
+                uptime_seconds = time.time() - self._supervisor.http_server.start_time
+                uptime_str = self._format_uptime(uptime_seconds)
+                
+                # 获取系统资源信息
+                mem_info = self._get_memory_info()
+                cpu_load = self._get_cpu_load()
+                disk_usage = self._get_disk_usage()
+                
+                # 组装健康状态响应
+                health_status = {
+                    "status": "ok",
+                    "version": self._supervisor.system_info.build_number if hasattr(self._supervisor, 'system_info') else "unknown",
+                    "uptime": uptime_str,
+                    "uptime_seconds": int(uptime_seconds),
+                    "timestamp": int(time.time()),
+                    "resources": {
+                        "memory": mem_info,
+                        "cpu": cpu_load,
+                        "disk": disk_usage
+                    }
+                }
+                
+                # 返回健康状态响应
+                self._set_headers()
+                self.wfile.write(json.dumps(health_status).encode())
+            
+            def _format_uptime(self, seconds):
+                """格式化运行时间"""
+                days, remainder = divmod(int(seconds), 86400)
+                hours, remainder = divmod(remainder, 3600)
+                minutes, seconds = divmod(remainder, 60)
+                
+                if days > 0:
+                    return f"{days}d {hours}h {minutes}m {seconds}s"
+                elif hours > 0:
+                    return f"{hours}h {minutes}m {seconds}s"
+                elif minutes > 0:
+                    return f"{minutes}m {seconds}s"
+                else:
+                    return f"{seconds}s"
+            
+            def _get_memory_info(self):
+                """获取内存使用情况"""
                 try:
-                    # 解析POST数据（k=v&k=v的格式）
+                    with open('/proc/meminfo', 'r') as f:
+                        mem_info = {}
+                        for line in f:
+                            if 'MemTotal' in line or 'MemFree' in line or 'MemAvailable' in line:
+                                key, value = line.split(':', 1)
+                                value = value.strip().split()[0]  # 去除单位，只保留数字
+                                mem_info[key.strip()] = int(value)
+                        
+                        # 计算内存使用百分比
+                        if 'MemTotal' in mem_info and 'MemAvailable' in mem_info:
+                            used = mem_info['MemTotal'] - mem_info['MemAvailable']
+                            mem_info['UsedPercent'] = round(used / mem_info['MemTotal'] * 100, 1)
+                        
+                        return mem_info
+                except Exception as e:
+                    self._logger.error(f"Error getting memory info: {e}")
+                    return {"error": str(e)}
+            
+            def _get_cpu_load(self):
+                """获取CPU负载"""
+                try:
+                    with open('/proc/loadavg', 'r') as f:
+                        load = f.read().strip().split()
+                        return {
+                            "load_1min": float(load[0]),
+                            "load_5min": float(load[1]),
+                            "load_15min": float(load[2])
+                        }
+                except Exception as e:
+                    self._logger.error(f"Error getting CPU load: {e}")
+                    return {"error": str(e)}
+            
+            def _get_disk_usage(self):
+                """获取磁盘使用情况"""
+                try:
+                    # 使用df命令获取磁盘使用情况
+                    process = subprocess.run(['df', '-h', '/'], capture_output=True, text=True, check=False)
+                    if process.returncode == 0:
+                        lines = process.stdout.strip().split('\n')
+                        if len(lines) >= 2:  # 至少有标题行和数据行
+                            parts = lines[1].split()
+                            if len(parts) >= 5:
+                                return {
+                                    "filesystem": parts[0],
+                                    "size": parts[1],
+                                    "used": parts[2],
+                                    "available": parts[3],
+                                    "use_percent": parts[4]
+                                }
+                    
+                    # 如果上面的方法失败，尝试使用statvfs
+                    import os
+                    st = os.statvfs('/')
+                    total = st.f_blocks * st.f_frsize
+                    free = st.f_bfree * st.f_frsize
+                    used = total - free
+                    return {
+                        "total_bytes": total,
+                        "used_bytes": used,
+                        "free_bytes": free,
+                        "use_percent": round(used / total * 100, 1)
+                    }
+                except Exception as e:
+                    self._logger.error(f"Error getting disk usage: {e}")
+                    return {"error": str(e)}                
+            
+            def _handle_sys_command(self, post_data):
+                """处理系统命令请求，使用共用签名验证方法"""
+                try:
                     self._logger.info(f"Processing system command with data: {post_data}")
                     
-                    # 解析参数
-                    params = {}
-                    signature = None
-                    
-                    # 按&分割参数
-                    param_pairs = post_data.split('&')
-                    for pair in param_pairs:
-                        if '=' in pair:
-                            key, value = pair.split('=', 1)
-                            if key == '_sig':
-                                signature = value
-                            else:
-                                params[key] = value
+                    # 使用共用方法解析和验证参数
+                    params, signature, is_valid = self._parse_post_data(post_data)
                     
                     # 验证必须有command参数
                     if 'command' not in params:
@@ -423,18 +537,8 @@ class SupervisorHTTPServer:
                         self._send_error("Signature is required")
                         return
                     
-                    # 按key排序并重新组装参数字符串（不包含_sig）
-                    sorted_keys = sorted(params.keys())
-                    param_string = '&'.join([f"{k}={params[k]}" for k in sorted_keys])
-                    
-                    # 添加安全密钥并计算MD5
-                    security_string = f"{param_string}&ThirdReality"
-                    calculated_md5 = hashlib.md5(security_string.encode()).hexdigest()
-                    
-                    self._logger.info(f"Calculated signature: {calculated_md5}")
-                    
-                    # 验证签名
-                    if calculated_md5 != signature:
+                    # 验证签名有效性
+                    if not is_valid:
                         self._logger.warning("Security verification failed: Invalid signature")
                         self.send_response(401)
                         self.send_header('Content-type', 'application/json')
@@ -444,6 +548,7 @@ class SupervisorHTTPServer:
                     
                     # 签名验证通过，处理命令
                     command = params.get("command", "")
+                    self._logger.info(f"Processing validated command: {command}")
                     
                     # 处理系统命令
                     if command == "reboot":
@@ -459,15 +564,17 @@ class SupervisorHTTPServer:
                         self._set_headers()
                         self.wfile.write(json.dumps({"success": True}).encode())
                         threading.Timer(3.0, self._supervisor.perform_factory_reset).start()
+                    
                     elif command == "delete_networks":
                         # 直接调用supervisor的删除网络配置方法
                         self._set_headers()
                         self.wfile.write(json.dumps({"success": True}).encode())
                         threading.Timer(1.0, self._supervisor.perform_delete_networks).start()                        
+                    
                     elif command == "hello_world":
                         self._set_headers()
                         result = {
-                            "model": const.DEVICE_MODEL_NAME,
+                            "model": const.DEVICE_MODEL_NAME if 'const' in globals() else "Unknown",
                             "success": True,
                             "msg": "Hello ThirdReality"
                         }
@@ -479,80 +586,52 @@ class SupervisorHTTPServer:
                 except Exception as e:
                     self._logger.error(f"Error processing system command: {str(e)}")
                     self._send_error(f"Error: {str(e)}")
-            
+                    # 添加详细的异常跟踪
 
-            def _handle_software_command(self, post_data):
-                try:
-                    # 解析POST数据（k=v&k=v的格式）
-                    self._logger.info(f"Processing Software Package command with data: {post_data}")
-                    
-                    # 解析参数
-                    params = {}
-                    signature = None
-                    
-                    # 按&分割参数
-                    param_pairs = post_data.split('&')
-                    for pair in param_pairs:
-                        if '=' in pair:
-                            key, value = pair.split('=', 1)
-                            if key == '_sig':
-                                signature = value
-                            else:
-                                params[key] = value
-                    
-                    # 验证必须有command参数
-                    if 'action' not in params:
-                        self._send_error("action is required")
-                        return
-                    
-                    # 验证签名
-                    if not signature:
-                        self._send_error("Signature is required")
-                        return
-                    
-                    # 按key排序并重新组装参数字符串（不包含_sig）
-                    sorted_keys = sorted(params.keys())
-                    param_string = '&'.join([f"{k}={params[k]}" for k in sorted_keys])
-                    
-                    # 添加安全密钥并计算MD5
-                    security_string = f"{param_string}&ThirdReality"
-                    calculated_md5 = hashlib.md5(security_string.encode()).hexdigest()
-                    
-                    self._logger.info(f"Calculated signature: {calculated_md5}")
-                    
-                    # 验证签名
-                    if calculated_md5 != signature:
-                        self._logger.warning("Security verification failed: Invalid signature")
-                        self.send_response(401)
-                        self.send_header('Content-type', 'application/json')
-                        self.end_headers()
-                        self.wfile.write(json.dumps({"error": "Unauthorized: Invalid signature"}).encode())
-                        return
-                    
-                    # 签名验证通过，处理命令
-                    action = params.get("action", "")
-                    param = params.get("param", "")
-                    
-                    # 处理param参数
-                    package_name = ""
-                    if param:
-                        try:
-                            # 1. URL解码
-                            url_decoded = urllib.parse.unquote(param)
-                            self._logger.info(f"URL decoded param: {url_decoded}")
-                            
-                            # 2. Base64解码
-                            base64_decoded = base64.b64decode(url_decoded).decode('utf-8')
-                            self._logger.info(f"Base64 decoded param: {base64_decoded}")
-                            
-                            # 3. 解析JSON
-                            param_json = json.loads(base64_decoded)
-                            self._logger.info(f"Parsed JSON param: {param_json}")
-                            
-                            # 4. 提取package和service信息
-                            package_name = param_json.get("package", "")
-                            self._logger.info(f"Extracted package: {package_name}")
-                        except Exception as e:
+def _handle_software_command(self, post_data):
+    """处理软件命令请求，使用共用签名验证方法"""
+    try:
+        self._logger.info(f"Processing software command with data: {post_data}")
+        
+        # 使用共用方法解析和验证参数
+        params, signature, is_valid = self._parse_post_data(post_data)
+        
+        # 验证必须有command参数
+        if 'command' not in params:
+            self._send_error("Command is required")
+            return
+        
+        # 验证签名
+        if not signature:
+            self._send_error("Signature is required")
+            return
+        
+        # 验证签名有效性
+        if not is_valid:
+            self._logger.warning("Security verification failed: Invalid signature")
+            self.send_response(401)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "Unauthorized: Invalid signature"}).encode())
+            return
+        
+        # 签名验证通过，处理命令
+        command = params.get("command", "")
+        self._logger.info(f"Processing validated software command: {command}")
+        
+        # 处理软件命令
+        if command == "update":
+            # 获取软件包URL
+            if 'url' not in params:
+                self._send_error("URL is required for update command")
+                return
+            
+            url = params['url']
+            
+            # 验证URL是否有效
+            if not url.startswith('http'):
+                self._send_error("Invalid URL format")
+                return
                             self._logger.error(f"Error processing param: {e}")
                             self._send_error(f"Invalid param format: {str(e)}")
                             return
@@ -577,27 +656,19 @@ class SupervisorHTTPServer:
                         self._send_error(f"Unknown action: {action}")
                 
                 except Exception as e:
-                    self._logger.error(f"Error processing system command: {str(e)}")
+                    self._logger.error(f"Error processing software command: {str(e)}")
                     self._send_error(f"Error: {str(e)}")
+                    # 添加详细的异常跟踪
+                    import traceback
+                    self._logger.error(traceback.format_exc())
 
             def _handle_service_command(self, post_data):
+                """处理服务控制命令，使用集中的签名验证逻辑"""
                 try:
-                    # 解析POST数据（k=v&k=v的格式）
-                    self._logger.info(f"Processing Service with data: {post_data}")
+                    self._logger.info(f"Processing service command with data: {post_data}")
                     
-                    # 解析参数
-                    params = {}
-                    signature = None
-                    
-                    # 按&分割参数
-                    param_pairs = post_data.split('&')
-                    for pair in param_pairs:
-                        if '=' in pair:
-                            key, value = pair.split('=', 1)
-                            if key == '_sig':
-                                signature = value
-                            else:
-                                params[key] = value
+                    # 使用共用方法解析和验证参数
+                    params, signature, is_valid = self._parse_post_data(post_data)
                     
                     # 验证必须有action参数
                     if 'action' not in params:
@@ -609,65 +680,10 @@ class SupervisorHTTPServer:
                         self._send_error("Signature is required")
                         return
                     
-                    # 按key排序并重新组装参数字符串（不包含_sig）
-                    sorted_keys = sorted(params.keys())
-                    param_string = '&'.join([f"{k}={params[k]}" for k in sorted_keys])
-                    
-                    # 添加安全密钥并计算MD5
-                    security_string = f"{param_string}&ThirdReality"
-                    calculated_md5 = hashlib.md5(security_string.encode()).hexdigest()
-                    
-                    self._logger.info(f"Calculated signature: {calculated_md5}")
-                    
-                    # 验证签名
-                    if calculated_md5 != signature:
+                    # 验证签名有效性
+                    if not is_valid:
                         self._logger.warning("Security verification failed: Invalid signature")
                         self.send_response(401)
-                        self.send_header('Content-type', 'application/json')
-                        self.end_headers()
-                        self.wfile.write(json.dumps({"error": "Unauthorized: Invalid signature"}).encode())
-                        return
-                    
-                    # 签名验证通过，处理命令
-                    action = params.get("action", "")
-                    param = params.get("param", "")
-                    
-                    # 处理param参数
-                    package_name = ""
-                    service_name = ""
-                    if param:
-                        try:
-                            # 1. URL解码
-                            url_decoded = urllib.parse.unquote(param)
-                            self._logger.info(f"URL decoded param: {url_decoded}")
-                            
-                            # 2. Base64解码
-                            base64_decoded = base64.b64decode(url_decoded).decode('utf-8')
-                            self._logger.info(f"Base64 decoded param: {base64_decoded}")
-                            
-                            # 3. 解析JSON
-                            param_json = json.loads(base64_decoded)
-                            self._logger.info(f"Parsed JSON param: {param_json}")
-                            
-                            # 4. 提取package和service信息
-                            package_name = param_json.get("package", "")
-                            service_name = param_json.get("service", "")
-                            self._logger.info(f"Extracted package: {package_name}, service: {service_name}")
-                        except Exception as e:
-                            self._logger.error(f"Error processing param: {e}")
-                            self._send_error(f"Invalid param format: {str(e)}")
-                            return
-                    
-                    # 处理系统命令
-                    if not service_name:
-                        self._send_error("Service name is required")
-                        return
-                        
-                    result = {"success": False, "message": ""}
-                    
-                    try:
-                        if action == "enable":
-                            # 启用服务
                             self._logger.info(f"Enabling service: {service_name}")
                             process = subprocess.run(["systemctl", "enable", service_name], 
                                                     capture_output=True, text=True, check=False)
@@ -730,6 +746,64 @@ class SupervisorHTTPServer:
                     self._send_error(f"Error: {str(e)}")
 
 
+            def _verify_signature(self, params, signature):
+                """验证请求签名
+                
+                Args:
+                    params: 参数字典
+                    signature: 请求提供的签名
+                    
+                Returns:
+                    bool: 签名是否有效
+                """
+                try:
+                    # 获取API密钥
+                    secret_key = self._supervisor.http_server.API_SECRET_KEY
+                    
+                    # 按key排序并重新组装参数字符串
+                    sorted_keys = sorted(params.keys())
+                    param_string = '&'.join([f"{k}={params[k]}" for k in sorted_keys])
+                    
+                    # 添加安全密钥并计算MD5
+                    security_string = f"{param_string}&{secret_key}"
+                    calculated_md5 = hashlib.md5(security_string.encode()).hexdigest()
+                    
+                    self._logger.debug(f"Signature verification: expected={calculated_md5}, received={signature}")
+                    
+                    return calculated_md5 == signature
+                except Exception as e:
+                    self._logger.error(f"Error verifying signature: {e}")
+                    return False
+            
+            def _parse_post_data(self, post_data):
+                """解析POST数据并验证签名
+                
+                Args:
+                    post_data: POST请求数据
+                    
+                Returns:
+                    tuple: (params, signature, is_valid)
+                """
+                params = {}
+                signature = None
+                
+                # 按&分割参数
+                param_pairs = post_data.split('&')
+                for pair in param_pairs:
+                    if '=' in pair:
+                        key, value = pair.split('=', 1)
+                        if key == '_sig':
+                            signature = value
+                        else:
+                            params[key] = value
+                
+                # 验证签名
+                if not signature:
+                    return params, signature, False
+                
+                is_valid = self._verify_signature(params, signature)
+                return params, signature, is_valid
+                
             def _send_error(self, message):
                 """发送错误响应"""
                 self.send_response(400)
@@ -738,7 +812,7 @@ class SupervisorHTTPServer:
                 self.wfile.write(json.dumps({"error": message}).encode())
                 
             def _handle_file_download(self, query_params):
-                """处理文件下载请求，只允许下载/home目录下的文件"""
+                """处理文件下载请求，增强安全性检查"""
                 # 获取文件路径参数
                 if 'file_path' not in query_params:
                     self._send_error("Missing file_path parameter")
@@ -746,24 +820,36 @@ class SupervisorHTTPServer:
                     
                 file_path = query_params['file_path'][0]
                 
-                # 验证文件路径是否在/home目录下
+                # 更严格的路径验证
                 real_path = os.path.realpath(file_path)  # 解析符号链接并获取绝对路径
-                if not real_path.startswith('/home/'):
-                    self._logger.warning(f"Attempted to access restricted file: {file_path}")
-                    self._send_error("Access denied: Only files in /home directory can be downloaded")
+                
+                # 检查是否在允许的路径中
+                allowed = False
+                for allowed_path in self._supervisor.http_server.ALLOWED_DOWNLOAD_PATHS:
+                    if real_path.startswith(allowed_path):
+                        allowed = True
+                        break
+                        
+                if not allowed:
+                    self._logger.warning(f"Security: Attempted to access restricted file: {file_path}")
+                    self._send_error("Access denied: File access restricted to allowed directories")
                     return
                 
-                # 检查文件是否存在
+                # 检查文件是否存在且是常规文件
                 if not os.path.isfile(real_path):
                     self._send_error(f"File not found: {file_path}")
                     return
-                
-                # 创建一个线程来处理文件下载，但在当前请求上下文中完成响应
-                # 这样可以保证响应头和数据在同一个请求处理流程中发送
-                try:
-                    # 获取文件大小
-                    file_size = os.path.getsize(real_path)
                     
+                # 检查文件大小限制
+                try:
+                    file_size = os.path.getsize(real_path)
+                    max_size = 100 * 1024 * 1024  # 100MB限制
+                    
+                    if file_size > max_size:
+                        self._logger.warning(f"File too large for download: {file_path} ({file_size} bytes)")
+                        self._send_error(f"File too large for download. Maximum size is 100MB.")
+                        return
+                        
                     # 获取文件名
                     file_name = os.path.basename(real_path)
                     
@@ -780,41 +866,35 @@ class SupervisorHTTPServer:
                     self.send_header('Access-Control-Allow-Origin', '*')  # 启用CORS
                     self.end_headers()
                     
-                    # 启动一个后台线程来处理大文件的读取和发送，避免阻塞主线程
-                    def send_file_in_background():
+                    # 使用线程池处理大文件传输
+                    def send_file_content():
                         try:
-                            # 读取并发送文件内容
                             with open(real_path, 'rb') as file:
-                                # 分块读取和发送文件，避免内存问题
                                 chunk_size = 8192  # 8KB 块
                                 while True:
                                     chunk = file.read(chunk_size)
                                     if not chunk:
                                         break
                                     self.wfile.write(chunk)
-                            
                             self._logger.info(f"File downloaded successfully: {real_path}")
+                            return True
                         except Exception as e:
                             self._logger.error(f"Error sending file {real_path}: {str(e)}")
+                            return False
                     
-                    # 直接在当前线程中发送文件，而不是提交到线程池
-                    # 这样可以确保响应头和数据在同一个请求上下文中处理
-                    with open(real_path, 'rb') as file:
-                        # 分块读取和发送文件，避免内存问题
-                        chunk_size = 8192  # 8KB 块
-                        while True:
-                            chunk = file.read(chunk_size)
-                            if not chunk:
-                                break
-                            self.wfile.write(chunk)
-                    
-                    self._logger.info(f"File downloaded successfully: {real_path}")
+                    # 对于小文件，直接在当前线程中发送
+                    # 对于大文件，使用线程池
+                    if file_size < 1024 * 1024:  # 1MB以下的文件直接发送
+                        send_file_content()
+                    else:
+                        # 对于大文件，使用线程池处理
+                        self._supervisor.http_server.thread_pool.submit(send_file_content)
                     
                 except Exception as e:
-                    self._logger.error(f"Error downloading file {real_path}: {str(e)}")
+                    self._logger.error(f"Error preparing file download {real_path}: {str(e)}")
                     # 如果还没有发送响应头，则发送错误
                     try:
-                        self._send_error(f"Error downloading file: {str(e)}")
+                        self._send_error(f"Error preparing file download: {str(e)}")
                     except:
                         pass  # 可能已经发送了部分响应，忽略错误
         

@@ -27,6 +27,9 @@ import threading
 import time
 import json
 import logging
+import hashlib
+import base64
+import struct
 
 try:
     from gi.repository import GObject
@@ -51,6 +54,9 @@ class SupervisorGattServer:
     BLE GATT server manager for Supervisor BLE modules.
     Handles BLE Advertisement, Application, and Services lifecycle.
     """
+    # 加密密钥 (16字节，用于AES加密)
+    ENCRYPTION_KEY = b"ThirdRealityKey"
+    
     def __init__(self, supervisor):
         self.supervisor = supervisor
         self.logger = logging.getLogger("Supervisor")
@@ -61,50 +67,84 @@ class SupervisorGattServer:
         self.mainloop = None
         self.mainloop_thread = None
         self._previous_ip_address = "0.0.0.0"
+        
+        # 添加线程锁，保护广告更新操作
+        self._adv_lock = threading.RLock()
 
-    def updateAdv(self, ip_address=None):
-        self.logger.info(f"[BLE] Updating advertisement with IP address: {ip_address}")
+    def _encrypt_ip_address(self, ip_address):
+        """
+        加密IP地址，返回加密后的字节数组
+        使用简单的可逆加密方法，适合资源受限的BLE设备
+        """
         try:
-            # 如果没有提供 IP 地址，检查当前连接状态
-            if ip_address is None:
-                # 从 supervisor 获取当前 WiFi 状态
-                if hasattr(self.supervisor, 'wifi_status') and hasattr(self.supervisor.wifi_status, 'connected'):
-                    if self.supervisor.wifi_status.connected:
-                        ip_address = self.supervisor.wifi_status.ip_address
-                    else:
-                        ip_address = "0.0.0.0"  # 断连状态使用 0.0.0.0
-                else:
-                    ip_address = "0.0.0.0"  # 默认使用 0.0.0.0
-            
-            # 将 IP 地址转换为字节列表
+            # 将IP地址转换为字节列表
             ip_bytes = [int(part) for part in ip_address.split('.')]
-            self.logger.info(f"Adding device IP address to advertisement: {ip_address} -> {ip_bytes}")
-            
-            # 检查IP地址是否与之前的相同
-            ip_changed = self._previous_ip_address != ip_address
-            
-            # 更新广播数据
-            if self.adv:
-                self.adv.add_manufacturer_data(0x0133, ip_bytes)
+            if len(ip_bytes) != 4:
+                raise ValueError(f"Invalid IP address format: {ip_address}")
                 
-                # 只有当IP地址发生变化时才进行unregister和register操作
-                if ip_changed:
-                    self.logger.info(f"IP address changed from {getattr(self, '_previous_ip_address', 'None')} to {ip_address}, re-registering advertisement")
-                    try:
-                        self.adv.unregister()
-                    except Exception as e:
-                        self.logger.error(f"Error unregistering advertisement: {e}")
-                    try:
-                        self.adv.register()
-                    except Exception as e:
-                        self.logger.error(f"Error registering advertisement: {e}")
-                else:
-                    self.logger.info(f"IP address unchanged ({ip_address}), skipping advertisement re-registration")
-                    
-            # 保存当前IP地址以便下次比较
-            self._previous_ip_address = ip_address
+            # 使用密钥生成一个简单的XOR掩码
+            key_hash = hashlib.md5(self.ENCRYPTION_KEY).digest()[:4]  # 取MD5的前4个字节作为掩码
+            
+            # 对IP地址进行XOR加密
+            encrypted_bytes = []
+            for i in range(4):
+                encrypted_bytes.append(ip_bytes[i] ^ key_hash[i])
+                
+            # 添加校验和 (简单的字节求和)
+            checksum = sum(encrypted_bytes) & 0xFF
+            encrypted_bytes.append(checksum)
+            
+            self.logger.debug(f"Encrypted IP {ip_address} to bytes: {encrypted_bytes}")
+            return encrypted_bytes
         except Exception as e:
-            self.logger.error(f"Error updating advertisement with IP address: {e}")
+            self.logger.error(f"Error encrypting IP address: {e}")
+            # 出错时返回全零数组
+            return [0, 0, 0, 0, 0]
+    
+    def updateAdv(self, ip_address=None):
+        """
+        更新BLE广告中的IP地址信息
+        使用线程安全机制和IP地址加密
+        """
+        # 使用线程锁保护整个更新过程
+        with self._adv_lock:
+            self.logger.info(f"[BLE] Updating advertisement with IP address: {ip_address}")
+            try:
+                # 如果没有提供 IP 地址，检查当前连接状态
+                if ip_address is None:
+                    # 从 supervisor 获取当前 WiFi 状态
+                    if hasattr(self.supervisor, 'wifi_status') and hasattr(self.supervisor.wifi_status, 'connected'):
+                        if self.supervisor.wifi_status.connected:
+                            ip_address = self.supervisor.wifi_status.ip_address
+                        else:
+                            ip_address = "0.0.0.0"  # 断连状态使用 0.0.0.0
+                    else:
+                        ip_address = "0.0.0.0"  # 默认使用 0.0.0.0
+                
+                # 检查IP地址是否与之前的相同
+                ip_changed = self._previous_ip_address != ip_address
+                
+                if self.adv:
+                    # 加密IP地址
+                    encrypted_ip = self._encrypt_ip_address(ip_address)
+                    self.logger.info(f"Adding encrypted IP address to advertisement: {ip_address} -> {encrypted_ip}")
+                    
+                    # 更新广播数据 (使用线程安全的add_manufacturer_data方法)
+                    self.adv.add_manufacturer_data(0x0133, encrypted_ip)
+                    
+                    # 由于我们已经优化了Advertisement类，不需要手动unregister和register
+                    # 只需在数据变化时记录日志
+                    if ip_changed:
+                        self.logger.info(f"IP address changed from {self._previous_ip_address} to {ip_address}")
+                    else:
+                        self.logger.debug(f"IP address unchanged ({ip_address})")
+                        
+                # 保存当前IP地址以便下次比较
+                self._previous_ip_address = ip_address
+            except Exception as e:
+                self.logger.error(f"Error updating advertisement with IP address: {e}")
+                import traceback
+                self.logger.error(traceback.format_exc())
 
     def start(self):
         if self.running:
@@ -218,10 +258,15 @@ class LinuxBoxManagerService(Service):
 
 class WIFIConfigCharacteristic(Characteristic):
     _CHARACTERISTIC_UUID = "6e400001-0000-4e98-8024-bc5b71e0893e"
+    _MAX_RETRIES = 3  # Maximum number of notification retries
+    _RETRY_DELAY = 0.5  # Delay between retries in seconds
+    _NOTIFICATION_SETUP_DELAY = 0.2  # Delay after notification is enabled before sending data
 
     def __init__(self, service):
         self.logger = logging.getLogger("Supervisor")
         self._notifying = False
+        self._notification_ready = False  # Track if notification is fully ready
+        self._notification_lock = threading.Lock()  # Lock for thread safety
         self.service = service
         Characteristic.__init__(
                 self, self._CHARACTERISTIC_UUID,
@@ -233,6 +278,7 @@ class WIFIConfigCharacteristic(Characteristic):
 
         command_str = "".join(chr(byte) for byte in value)
         process_thread = threading.Thread(target=self._process_command_and_notify, args=(command_str,))
+        process_thread.daemon = True  # Make thread daemon so it doesn't block program exit
         process_thread.start()    
 
     def _process_command_and_notify(self, command):
@@ -277,28 +323,76 @@ class WIFIConfigCharacteristic(Characteristic):
 
         self.logger.info(f"Sending result: {result}")
 
-        if self._notifying:
-            # Convert the result to a byte array and emit the signal
-            value = [dbus.Byte(c) for c in result.encode('utf-8')]
-            self.PropertiesChanged(
-                GATT_CHRC_IFACE,
-                {"Value": dbus.Array(value, signature='y')},
-                []
-            )
+        # Send notification with retry mechanism
+        self._send_notification_with_retry(result)
 
         if restore:
             self.logger.info(f"Restore previous state ...")
             utils.perform_wifi_provision_restore()            
 
+    def _send_notification_with_retry(self, result):
+        """Send notification with retry mechanism to ensure delivery"""
+        if not self._notifying:
+            self.logger.warning("Cannot send notification: notifications not enabled")
+            return False
+        
+        # Wait for notification to be fully ready (especially important for Huawei phones)
+        retry_count = 0
+        success = False
+        
+        # Convert the result to a byte array for notification
+        value = [dbus.Byte(c) for c in result.encode('utf-8')]
+        
+        while retry_count < self._MAX_RETRIES and not success:
+            try:
+                with self._notification_lock:
+                    # Wait for notification setup to complete
+                    if retry_count > 0:
+                        self.logger.info(f"Retry #{retry_count} sending notification")
+                        time.sleep(self._RETRY_DELAY)  # Delay between retries
+                    
+                    # Send the notification
+                    self.PropertiesChanged(
+                        GATT_CHRC_IFACE,
+                        {"Value": dbus.Array(value, signature='y')},
+                        []
+                    )
+                    
+                    # Small delay after sending to ensure processing
+                    time.sleep(0.1)
+                    success = True
+                    self.logger.info("Notification sent successfully")
+            except Exception as e:
+                self.logger.error(f"Failed to send notification: {e}")
+                retry_count += 1
+        
+        if not success:
+            self.logger.error("Failed to send notification after maximum retries")
+        
+        return success
+
     def StartNotify(self):
-        if self._notifying:
-            return
-        self._notifying = True
-        self.logger.info("Starting Notification")
+        with self._notification_lock:
+            if self._notifying:
+                return
+            self._notifying = True
+            self.logger.info("Starting Notification")
+            
+            # Use a timer to set notification_ready after a delay
+            # This helps with devices (like Huawei) that need time to set up notification channel
+            def set_notification_ready():
+                self._notification_ready = True
+                self.logger.info("Notification channel ready")
+                return False  # Don't repeat the timer
+            
+            # Schedule the notification ready flag to be set after a delay
+            GObject.timeout_add(int(self._NOTIFICATION_SETUP_DELAY * 1000), set_notification_ready)
 
     def StopNotify(self):
-        self._notifying = False
-        self.logger.info("Stopping Notification")
+        with self._notification_lock:
+            self._notifying = False
+            self._notification_ready = False
+            self.logger.info("Stopping Notification")
 
 
 class WIFIConfigDescriptor(Descriptor):

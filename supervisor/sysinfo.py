@@ -21,14 +21,11 @@ class HomeAssistantInfo:
         self.core = ""
         # thirdreality-otbr-agent
         self.otbr = ""
+        # thirdreality-zigbee-mqtt
+        self.z2m = ""
 
-class Zigbee2mqttInfo:
-    def __init__(self):
-        self.installed = False
-        self.enabled = False
-        self.zigbee2mqtt = ""
 
-class homekitbridgeInfo:
+class OpenHabInfo:
     def __init__(self):
         self.installed = False
         self.enabled = False
@@ -45,8 +42,7 @@ class SystemInfo:
         self.memory_size = ""  # 设备内存大小，单位为MB
         self.storage_space = ""  # 存储空间大小，单位为GB
         self.hainfo = HomeAssistantInfo()
-        self.z2minfo = Zigbee2mqttInfo()
-        self.hbinfo = homekitbridgeInfo()
+        self.openhabinfo = OpenHabInfo()
 
 def get_package_version(package_name):
     """查询指定包的版本号"""
@@ -152,7 +148,11 @@ class SystemInfoUpdater:
             # 查询thirdreality-otbr-agent包版本
             ha_info.otbr = get_package_version("thirdreality-otbr-agent")
             self.logger.info(f"thirdreality-otbr-agent version: {ha_info.otbr}")
-            
+
+            # 查询thirdreality-zigbee-mqtt包版本
+            ha_info.z2m = get_package_version("thirdreality-zigbee-mqtt")
+            self.logger.info(f"thirdreality-zigbee-mqtt version: {ha_info.z2m}")
+
             # 设置installed状态
             ha_info.installed = bool(ha_info.core and ha_info.python and ha_info.config)
 
