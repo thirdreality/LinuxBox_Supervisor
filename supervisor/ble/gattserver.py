@@ -266,6 +266,9 @@ class LinuxBoxAdvertisement(Advertisement):
             self.logger.error(f"[BLE] Adding local name: '3RHUB-XXXXXXXX'")
             self.add_local_name("3RHUB-XXXXXXXX")
             self.supervisor.system_info.name = "3RHUB-XXXXXXXX"
+
+        self.add_service_uuid("6e400000-0000-4e98-8024-bc5b71e0893e")
+
         # Do not add service UUID to advertisement - this appears to be causing issues with BlueZ
         # The service will still be discoverable through the GATT service discovery process
         self.logger.info(f"[BLE] Service UUID will be discoverable through GATT service discovery")
