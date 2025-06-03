@@ -72,6 +72,8 @@ class NetworkMonitor:
     def _init_dbus(self):
         """初始化D-Bus连接和NetworkManager代理"""
         try:
+            self.logger.debug("Initializing NetworkManager D-Bus connection")
+            
             # 初始化D-Bus主循环
             dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
             self.bus = dbus.SystemBus()
@@ -82,14 +84,19 @@ class NetworkMonitor:
             
             # 查找wlan0设备
             devices = nm_interface.GetDevices()
+            self.logger.debug(f"Found {len(devices)} NetworkManager devices")
+            
             for device_path in devices:
                 device_proxy = self.bus.get_object(NM_DBUS_SERVICE, device_path)
                 device_props = dbus.Interface(device_proxy, "org.freedesktop.DBus.Properties")
                 device_iface = device_props.Get(NM_DBUS_INTERFACE_DEVICE, "Interface")
                 
+                self.logger.debug(f"Found device: {device_iface} at {device_path}")
+                
                 if device_iface == "wlan0":
                     self.wlan0_device_path = device_path
                     self.wlan0_proxy = device_proxy
+                    self.logger.info(f"Successfully found wlan0 device at {device_path}")
                     break
             
             if not self.wlan0_proxy:
@@ -98,6 +105,7 @@ class NetworkMonitor:
                 
             # 设置信号处理器
             self._setup_signal_handlers()
+            self.logger.info("NetworkManager D-Bus initialized successfully")
             return True
             
         except Exception as e:
@@ -116,6 +124,7 @@ class NetworkMonitor:
                     signal_name="StateChanged",
                     path=self.wlan0_device_path
                 )
+                self.logger.info(f"Registered device state change handler for {self.wlan0_device_path}")
             
             # 监听整体网络状态变化
             self.bus.add_signal_receiver(
@@ -123,6 +132,7 @@ class NetworkMonitor:
                 dbus_interface=NM_DBUS_INTERFACE,
                 signal_name="StateChanged"
             )
+            self.logger.info("Registered NetworkManager state change handler")
             
             # 监听活动连接属性变化
             self.bus.add_signal_receiver(
@@ -131,8 +141,9 @@ class NetworkMonitor:
                 signal_name="PropertiesChanged",
                 arg0=NM_DBUS_INTERFACE_CONNECTION_ACTIVE
             )
+            self.logger.info("Registered connection properties change handler")
             
-            self.logger.info("NetworkManager signal handlers registered")
+            self.logger.info("NetworkManager signal handlers registered successfully")
         except Exception as e:
             self.logger.error(f"Error setting up signal handlers: {e}")
             self.logger.error(traceback.format_exc())
@@ -210,9 +221,11 @@ class NetworkMonitor:
         """检查断开连接状态"""
         with self._lock:
             self.check_timer_id = None
+            self.logger.debug("Checking network disconnect status")
             
             if not is_network_connected():
                 self.disconnect_count += 1
+                self.logger.debug(f"Network disconnected, count: {self.disconnect_count}")
                 
                 if self.supervisor and hasattr(self.supervisor, 'wifi_status'):
                     self.supervisor.wifi_status.connected = False
@@ -229,14 +242,18 @@ class NetworkMonitor:
                 if self.supervisor:
                     if has_active_connection():
                         self.supervisor.set_led_state(LedState.NETWORK_ERROR)
+                        self.logger.debug("Set LED state to NETWORK_ERROR")
                     else:
                         self.supervisor.set_led_state(LedState.NETWORK_LOST)
+                        self.logger.debug("Set LED state to NETWORK_LOST")
                 
                 # 继续检查，每秒一次
                 self.check_timer_id = GObject.timeout_add(1000, self._check_disconnect_status)
+                self.logger.debug("Scheduled next disconnect check in 1 second")
                 return False  # 不再调用当前回调
             else:
                 # 网络已恢复连接
+                self.logger.debug("Network connection restored")
                 self._handle_connection_established()
                 return False  # 不再调用当前回调
     
@@ -276,11 +293,51 @@ class NetworkMonitor:
             self.logger.error(f"Error in NetworkMonitor mainloop: {e}")
             self.logger.error(traceback.format_exc())
     
+    def _initial_check(self):
+        """执行一次性的初始网络检查"""
+        try:
+            self.logger.info("Performing initial network check")
+            
+            # 检查wlan0接口是否存在
+            wlan0_exists = is_interface_existing("wlan0")
+            self.logger.info(f"wlan0 interface exists: {wlan0_exists}")
+            
+            if not wlan0_exists:
+                if self.supervisor:
+                    self.supervisor.set_led_state(LedState.STARTUP)
+                return False  # 不再调用此回调
+            
+            # 获取MAC地址
+            if self.mac_address is None:
+                self.mac_address = get_wlan0_mac()
+                if self.supervisor and hasattr(self.supervisor, 'wifi_status'):
+                    self.supervisor.wifi_status.mac_address = self.mac_address
+                self.logger.info(f"Cached MAC address: {self.mac_address}")
+            
+            # 检查网络连接状态
+            is_connected = is_network_connected()
+            self.logger.info(f"Initial network connection status: {is_connected}")
+            
+            if is_connected:
+                self._handle_connection_established()
+            else:
+                self._check_disconnect_status()
+        except Exception as e:
+            self.logger.error(f"Error in initial network check: {e}")
+            self.logger.error(traceback.format_exc())
+        
+        return False  # 一次性检查，不再调用
+    
     def _periodic_check(self):
         """定期检查网络状态（作为备用机制）"""
         try:
+            self.logger.debug("Periodic network check started")
+            
             # 检查wlan0接口是否存在
-            if not is_interface_existing("wlan0"):
+            wlan0_exists = is_interface_existing("wlan0")
+            self.logger.debug(f"wlan0 interface exists: {wlan0_exists}")
+            
+            if not wlan0_exists:
                 if self.supervisor:
                     self.supervisor.set_led_state(LedState.STARTUP)
                 return True  # 继续定期检查
@@ -290,14 +347,19 @@ class NetworkMonitor:
                 self.mac_address = get_wlan0_mac()
                 if self.supervisor and hasattr(self.supervisor, 'wifi_status'):
                     self.supervisor.wifi_status.mac_address = self.mac_address
+                self.logger.debug(f"Cached MAC address: {self.mac_address}")
             
             # 检查网络连接状态
-            if is_network_connected():
+            is_connected = is_network_connected()
+            self.logger.debug(f"Network connection status: {is_connected}")
+            
+            if is_connected:
                 self._handle_connection_established()
             else:
                 self._check_disconnect_status()
         except Exception as e:
             self.logger.error(f"Error in periodic network check: {e}")
+            self.logger.error(traceback.format_exc())
         
         return True  # 继续定期检查
     
@@ -310,11 +372,11 @@ class NetworkMonitor:
             # 初始化D-Bus连接
             if not self._init_dbus():
                 self.logger.warning("Failed to initialize D-Bus, falling back to periodic checks")
-                # 设置备用的定期检查（每3秒）
-                GObject.timeout_add(3000, self._periodic_check)
+                # 设置备用的定期检查（每10秒）
+                GObject.timeout_add(10000, self._periodic_check)
             
             # 立即执行一次初始检查
-            GObject.idle_add(self._periodic_check)
+            GObject.idle_add(self._initial_check)
             
             # 在单独的线程中启动主循环
             self.mainloop_thread = threading.Thread(target=self._run_mainloop, daemon=True)

@@ -265,11 +265,8 @@ class SupervisorHTTPServer:
                 homeassistant_core_result={
                     'name': 'Home Assistant'
                 }
-                zigbee2mqtt_result = {
-                    'name': 'zigbee2mqtt'
-                }
-                homekitbridge_result = {
-                    'name': 'Homekit Bridge'
+                openhab_result = {
+                    'name': 'OpenHAB'
                 }
 
                 if hasattr(self._supervisor, 'system_info') and self._supervisor.system_info:
@@ -319,6 +316,7 @@ class SupervisorHTTPServer:
 
                     openhab_items = [
                     ]
+                    
                     openhab_result['installed'] = system_info.openhabinfo.installed
                     openhab_result['enabled'] = system_info.openhabinfo.enabled
                     openhab_result['software'] = openhab_items

@@ -150,16 +150,18 @@ class Supervisor:
 
     def update_wifi_info(self, ip_address, ssid):
         """更新WiFi信息缓存"""
-        logger.info(f"Update wifi info: {ip_address}")
-        self.wifi_status.ip_address = ip_address
-        self.wifi_status.ssid = ssid
-        if self.gatt_server:
-            if ip_address == "":
-                self.gatt_server.updateAdv("0.0.0.0")
+        # 只有在IP地址发生变化时才更新
+        if self.wifi_status.ip_address != ip_address:
+            logger.info(f"Update wifi info: {ip_address}")
+            self.wifi_status.ip_address = ip_address
+            self.wifi_status.ssid = ssid
+            if self.gatt_server:
+                if ip_address == "":
+                    self.gatt_server.updateAdv("0.0.0.0")
+                else:
+                    self.gatt_server.updateAdv(ip_address)
             else:
-                self.gatt_server.updateAdv(ip_address)
-        else:
-            logger.info("gatt_server not initialized, skipping updateAdv operation")
+                logger.info("gatt_server not initialized, skipping updateAdv operation")
         return True
 
     def update_system_uptime(self):

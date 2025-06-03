@@ -30,6 +30,7 @@ class LedState(Enum):
     USER_EVENT_YELLOW = "user_event_yellow"  # 6-9秒按键 - 黄灯
     USER_EVENT_GREEN = "user_event_green"   # 3-6秒按键 - 绿灯
     USER_EVENT_WHITE = "user_event_white"   # 0-3秒按键 - 白灯
+    USER_EVENT_OFF = "user_event_off"  
     
     # 普通状态
     NORMAL = "normal"
@@ -140,65 +141,75 @@ class GpioLed:
                     state = self.current_led_state
                 self.blink_counter = (self.blink_counter + 1) % 2
                 
-                # 系统级状态
-                if state == LedState.REBOOT:
-                    self.red()
-                elif state == LedState.POWER_OFF:
-                    self.yellow()
-                elif state == LedState.FACTORY_RESET:
-                    if self.blink_counter == 0:
-                        self.white()
-                    else:
-                        self.off()
-                # 用户事件状态
-                elif state == LedState.USER_EVENT_RED:
-                    self.red()
-                elif state == LedState.USER_EVENT_BLUE:
-                    self.blue()
-                elif state == LedState.USER_EVENT_YELLOW:
-                    self.yellow()
-                elif state == LedState.USER_EVENT_GREEN:
-                    self.green()
-                elif state == LedState.USER_EVENT_WHITE:
-                    self.white()
-                # 普通状态
-                elif state == LedState.NORMAL:
-                    self.blue()
-                elif state == LedState.MQTT_NORMAL:
-                    self.blue()                
-                elif state == LedState.MQTT_ZIGBEE:
-                    self.green()         
-                elif state == LedState.MQTT_NETWORK:
-                    self.yellow()                                         
-                elif state == LedState.NETWORK_ERROR:
-                    if self.blink_counter == 0:
+                # 使用 match-case 语法（Python 3.11 的 switch 语句）
+                match state:
+                    # 系统级状态
+                    case LedState.REBOOT:
+                        self.red()
+                    case LedState.POWER_OFF:
                         self.yellow()
-                    else:
+                    case LedState.FACTORY_RESET:
+                        if self.blink_counter == 0:
+                            self.red()
+                        else:
+                            self.off()
+                    
+                    # 用户事件状态
+                    case LedState.USER_EVENT_OFF:
                         self.off()
-                elif state == LedState.MQTT_ERROR:
-                    if self.blink_counter == 0:
+                    case LedState.USER_EVENT_RED:
+                        self.red()
+                    case LedState.USER_EVENT_BLUE:
                         self.blue()
-                    else:
-                        self.off()                    
-                elif state == LedState.NETWORK_LOST:
-                    if self.blink_counter == 0:
+                    case LedState.USER_EVENT_YELLOW:
                         self.yellow()
-                    else:
-                        self.off()
-                elif state == LedState.STARTUP:
-                    if self.blink_counter == 0:
-                        self.white()
-                    else:
-                        self.off()
-                elif state == LedState.MQTT_PARING:
-                    if self.blink_counter == 0:
+                    case LedState.USER_EVENT_GREEN:
                         self.green()
-                    else:
+                    case LedState.USER_EVENT_WHITE:
+                        self.white()
+                    
+                    # 普通状态
+                    case LedState.NORMAL:
+                        self.blue()
+                    case LedState.MQTT_NORMAL:
+                        self.blue()
+                    case LedState.MQTT_ZIGBEE:
+                        self.green()
+                    case LedState.MQTT_NETWORK:
+                        self.yellow()
+                    case LedState.NETWORK_ERROR:
+                        if self.blink_counter == 0:
+                            self.yellow()
+                        else:
+                            self.off()
+                    case LedState.MQTT_ERROR:
+                        if self.blink_counter == 0:
+                            self.blue()
+                        else:
+                            self.off()
+                    case LedState.NETWORK_LOST:
+                        if self.blink_counter == 0:
+                            self.yellow()
+                        else:
+                            self.off()
+                    case LedState.STARTUP:
+                        if self.blink_counter == 0:
+                            self.white()
+                        else:
+                            self.off()
+                    case LedState.MQTT_PARING:
+                        if self.blink_counter == 0:
+                            self.green()
+                        else:
+                            self.off()
+                    case _:
+                        # 默认情况
+                        self.logger.warning(f"Unknown LED state: {state}")
                         self.off()
             
-            # 使用短的睡眠间隔，提高响应性
-            time.sleep(check_interval)
+            # 更新计数器
             self.step_counter = (self.step_counter + 1) % steps_per_blink
+            time.sleep(check_interval)
     
     def start(self):
         """Start LED control thread"""
@@ -221,7 +232,7 @@ class GpioLed:
             user_event_states = [
                 LedState.USER_EVENT_RED, LedState.USER_EVENT_BLUE, 
                 LedState.USER_EVENT_YELLOW, LedState.USER_EVENT_GREEN, 
-                LedState.USER_EVENT_WHITE
+                LedState.USER_EVENT_WHITE,LedState.USER_EVENT_OFF
             ]
             
             # 检查是否需要更新状态
@@ -246,6 +257,8 @@ class GpioLed:
                     self.current_led_state = state
                     state_changed = True
                     self.logger.info(f"Setting LED to user event state: {state}")
+                    if self.current_led_state == LedState.USER_EVENT_OFF:                    
+                        self.current_led_state = LedState.NORMAL
                 return
                 
             # 如果当前状态是系统级或用户事件，则不更新
@@ -317,16 +330,70 @@ class GpioButton:
             self.logger.error(f"Failed to get button state from GPIO chip {self.button['chip']} line {self.button['line']}: {e}")
             return False
     
+    def _check_button_physical_state(self):
+        """检查按钮当前物理状态"""
+        try:
+            cmd = ["gpioget", str(self.button['chip']), str(self.button['line'])]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            return result.stdout.strip() == "1"
+        except subprocess.SubprocessError as e:
+            self.logger.error(f"Failed to get button state from GPIO chip {self.button['chip']} line {self.button['line']}: {e}")
+            return False
+    
     def _monitor_button_events(self):
         """监控按键按下和释放事件的主线程"""
         self.logger.info("Starting button event monitor thread...")
         
+        # 错误计数器和状态检查计时器
+        error_count = 0
+        last_state_check = 0
+        
         while not self.stop_event.is_set():
+            current_time = time.time()
+            
+            # # 每10秒检查一次按钮物理状态，确保软件状态与硬件状态同步
+            # if current_time - last_state_check > 10:
+            #     try:
+            #         # 检查按钮当前物理状态
+            #         physical_state = self._check_button_physical_state()
+            #         self.logger.debug(f"Button physical state check: pressed={physical_state}, software state={self.button_pressed.is_set()}")
+                    
+            #         # 如果软件状态与物理状态不一致，进行同步
+            #         if physical_state != self.button_pressed.is_set():
+            #             self.logger.warning(f"Button state mismatch detected! Physical: {physical_state}, Software: {self.button_pressed.is_set()}")
+                        
+            #             if physical_state:  # 按钮实际上是按下状态
+            #                 if not self.button_pressed.is_set():
+            #                     self.logger.info("Synchronizing: Button physically pressed but not tracked in software")
+            #                     self.button_pressed.set()
+            #                     self.press_start_time = current_time
+                                
+            #                     # 启动计时线程
+            #                     if self.timer_thread is None or not self.timer_thread.is_alive():
+            #                         self.timer_thread = threading.Thread(target=self._button_timer_task)
+            #                         self.timer_thread.daemon = True
+            #                         self.timer_thread.start()
+            #             else:  # 按钮实际上是释放状态
+            #                 if self.button_pressed.is_set():
+            #                     self.logger.info("Synchronizing: Button physically released but still tracked as pressed in software")
+            #                     press_duration = current_time - self.press_start_time
+            #                     self.logger.info(f"Button released after {press_duration:.2f} seconds (detected by state check)")
+            #                     self.button_pressed.clear()
+                                
+            #                     # 根据按键时间执行相应操作
+            #                     self._handle_button_release(press_duration)
+                    
+            #         # 重置错误计数器
+            #         error_count = 0
+            #         last_state_check = current_time
+            #     except Exception as e:
+            #         self.logger.error(f"Error checking button physical state: {e}")
+            
             # 检测按键按下
             if not self.button_pressed.is_set():
                 try:
                     cmd = ["gpiomon", "-n", "1", "-r", str(self.button['chip']), str(self.button['line'])]
-                    result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=1.0)
+                    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
                     
                     if result.returncode == 0:
                         # 按键被按下
@@ -339,18 +406,22 @@ class GpioButton:
                             self.timer_thread = threading.Thread(target=self._button_timer_task)
                             self.timer_thread.daemon = True
                             self.timer_thread.start()
+                        
+                        # 重置错误计数器
+                        error_count = 0
                 except subprocess.TimeoutExpired:
                     # 正常超时，继续等待
                     pass
                 except Exception as e:
                     self.logger.error(f"Error monitoring button press: {e}")
+                    error_count += 1
                     time.sleep(1)  # 出错时等待一会再重试
             
             # 检测按键释放
             else:
                 try:
                     cmd = ["gpiomon", "-n", "1", "-f", str(self.button['chip']), str(self.button['line'])]
-                    result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=1.0)
+                    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
                     
                     if result.returncode == 0:
                         # 按键被释放
@@ -360,12 +431,27 @@ class GpioButton:
                         
                         # 根据按键时间执行相应操作
                         self._handle_button_release(press_duration)
+                        
+                        # 重置错误计数器
+                        error_count = 0
                 except subprocess.TimeoutExpired:
                     # 正常超时，继续等待
                     pass
                 except Exception as e:
                     self.logger.error(f"Error monitoring button release: {e}")
+                    error_count += 1
                     time.sleep(1)  # 出错时等待一会再重试
+            
+            # 如果连续出错超过5次，重置按钮状态
+            if error_count > 5:
+                self.logger.warning("Too many consecutive errors in button monitoring, resetting button state")
+                if self.button_pressed.is_set():
+                    self.logger.info("Forcing button state to released due to errors")
+                    self.button_pressed.clear()
+                    # 尝试恢复到正常状态
+                    if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
+                        self.supervisor.set_led_state(LedState.NORMAL)
+                error_count = 0
     
     def _button_timer_task(self):
         """按键计时线程，根据按键时间显示不同的LED颜色"""
@@ -419,26 +505,26 @@ class GpioButton:
             # 9-15秒：蓝灯操作
             self.logger.info("Blue light action completed")
             if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
-                self.supervisor.set_led_state(LedState.NORMAL)
+                self.supervisor.set_led_state(LedState.USER_EVENT_OFF)
         elif 6 <= press_duration < 9:
             # 6-9秒：网络设置
             self.logger.info("Network setup action triggered")
             if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
-                self.supervisor.set_led_state(LedState.NORMAL)
+                self.supervisor.set_led_state(LedState.USER_EVENT_OFF)
             if self.supervisor and hasattr(self.supervisor, 'perform_wifi_provision_prepare'):
                 self.supervisor.perform_wifi_provision_prepare()
         elif 3 <= press_duration < 6:
             # 3-6秒：Zigbee配对
             self.logger.info("Zigbee pairing action triggered")
             if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
-                self.supervisor.set_led_state(LedState.NORMAL)
+                self.supervisor.set_led_state(LedState.USER_EVENT_OFF)
             if self.supervisor and hasattr(self.supervisor, 'start_zigbee_pairing'):
                 self.supervisor.start_zigbee_pairing()
         else:
             # 0-3秒：恢复正常状态
             self.logger.info("Short press detected, returning to normal state")
             if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
-                self.supervisor.set_led_state(LedState.NORMAL)
+                self.supervisor.set_led_state(LedState.USER_EVENT_OFF)
     
     def button_control_task(self):
         """启动按键监控线程"""

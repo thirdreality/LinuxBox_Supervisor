@@ -58,6 +58,7 @@ class SupervisorGattServer:
     ENCRYPTION_KEY = b"ThirdRealityKey"
     
     def __init__(self, supervisor):
+        """初始化GATT服务器"""
         self.supervisor = supervisor
         self.logger = logging.getLogger("Supervisor")
         self.app = None
@@ -65,6 +66,11 @@ class SupervisorGattServer:
         self.manager_service = None
         self.running = False
         self.mainloop = None
+        self.mainloop_thread = None
+        self._adv_lock = threading.Lock()
+        self._previous_ip_address = None
+        self._last_update_time = None  # 上次更新时间
+        self.logger.debug("Initialized GATT server with update tracking")
         self.mainloop_thread = None
         self._previous_ip_address = "0.0.0.0"
         
@@ -95,52 +101,58 @@ class SupervisorGattServer:
             encrypted_bytes.append(checksum)
             
             self.logger.debug(f"Encrypted IP {ip_address} to bytes: {encrypted_bytes}")
-            return encrypted_bytes
+            return encrypted_bytes  # 返回加密后的字节数组，包含校验和
         except Exception as e:
             self.logger.error(f"Error encrypting IP address: {e}")
-            # 出错时返回全零数组
-            return [0, 0, 0, 0, 0]
-    
+            # 返回全0作为错误情况，包括校验和字节
+            error_bytes = [0, 0, 0, 0, 0]  # 4个IP字节加1个校验和字节
+            return error_bytes
+
     def updateAdv(self, ip_address=None):
         """
         更新BLE广告中的IP地址信息
-        使用线程安全机制和IP地址加密
+        使用线程安全机制、IP地址加密和防抖机制
         """
         # 使用线程锁保护整个更新过程
         with self._adv_lock:
+            # 防抖机制：如果上次更新时间太近，直接返回
+            current_time = time.time()
+            if self._last_update_time and \
+               current_time - self._last_update_time < 2:  # 至少2秒间隔
+                self.logger.debug(f"Debounced updateAdv call (interval < 2s)")
+                return
+                
             self.logger.info(f"[BLE] Updating advertisement with IP address: {ip_address}")
             try:
                 # 如果没有提供 IP 地址，检查当前连接状态
                 if ip_address is None:
                     # 从 supervisor 获取当前 WiFi 状态
-                    if hasattr(self.supervisor, 'wifi_status') and hasattr(self.supervisor.wifi_status, 'connected'):
-                        if self.supervisor.wifi_status.connected:
-                            ip_address = self.supervisor.wifi_status.ip_address
-                        else:
-                            ip_address = "0.0.0.0"  # 断连状态使用 0.0.0.0
-                    else:
-                        ip_address = "0.0.0.0"  # 默认使用 0.0.0.0
+                    ip_address = self.supervisor.wifi_status.ip_address
+                    
+                # 如果IP地址没有变化，直接返回
+                if self._previous_ip_address == ip_address:
+                    self.logger.debug(f"IP address unchanged ({ip_address})")
+                    return
+                    
+                # 准备制造商数据
+                manufacturer_data = [0x00, 0x00, 0x00, 0x00]  # 默认空IP地址
                 
-                # 检查IP地址是否与之前的相同
-                ip_changed = self._previous_ip_address != ip_address
-                
-                if self.adv:
-                    # 加密IP地址
+                # 如果有IP地址，则加密后放入广告数据
+                if ip_address:
                     encrypted_ip = self._encrypt_ip_address(ip_address)
-                    self.logger.info(f"Adding encrypted IP address to advertisement: {ip_address} -> {encrypted_ip}")
-                    
-                    # 更新广播数据 (使用线程安全的add_manufacturer_data方法)
-                    self.adv.add_manufacturer_data(0x0133, encrypted_ip)
-                    
-                    # 由于我们已经优化了Advertisement类，不需要手动unregister和register
-                    # 只需在数据变化时记录日志
-                    if ip_changed:
-                        self.logger.info(f"IP address changed from {self._previous_ip_address} to {ip_address}")
-                    else:
-                        self.logger.debug(f"IP address unchanged ({ip_address})")
-                        
-                # 保存当前IP地址以便下次比较
+                    self.logger.debug(f"Encrypted IP {ip_address} to bytes: {encrypted_ip}")
+                    manufacturer_data = encrypted_ip
+                
+                # 更新制造商数据 - 使用厂商代码 0x0059 (89)
+                self.adv.add_manufacturer_data(0x0133, manufacturer_data)
+                self.logger.info(f"Added IP address to advertisement: {ip_address} -> {manufacturer_data}")
+                
+                # 注册广告使更改生效
+                self.adv.register()
+                
+                # 保存当前IP地址和更新时间
                 self._previous_ip_address = ip_address
+                self._last_update_time = current_time
             except Exception as e:
                 self.logger.error(f"Error updating advertisement with IP address: {e}")
                 import traceback
@@ -165,12 +177,20 @@ class SupervisorGattServer:
             self.manager_service = LinuxBoxManagerService(0, self.supervisor)
             self.app.add_service(self.manager_service)
             
-            #self.updateAdv(None)
+            # Add initial manufacturer data
             ip_bytes = [0, 0, 0, 0]
             self.adv.add_manufacturer_data(0x0133, ip_bytes)
-            # Register Advertisement and Application
-            self.adv.register()
+            
+            # Register Application first, then Advertisement
+            # This order can be important for some BlueZ implementations
+            self.logger.info("[BLE] Registering GATT application...")
             self.app.register()
+            
+            # Small delay to ensure application is registered before advertisement
+            time.sleep(0.5)
+            
+            self.logger.info("[BLE] Registering BLE advertisement...")
+            self.adv.register()
             
             # Start the main loop in a separate thread
             self.mainloop_thread = threading.Thread(target=self._run_mainloop)
@@ -246,15 +266,22 @@ class LinuxBoxAdvertisement(Advertisement):
             self.logger.error(f"[BLE] Adding local name: '3RHUB-XXXXXXXX'")
             self.add_local_name("3RHUB-XXXXXXXX")
             self.supervisor.system_info.name = "3RHUB-XXXXXXXX"
+        # Do not add service UUID to advertisement - this appears to be causing issues with BlueZ
+        # The service will still be discoverable through the GATT service discovery process
+        self.logger.info(f"[BLE] Service UUID will be discoverable through GATT service discovery")
+        # We'll focus on making the GATT service work properly instead of adding it to the advertisement
         self.include_tx_power = True
 
 class LinuxBoxManagerService(Service):
     _LINUXBOX_SVC_UUID = "6e400000-0000-4e98-8024-bc5b71e0893e"
 
     def __init__(self, index, supervisor=None):
+        # Initialize the service with the UUID and set primary=True to make it discoverable
         Service.__init__(self, index, self._LINUXBOX_SVC_UUID, True)
         self.supervisor = supervisor
+        # Add the WiFi configuration characteristic
         self.add_characteristic(WIFIConfigCharacteristic(self))
+        logging.getLogger("Supervisor").info(f"[BLE] Initialized LinuxBox Manager Service with UUID: {self._LINUXBOX_SVC_UUID}")
 
 class WIFIConfigCharacteristic(Characteristic):
     _CHARACTERISTIC_UUID = "6e400001-0000-4e98-8024-bc5b71e0893e"
