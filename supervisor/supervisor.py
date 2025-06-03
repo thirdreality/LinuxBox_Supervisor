@@ -22,7 +22,7 @@ from .ble.gattserver import SupervisorGattServer
 from .http_server import SupervisorHTTPServer  
 from .proxy import SupervisorProxy
 from .cli import SupervisorClient
-from .sysinfo import SystemInfoUpdater, SystemInfo, HomeAssistantInfo, Zigbee2mqttInfo, homekitbridgeInfo
+from .sysinfo import SystemInfoUpdater, SystemInfo, HomeAssistantInfo, OpenHabInfo
 
 from .utils import utils
 from .utils.utils import OtaStatus
