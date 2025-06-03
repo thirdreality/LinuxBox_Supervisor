@@ -249,16 +249,6 @@ class GpioLed:
         """Get the current LED state"""
         with self.state_lock:
             return self.current_led_state
-
-    def set_state(self, state):
-        """Set LED state with thread safety"""
-        with self.state_lock:
-            self.current_led_state = state
-            
-    def get_state(self):
-        """Get current LED state with thread safety"""
-        with self.state_lock:
-            return self.current_led_state
             
     def start_timer_trigger(self):
         """Start the timer trigger thread"""
@@ -407,164 +397,7 @@ class GpioLed:
         # Notify the LED control task
         self.led_control_event.set()
         self.logger.debug("LED control task notified by external event")
-
-    def set_state(self, state):
-        """Set LED state with thread safety"""
-        with self.state_lock:
-            self.current_led_state = state
-            
-    def get_state(self):
-        """Get current LED state with thread safety"""
-        with self.state_lock:
-            return self.current_led_state
-            
-    def start_timer_trigger(self):
-        """Start the timer trigger thread"""
-        self.timer_stop_event.clear()
-        if self.timer_thread is None or not self.timer_thread.is_alive():
-            self.timer_thread = threading.Thread(target=self.timer_trigger_task)
-            self.timer_thread.daemon = True
-            self.timer_thread.start()
-            self.logger.info("Timer trigger thread started")
-        
-    def stop_timer_trigger(self):
-        """Stop the timer trigger thread"""
-        self.timer_stop_event.set()
-        if self.timer_thread and self.timer_thread.is_alive():
-            self.timer_thread.join(1.0)  # Wait for thread to terminate with timeout
-            self.logger.info("Timer trigger thread stopped")
     
-    def timer_trigger_task(self):
-        """Timer trigger thread to periodically trigger LED control"""
-        self.logger.info("LED timer trigger thread started")
-        
-        while not self.timer_stop_event.is_set():
-            # Get current delay time (thread-safe)
-            with self.timer_delay_lock:
-                current_delay = self.timer_delay
-            
-            # Wait for the specified delay or until triggered
-            self.timer_trigger_event.clear()
-            triggered = self.timer_trigger_event.wait(current_delay)
-            
-            if not self.timer_stop_event.is_set():
-                # Set LED state based on current state
-                with self.state_lock:
-                    state = self.current_led_state
-                
-                # 检查是否是需要闪烁的状态
-                needs_blink = state in [
-                    LedState.FACTORY_RESET,
-                    LedState.NETWORK_ERROR,
-                    LedState.MQTT_ERROR,
-                    LedState.NETWORK_LOST,
-                    LedState.STARTUP,
-                    LedState.MQTT_PARING
-                ]
-                
-                # Process the LED state
-                self.process_led_state(state)
-                
-                # 如果是闪烁状态，重置定时器延迟为500ms
-                # 并在当前循环结束后立即触发下一次闪烁
-                if needs_blink:
-                    # 先设置延迟
-                    with self.timer_delay_lock:
-                        self.timer_delay = 0.5
-                    
-                    # 不要在这里直接触发LED控制，而是让当前循环结束后自然进入下一次循环
-                    # 这样可以避免重复触发和级联效应
-                
-                # Log only when explicitly triggered (not by timer)
-                if triggered:
-                    self.logger.debug("LED control triggered by external event")
-    
-    def process_led_state(self, state):
-        """Process the LED state and set appropriate color"""
-        # 标记是否需要闪烁效果
-        needs_blink = False
-        
-        # Similar to the match-case in led_control_task
-        if state == LedState.REBOOT:
-            self.red()
-        elif state == LedState.POWER_OFF:
-            self.yellow()
-        elif state == LedState.FACTORY_RESET:
-            # Toggle for blinking effect
-            self.blink_counter = (self.blink_counter + 1) % 2
-            if self.blink_counter == 0:
-                self.red()
-            else:
-                self.off()
-            needs_blink = True
-        elif state == LedState.USER_EVENT_OFF:
-            self.off()
-        elif state == LedState.USER_EVENT_RED:
-            self.red()
-        elif state == LedState.USER_EVENT_BLUE:
-            self.blue()
-        elif state == LedState.USER_EVENT_YELLOW:
-            self.yellow()
-        elif state == LedState.USER_EVENT_GREEN:
-            self.green()
-        elif state == LedState.USER_EVENT_WHITE:
-            self.white()
-        elif state == LedState.NORMAL or state == LedState.MQTT_NORMAL:
-            self.blue()
-        elif state == LedState.NETWORK_ERROR:
-            self.blink_counter = (self.blink_counter + 1) % 2
-            if self.blink_counter == 0:
-                self.yellow()
-            else:
-                self.off()
-            needs_blink = True
-        elif state == LedState.MQTT_ERROR:
-            self.blink_counter = (self.blink_counter + 1) % 2
-            if self.blink_counter == 0:
-                self.blue()
-            else:
-                self.off()
-            needs_blink = True
-        elif state == LedState.NETWORK_LOST:
-            self.blink_counter = (self.blink_counter + 1) % 2
-            if self.blink_counter == 0:
-                self.yellow()
-            else:
-                self.off()
-            needs_blink = True
-        elif state == LedState.STARTUP:
-            self.blink_counter = (self.blink_counter + 1) % 2
-            if self.blink_counter == 0:
-                self.white()
-            else:
-                self.off()
-            needs_blink = True
-        elif state == LedState.MQTT_PARING:
-            self.blink_counter = (self.blink_counter + 1) % 2
-            if self.blink_counter == 0:
-                self.green()
-            else:
-                self.off()
-            needs_blink = True
-        elif state == LedState.MQTT_PARED:
-            self.green()
-        else:
-            # 默认情况
-            self.logger.warning(f"Unknown LED state: {state}")
-            self.off()
-    
-def trigger_led_control(self, reset_delay=0.5):
-    """Trigger LED control immediately and reset the timer"""
-    # Reset timer delay (thread-safe)
-    with self.timer_delay_lock:
-        self.timer_delay = reset_delay
-    
-    # Trigger the timer thread
-    self.timer_trigger_event.set()
-    
-    # Notify the LED control task
-    self.led_control_event.set()
-    self.logger.debug("LED control task notified by external event")
 
 # -----------------------------------------------------------------------------
 
@@ -789,51 +622,11 @@ class GpioHwController:
     def __init__(self, supervisor=None):
         self.supervisor = supervisor
         self.logger = logging.getLogger("Supervisor")
-        self.thread_conf_path = "/var/lib/homeassistant/thread.conf"
     
     # chip 0: gpiochip426
     # refer to pinctrl-meson-axg.c
     def initialize_pin(self):
-        """
-        Initialize GPIO pins for Zigbee and Thread modules
-        """
-        # # Check if thread.conf exists and contains device information
-        # thread_device_already_detected = False
-        # if os.path.exists(self.thread_conf_path):
-        #     try:
-        #         with open(self.thread_conf_path, 'r') as f:
-        #             content = f.read()
-        #             if "/dev/ttyAML" in content:
-        #                 self.logger.info(f"Thread device previously detected in {self.thread_conf_path}, skipping device detection")
-        #                 thread_device_already_detected = True
-        #                 self.supervisor.enableThreadSupported()
-        #             else:
-        #                 self.logger.info(f"Thread configuration file exists but no device detected previously")
-        #     except Exception as e:
-        #         self.logger.error(f"Error reading Thread configuration file: {e}")
-        # else:
-        #     # Check if Thread device is connected to /dev/ttyAML6
-        #     thread_device_detected = self._check_thread_device()
-            
-        #     # Create thread.conf file directory if it doesn't exist
-        #     try:
-        #         os.makedirs(os.path.dirname(self.thread_conf_path), exist_ok=True)
-                
-        #         # Create the thread.conf file
-        #         with open(self.thread_conf_path, 'w') as f:
-        #             f.write(f"# Thread configuration created at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-        #             if thread_device_detected:
-        #                 # Write device path if device is detected
-        #                 f.write("/dev/ttyAML6\n")
-        #                 self.logger.info(f"Created Thread configuration file with device path at {self.thread_conf_path}")
-        #                 self.supervisor.enableThreadSupported()
-        #             else:
-        #                 # Create empty file if no device is detected
-        #                 self.logger.info(f"Created empty Thread configuration file at {self.thread_conf_path}")
-        #     except Exception as e:
-        #         self.logger.error(f"Failed to create Thread configuration file: {e}")
-
-        # Initialize GPIO pins for Zigbee and Thread modules
+         # Initialize GPIO pins for Zigbee and Thread modules
         self.logger.info("Reset Zigbee module GPIOZ_1/GPIOZ_3...")
         # Zigbee reset: DB_RSTN1/GPIOZ_1
         # Zigbee boot: DB_BOOT1/GPIOZ_3
@@ -862,35 +655,3 @@ class GpioHwController:
             self.logger.error(f"Error initializing GPIO pins: {e}")
 
 
-
-    # def _check_thread_device(self):
-    #     """
-    #     Check if a Thread device is connected to /dev/ttyAML6
-    #     Returns True if device is detected, False otherwise
-        
-    #     使用 gpioget 0 27 检测，如果得到的结果为0，则/dev/ttyAML6上没有连接设备
-    #     如果为1，则对接了设备
-    #     """
-    #     try:
-    #         # 使用 gpioget 检查 GPIO 27 的状态
-    #         result = subprocess.run(["gpioget", "0", "27"], capture_output=True, text=True)
-            
-    #         # 检查命令是否成功执行
-    #         if result.returncode != 0:
-    #             self.logger.error(f"Failed to get GPIO 27 status: {result.stderr}")
-    #             return False
-            
-    #         # 获取输出并去除空白字符
-    #         gpio_value = result.stdout.strip()
-            
-    #         # 检查 GPIO 值
-    #         if gpio_value == "1":
-    #             self.logger.info("Thread device detected (GPIO 27 = 1)")
-    #             return True
-    #         else:
-    #             self.logger.info("No Thread device detected (GPIO 27 = 0)")
-    #             return False
-            
-    #     except Exception as e:
-    #         self.logger.error(f"Error checking Thread device: {e}")
-    #         return False
