@@ -298,10 +298,15 @@ class WIFIConfigCharacteristic(Characteristic):
         self._notification_ready = False  # Track if notification is fully ready
         self._notification_lock = threading.Lock()  # Lock for thread safety
         self.service = service
+        # 使用indicate模式替代notify模式，提高通信可靠性
         Characteristic.__init__(
                 self, self._CHARACTERISTIC_UUID,
-                ["notify", "write"], service)
+                ["indicate", "write"], service)
         self.add_descriptor(WIFIConfigDescriptor(self))
+        
+        # 记录使用indicate模式
+        self._use_indicate = True
+        self.logger.info("Using indicate mode for better reliability")
 
     def WriteValue(self, value, options):
         #self.logger.info(f"Write Value: {value}")
@@ -360,69 +365,153 @@ class WIFIConfigCharacteristic(Characteristic):
             self.logger.info(f"Restore previous state ...")
             utils.perform_wifi_provision_restore()            
 
+    def SendIndication(self, value):
+        """
+        发送带确认的indication数据
+        这是对BlueZ DBus API的扩展，专门用于处理indication模式
+        """
+        self.logger.debug(f"Sending indication with {len(value)} bytes")
+        
+        # 使用PropertiesChanged发送indication
+        # BlueZ会根据特性的配置决定是使用notify还是indicate
+        try:
+            self.PropertiesChanged(
+                GATT_CHRC_IFACE,
+                {"Value": dbus.Array(value, signature='y')},
+                []
+            )
+            self.logger.debug("Indication sent via PropertiesChanged")
+            return True
+        except Exception as e:
+            self.logger.warning(f"Failed to send indication: {e}")
+            raise
+
     def _send_notification_with_retry(self, result):
-        """Send notification with retry mechanism to ensure delivery"""
+        """使用indicate模式发送数据，带重试机制确保传输可靠性"""
         if not self._notifying:
-            self.logger.warning("Cannot send notification: notifications not enabled")
+            self.logger.warning("Cannot send indication: indications not enabled")
             return False
         
-        # Wait for notification to be fully ready (especially important for Huawei phones)
+        # 等待indication通道完全就绪
         retry_count = 0
         success = False
         
-        # Convert the result to a byte array for notification
+        # 将结果转换为字节数组用于indication
         value = [dbus.Byte(c) for c in result.encode('utf-8')]
         
-        while retry_count < self._MAX_RETRIES and not success:
+        # 大数据包分片处理，提高传输成功率
+        max_chunk_size = 100  # 限制每次发送大小
+        if len(value) > max_chunk_size:
+            self.logger.info(f"Large indication detected ({len(value)} bytes), splitting into chunks")
+            chunks = [value[i:i+max_chunk_size] for i in range(0, len(value), max_chunk_size)]
+            
+            # 发送分片
+            for i, chunk in enumerate(chunks):
+                chunk_header = f"CHUNK:{i+1}/{len(chunks)}:"  # 添加分片头部
+                if i == 0:
+                    # 第一个分片包含分片信息
+                    header_bytes = [dbus.Byte(c) for c in chunk_header.encode('utf-8')]
+                    chunk_with_header = header_bytes + chunk
+                    success = self._send_single_indication(chunk_with_header)
+                else:
+                    # 后续分片只发送数据
+                    success = self._send_single_indication(chunk)
+                
+                if not success:
+                    self.logger.error(f"Failed to send chunk {i+1}/{len(chunks)}")
+                    return False
+                    
+                # 分片之间添加延迟
+                time.sleep(0.3)
+            
+            return True
+        else:
+            # 正常发送单个数据包
+            return self._send_single_indication(value)
+        
+    def _send_single_indication(self, value):
+        """发送单个数据包并处理重试"""
+        retry_count = 0
+        success = False
+        max_retries = 3  # indicate模式下可以使用更少的重试次数
+        retry_delay = 0.5  # 重试间隔
+        
+        while retry_count < max_retries and not success:
             try:
                 with self._notification_lock:
-                    # Wait for notification setup to complete
+                    # 重试时添加日志和延迟
                     if retry_count > 0:
-                        self.logger.info(f"Retry #{retry_count} sending notification")
-                        time.sleep(self._RETRY_DELAY)  # Delay between retries
+                        self.logger.info(f"Retry #{retry_count} sending indication ({len(value)} bytes)")
+                        time.sleep(retry_delay * retry_count)  # 每次重试增加等待时间
                     
-                    # Send the notification
-                    self.PropertiesChanged(
-                        GATT_CHRC_IFACE,
-                        {"Value": dbus.Array(value, signature='y')},
-                        []
-                    )
+                    # 发送前添加小延迟
+                    time.sleep(0.2)
                     
-                    # Small delay after sending to ensure processing
-                    time.sleep(0.1)
+                    # 使用SendIndication方法发送数据
+                    self.SendIndication(value)
+                    
+                    # 发送后添加小延迟
+                    time.sleep(0.2)
                     success = True
-                    self.logger.info("Notification sent successfully")
+                    self.logger.info(f"Indication sent successfully ({len(value)} bytes)")
             except Exception as e:
-                self.logger.error(f"Failed to send notification: {e}")
+                self.logger.error(f"Failed to send indication: {e}")
                 retry_count += 1
         
         if not success:
-            self.logger.error("Failed to send notification after maximum retries")
+            self.logger.error(f"Failed to send indication after {max_retries} retries")
         
         return success
 
     def StartNotify(self):
+        """
+        BlueZ GATT特性接口标准方法，用于启动通知/指示通道
+        即使在indicate模式下也需要保留此方法
+        """
         with self._notification_lock:
             if self._notifying:
                 return
+                
             self._notifying = True
-            self.logger.info("Starting Notification")
+            self._notification_ready = False
+            self.logger.info("Starting Indication Channel")
             
-            # Use a timer to set notification_ready after a delay
-            # This helps with devices (like Huawei) that need time to set up notification channel
-            def set_notification_ready():
+            # 延迟设置通知就绪标志
+            def set_ready():
                 self._notification_ready = True
-                self.logger.info("Notification channel ready")
-                return False  # Don't repeat the timer
+                self.logger.info("Indication channel ready")
+                
+                # 发送测试indication确保通道已建立
+                try:
+                    test_value = [dbus.Byte(c) for c in b'READY']
+                    self.SendIndication(test_value)
+                except Exception as e:
+                    self.logger.warning(f"Failed to send test indication: {e}")
+                return False
             
-            # Schedule the notification ready flag to be set after a delay
-            GObject.timeout_add(int(self._NOTIFICATION_SETUP_DELAY * 1000), set_notification_ready)
+            # 延迟设置通知就绪标志
+            GObject.timeout_add(int(self._NOTIFICATION_SETUP_DELAY * 1000), set_ready)
 
     def StopNotify(self):
+        """
+        BlueZ GATT特性接口标准方法，用于停止通知/指示通道
+        即使在indicate模式下也需要保留此方法
+        """
         with self._notification_lock:
+            if not self._notifying:
+                return
+                
+            # 尝试发送空指示以正确关闭通道
+            try:
+                empty_value = [dbus.Byte(c) for c in b'']
+                self.SendIndication(empty_value)
+            except Exception as e:
+                self.logger.warning(f"Error sending empty indication: {e}")
+            
+            # 重置状态标志
             self._notifying = False
             self._notification_ready = False
-            self.logger.info("Stopping Notification")
+            self.logger.info("Indication channel stopped")
 
 
 class WIFIConfigDescriptor(Descriptor):
