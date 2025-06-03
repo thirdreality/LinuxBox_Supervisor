@@ -59,6 +59,7 @@ class GpioLed:
         
         # Thread control
         self.led_thread = None
+        self.timer_thread = None
         # Store the current LED state
         self.current_led_state = LedState.STARTUP
         # Add a lock for thread safety
@@ -68,6 +69,15 @@ class GpioLed:
         # LED control variables
         self.blink_counter = 0
         self.step_counter = 0
+        
+        # Timer trigger control
+        self.timer_trigger_event = threading.Event()
+        self.timer_delay = 0.5  # Default delay of 500ms
+        self.timer_delay_lock = threading.Lock()
+        self.timer_stop_event = threading.Event()
+        
+        # LED control task notification
+        self.led_control_event = threading.Event()
 
     def _set_gpio_value(self, chip, line, value, led_name):
         """Set GPIO value using gpioset command"""
@@ -124,92 +134,36 @@ class GpioLed:
     def white(self): self.set_color(True, True, True)
     
     def led_control_task(self):
-        """LED control thread"""
+        """LED control thread - 仅依靠通知机制工作"""
         self.blink_counter = 0
-        self.step_counter = 0
-        self.logger.info("Starting LED controller...")
+        self.logger.info("Starting LED controller (notification-based)...")
         
-        # 间隔时间配置
-        blink_interval = 0.5  # 闪烁间隔保持为0.5秒
-        check_interval = 0.05  # 状态检查间隔为0.05秒
-        steps_per_blink = int(blink_interval / check_interval)  # 每个闪烁周期的检查次数
+        # 启动定时触发线程
+        self.start_timer_trigger()
+        
+        # 初始处理一次LED状态
+        with self.state_lock:
+            state = self.current_led_state
+        self.process_led_state(state)
+        
+        # 设置初始事件状态为清除
+        self.led_control_event.clear()
         
         while self.supervisor and hasattr(self.supervisor, 'running') and self.supervisor.running.is_set():
-            # 每完成一个闪烁周期才更新LED状态
-            if self.step_counter == 0:
-                with self.state_lock:
-                    state = self.current_led_state
-                self.blink_counter = (self.blink_counter + 1) % 2
-                
-                # 使用 match-case 语法（Python 3.11 的 switch 语句）
-                match state:
-                    # 系统级状态
-                    case LedState.REBOOT:
-                        self.red()
-                    case LedState.POWER_OFF:
-                        self.yellow()
-                    case LedState.FACTORY_RESET:
-                        if self.blink_counter == 0:
-                            self.red()
-                        else:
-                            self.off()
-                    
-                    # 用户事件状态
-                    case LedState.USER_EVENT_OFF:
-                        self.off()
-                    case LedState.USER_EVENT_RED:
-                        self.red()
-                    case LedState.USER_EVENT_BLUE:
-                        self.blue()
-                    case LedState.USER_EVENT_YELLOW:
-                        self.yellow()
-                    case LedState.USER_EVENT_GREEN:
-                        self.green()
-                    case LedState.USER_EVENT_WHITE:
-                        self.white()
-                    
-                    # 普通状态
-                    case LedState.NORMAL:
-                        self.blue()
-                    case LedState.MQTT_NORMAL:
-                        self.blue()
-                    case LedState.MQTT_ZIGBEE:
-                        self.green()
-                    case LedState.MQTT_NETWORK:
-                        self.yellow()
-                    case LedState.NETWORK_ERROR:
-                        if self.blink_counter == 0:
-                            self.yellow()
-                        else:
-                            self.off()
-                    case LedState.MQTT_ERROR:
-                        if self.blink_counter == 0:
-                            self.blue()
-                        else:
-                            self.off()
-                    case LedState.NETWORK_LOST:
-                        if self.blink_counter == 0:
-                            self.yellow()
-                        else:
-                            self.off()
-                    case LedState.STARTUP:
-                        if self.blink_counter == 0:
-                            self.white()
-                        else:
-                            self.off()
-                    case LedState.MQTT_PARING:
-                        if self.blink_counter == 0:
-                            self.green()
-                        else:
-                            self.off()
-                    case _:
-                        # 默认情况
-                        self.logger.warning(f"Unknown LED state: {state}")
-                        self.off()
+            # 无限期等待通知，直到收到通知才处理
+            self.led_control_event.wait()
             
-            # 更新计数器
-            self.step_counter = (self.step_counter + 1) % steps_per_blink
-            time.sleep(check_interval)
+            # 收到通知后，清除事件以便下次通知
+            self.led_control_event.clear()
+            self.logger.debug("LED control task notified by external event")
+            
+            # 获取当前LED状态
+            with self.state_lock:
+                state = self.current_led_state
+            
+            # 使用process_led_state函数处理LED状态
+            # 该函数会处理闪烁效果并在需要时自动触发下一次闪烁
+            self.process_led_state(state)
     
     def start(self):
         """Start LED control thread"""
@@ -296,6 +250,322 @@ class GpioLed:
         with self.state_lock:
             return self.current_led_state
 
+    def set_state(self, state):
+        """Set LED state with thread safety"""
+        with self.state_lock:
+            self.current_led_state = state
+            
+    def get_state(self):
+        """Get current LED state with thread safety"""
+        with self.state_lock:
+            return self.current_led_state
+            
+    def start_timer_trigger(self):
+        """Start the timer trigger thread"""
+        self.timer_stop_event.clear()
+        if self.timer_thread is None or not self.timer_thread.is_alive():
+            self.timer_thread = threading.Thread(target=self.timer_trigger_task)
+            self.timer_thread.daemon = True
+            self.timer_thread.start()
+            self.logger.info("Timer trigger thread started")
+    
+    def stop_timer_trigger(self):
+        """Stop the timer trigger thread"""
+        self.timer_stop_event.set()
+        if self.timer_thread and self.timer_thread.is_alive():
+            self.timer_thread.join(1.0)  # Wait for thread to terminate with timeout
+            self.logger.info("Timer trigger thread stopped")
+    
+    def timer_trigger_task(self):
+        """Timer trigger thread to periodically trigger LED control"""
+        self.logger.info("LED timer trigger thread started")
+        
+        while not self.timer_stop_event.is_set():
+            # Get current delay time (thread-safe)
+            with self.timer_delay_lock:
+                current_delay = self.timer_delay
+            
+            # Wait for the specified delay or until triggered
+            self.timer_trigger_event.clear()
+            triggered = self.timer_trigger_event.wait(current_delay)
+            
+            if not self.timer_stop_event.is_set():
+                # Set LED state based on current state
+                with self.state_lock:
+                    state = self.current_led_state
+                
+                # 检查是否是需要闪烁的状态
+                needs_blink = state in [
+                    LedState.FACTORY_RESET,
+                    LedState.NETWORK_ERROR,
+                    LedState.MQTT_ERROR,
+                    LedState.NETWORK_LOST,
+                    LedState.STARTUP,
+                    LedState.MQTT_PARING
+                ]
+                
+                # Process the LED state
+                self.process_led_state(state)
+                
+                # 如果是闪烁状态，重置定时器延迟为500ms
+                # 并在当前循环结束后立即触发下一次闪烁
+                if needs_blink:
+                    # 先设置延迟
+                    with self.timer_delay_lock:
+                        self.timer_delay = 0.5
+                    
+                    # 不要在这里直接触发LED控制，而是让当前循环结束后自然进入下一次循环
+                    # 这样可以避免重复触发和级联效应
+                
+                # Log only when explicitly triggered (not by timer)
+                if triggered:
+                    self.logger.debug("LED control triggered by external event")
+    
+    def process_led_state(self, state):
+        """Process the LED state and set appropriate color"""
+        # 标记是否需要闪烁效果
+        needs_blink = False
+        
+        # Similar to the match-case in led_control_task
+        if state == LedState.REBOOT:
+            self.red()
+        elif state == LedState.POWER_OFF:
+            self.yellow()
+        elif state == LedState.FACTORY_RESET:
+            # Toggle for blinking effect
+            self.blink_counter = (self.blink_counter + 1) % 2
+            if self.blink_counter == 0:
+                self.red()
+            else:
+                self.off()
+            needs_blink = True
+        elif state == LedState.USER_EVENT_OFF:
+            self.off()
+        elif state == LedState.USER_EVENT_RED:
+            self.red()
+        elif state == LedState.USER_EVENT_BLUE:
+            self.blue()
+        elif state == LedState.USER_EVENT_YELLOW:
+            self.yellow()
+        elif state == LedState.USER_EVENT_GREEN:
+            self.green()
+        elif state == LedState.USER_EVENT_WHITE:
+            self.white()
+        elif state == LedState.NORMAL or state == LedState.MQTT_NORMAL:
+            self.blue()
+        elif state == LedState.NETWORK_ERROR:
+            self.blink_counter = (self.blink_counter + 1) % 2
+            if self.blink_counter == 0:
+                self.yellow()
+            else:
+                self.off()
+            needs_blink = True
+        elif state == LedState.MQTT_ERROR:
+            self.blink_counter = (self.blink_counter + 1) % 2
+            if self.blink_counter == 0:
+                self.blue()
+            else:
+                self.off()
+            needs_blink = True
+        elif state == LedState.NETWORK_LOST:
+            self.blink_counter = (self.blink_counter + 1) % 2
+            if self.blink_counter == 0:
+                self.yellow()
+            else:
+                self.off()
+            needs_blink = True
+        elif state == LedState.STARTUP:
+            self.blink_counter = (self.blink_counter + 1) % 2
+            if self.blink_counter == 0:
+                self.white()
+            else:
+                self.off()
+            needs_blink = True
+        elif state == LedState.MQTT_PARING:
+            self.blink_counter = (self.blink_counter + 1) % 2
+            if self.blink_counter == 0:
+                self.green()
+            else:
+                self.off()
+            needs_blink = True
+        elif state == LedState.MQTT_PARED:
+            self.green()
+        else:
+            # 默认情况
+            self.logger.warning(f"Unknown LED state: {state}")
+            self.off()
+    
+    def trigger_led_control(self, reset_delay=0.5):
+        """Trigger LED control immediately and reset the timer"""
+        # Reset timer delay (thread-safe)
+        with self.timer_delay_lock:
+            self.timer_delay = reset_delay
+        
+        # Trigger the timer thread
+        self.timer_trigger_event.set()
+        
+        # Notify the LED control task
+        self.led_control_event.set()
+        self.logger.debug("LED control task notified by external event")
+
+    def set_state(self, state):
+        """Set LED state with thread safety"""
+        with self.state_lock:
+            self.current_led_state = state
+            
+    def get_state(self):
+        """Get current LED state with thread safety"""
+        with self.state_lock:
+            return self.current_led_state
+            
+    def start_timer_trigger(self):
+        """Start the timer trigger thread"""
+        self.timer_stop_event.clear()
+        if self.timer_thread is None or not self.timer_thread.is_alive():
+            self.timer_thread = threading.Thread(target=self.timer_trigger_task)
+            self.timer_thread.daemon = True
+            self.timer_thread.start()
+            self.logger.info("Timer trigger thread started")
+        
+    def stop_timer_trigger(self):
+        """Stop the timer trigger thread"""
+        self.timer_stop_event.set()
+        if self.timer_thread and self.timer_thread.is_alive():
+            self.timer_thread.join(1.0)  # Wait for thread to terminate with timeout
+            self.logger.info("Timer trigger thread stopped")
+    
+    def timer_trigger_task(self):
+        """Timer trigger thread to periodically trigger LED control"""
+        self.logger.info("LED timer trigger thread started")
+        
+        while not self.timer_stop_event.is_set():
+            # Get current delay time (thread-safe)
+            with self.timer_delay_lock:
+                current_delay = self.timer_delay
+            
+            # Wait for the specified delay or until triggered
+            self.timer_trigger_event.clear()
+            triggered = self.timer_trigger_event.wait(current_delay)
+            
+            if not self.timer_stop_event.is_set():
+                # Set LED state based on current state
+                with self.state_lock:
+                    state = self.current_led_state
+                
+                # 检查是否是需要闪烁的状态
+                needs_blink = state in [
+                    LedState.FACTORY_RESET,
+                    LedState.NETWORK_ERROR,
+                    LedState.MQTT_ERROR,
+                    LedState.NETWORK_LOST,
+                    LedState.STARTUP,
+                    LedState.MQTT_PARING
+                ]
+                
+                # Process the LED state
+                self.process_led_state(state)
+                
+                # 如果是闪烁状态，重置定时器延迟为500ms
+                # 并在当前循环结束后立即触发下一次闪烁
+                if needs_blink:
+                    # 先设置延迟
+                    with self.timer_delay_lock:
+                        self.timer_delay = 0.5
+                    
+                    # 不要在这里直接触发LED控制，而是让当前循环结束后自然进入下一次循环
+                    # 这样可以避免重复触发和级联效应
+                
+                # Log only when explicitly triggered (not by timer)
+                if triggered:
+                    self.logger.debug("LED control triggered by external event")
+    
+    def process_led_state(self, state):
+        """Process the LED state and set appropriate color"""
+        # 标记是否需要闪烁效果
+        needs_blink = False
+        
+        # Similar to the match-case in led_control_task
+        if state == LedState.REBOOT:
+            self.red()
+        elif state == LedState.POWER_OFF:
+            self.yellow()
+        elif state == LedState.FACTORY_RESET:
+            # Toggle for blinking effect
+            self.blink_counter = (self.blink_counter + 1) % 2
+            if self.blink_counter == 0:
+                self.red()
+            else:
+                self.off()
+            needs_blink = True
+        elif state == LedState.USER_EVENT_OFF:
+            self.off()
+        elif state == LedState.USER_EVENT_RED:
+            self.red()
+        elif state == LedState.USER_EVENT_BLUE:
+            self.blue()
+        elif state == LedState.USER_EVENT_YELLOW:
+            self.yellow()
+        elif state == LedState.USER_EVENT_GREEN:
+            self.green()
+        elif state == LedState.USER_EVENT_WHITE:
+            self.white()
+        elif state == LedState.NORMAL or state == LedState.MQTT_NORMAL:
+            self.blue()
+        elif state == LedState.NETWORK_ERROR:
+            self.blink_counter = (self.blink_counter + 1) % 2
+            if self.blink_counter == 0:
+                self.yellow()
+            else:
+                self.off()
+            needs_blink = True
+        elif state == LedState.MQTT_ERROR:
+            self.blink_counter = (self.blink_counter + 1) % 2
+            if self.blink_counter == 0:
+                self.blue()
+            else:
+                self.off()
+            needs_blink = True
+        elif state == LedState.NETWORK_LOST:
+            self.blink_counter = (self.blink_counter + 1) % 2
+            if self.blink_counter == 0:
+                self.yellow()
+            else:
+                self.off()
+            needs_blink = True
+        elif state == LedState.STARTUP:
+            self.blink_counter = (self.blink_counter + 1) % 2
+            if self.blink_counter == 0:
+                self.white()
+            else:
+                self.off()
+            needs_blink = True
+        elif state == LedState.MQTT_PARING:
+            self.blink_counter = (self.blink_counter + 1) % 2
+            if self.blink_counter == 0:
+                self.green()
+            else:
+                self.off()
+            needs_blink = True
+        elif state == LedState.MQTT_PARED:
+            self.green()
+        else:
+            # 默认情况
+            self.logger.warning(f"Unknown LED state: {state}")
+            self.off()
+    
+def trigger_led_control(self, reset_delay=0.5):
+    """Trigger LED control immediately and reset the timer"""
+    # Reset timer delay (thread-safe)
+    with self.timer_delay_lock:
+        self.timer_delay = reset_delay
+    
+    # Trigger the timer thread
+    self.timer_trigger_event.set()
+    
+    # Notify the LED control task
+    self.led_control_event.set()
+    self.logger.debug("LED control task notified by external event")
+
 # -----------------------------------------------------------------------------
 
 class GpioButton:
@@ -350,45 +620,7 @@ class GpioButton:
         
         while not self.stop_event.is_set():
             current_time = time.time()
-            
-            # # 每10秒检查一次按钮物理状态，确保软件状态与硬件状态同步
-            # if current_time - last_state_check > 10:
-            #     try:
-            #         # 检查按钮当前物理状态
-            #         physical_state = self._check_button_physical_state()
-            #         self.logger.debug(f"Button physical state check: pressed={physical_state}, software state={self.button_pressed.is_set()}")
-                    
-            #         # 如果软件状态与物理状态不一致，进行同步
-            #         if physical_state != self.button_pressed.is_set():
-            #             self.logger.warning(f"Button state mismatch detected! Physical: {physical_state}, Software: {self.button_pressed.is_set()}")
-                        
-            #             if physical_state:  # 按钮实际上是按下状态
-            #                 if not self.button_pressed.is_set():
-            #                     self.logger.info("Synchronizing: Button physically pressed but not tracked in software")
-            #                     self.button_pressed.set()
-            #                     self.press_start_time = current_time
-                                
-            #                     # 启动计时线程
-            #                     if self.timer_thread is None or not self.timer_thread.is_alive():
-            #                         self.timer_thread = threading.Thread(target=self._button_timer_task)
-            #                         self.timer_thread.daemon = True
-            #                         self.timer_thread.start()
-            #             else:  # 按钮实际上是释放状态
-            #                 if self.button_pressed.is_set():
-            #                     self.logger.info("Synchronizing: Button physically released but still tracked as pressed in software")
-            #                     press_duration = current_time - self.press_start_time
-            #                     self.logger.info(f"Button released after {press_duration:.2f} seconds (detected by state check)")
-            #                     self.button_pressed.clear()
-                                
-            #                     # 根据按键时间执行相应操作
-            #                     self._handle_button_release(press_duration)
-                    
-            #         # 重置错误计数器
-            #         error_count = 0
-            #         last_state_check = current_time
-            #     except Exception as e:
-            #         self.logger.error(f"Error checking button physical state: {e}")
-            
+                
             # 检测按键按下
             if not self.button_pressed.is_set():
                 try:
@@ -406,6 +638,11 @@ class GpioButton:
                             self.timer_thread = threading.Thread(target=self._button_timer_task)
                             self.timer_thread.daemon = True
                             self.timer_thread.start()
+                        
+                        # 触发LED控制并重置计时器
+                        if self.supervisor and hasattr(self.supervisor, 'led') and hasattr(self.supervisor.led, 'trigger_led_control'):
+                            self.supervisor.led.trigger_led_control(0.5)  # 重置为500毫秒
+                            self.logger.debug("Reset LED timer trigger on button press")
                         
                         # 重置错误计数器
                         error_count = 0
@@ -431,6 +668,11 @@ class GpioButton:
                         
                         # 根据按键时间执行相应操作
                         self._handle_button_release(press_duration)
+                        
+                        # 触发LED控制并重置计时器
+                        if self.supervisor and hasattr(self.supervisor, 'led') and hasattr(self.supervisor.led, 'trigger_led_control'):
+                            self.supervisor.led.trigger_led_control(0.5)  # 重置为500毫秒
+                            self.logger.debug("Reset LED timer trigger on button release")
                         
                         # 重置错误计数器
                         error_count = 0
