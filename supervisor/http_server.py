@@ -170,6 +170,8 @@ class SupervisorHTTPServer:
                         self._handle_firmware_info()
                     elif path == "/api/zigbee/info":
                         self._handle_zigbee_info()
+                    elif path == "/api/browser/info":
+                        self._handle_browser_info()       
                     elif path == "/api/file/download":
                         self._handle_file_download(query_params)
                     elif path == "/api/health" or path == "/health":
@@ -226,7 +228,7 @@ class SupervisorHTTPServer:
                     "ssid": "",
                     "ip_address": "",
                     "mac_address": "",
-                    "error_message": "WiFi information not available"
+                    "message": "WiFi information not available"
                 }
                 
                 # 从管理器获取WiFi状态信息
@@ -237,12 +239,105 @@ class SupervisorHTTPServer:
                         "ssid": wifi_status.ssid,
                         "ip_address": wifi_status.ip_address,
                         "mac_address": wifi_status.mac_address,
-                        "error_message": wifi_status.error_message if hasattr(wifi_status, 'error_message') else ""
+                        "message": wifi_status.error_message if hasattr(wifi_status, 'error_message') else ""
                     }
                 
                 self._set_headers()
                 self.wfile.write(json.dumps(result).encode())
             
+            def _handle_system_info(self):
+                """处理GET /api/system/info - 等同于SystemInfoCharacteristic"""
+                result = {}
+                try:
+                    # 优先从supervisor获取系统信息
+                    if hasattr(self._supervisor, 'system_info') and self._supervisor.system_info:
+                        system_info = self._supervisor.system_info
+                        # 安全获取 storage_space
+                        storage = system_info.storage_space if isinstance(system_info.storage_space, dict) else {"available": "", "total": ""}
+                        result = {
+                            "Device Model": getattr(system_info, "model", "Unknown"),
+                            "Device Name": getattr(system_info, "name", "Unknown"),
+                            "Build Number": getattr(system_info, "build_number", "Unknown"),
+                            "Zigbee Support": getattr(system_info, "support_zigbee", False),
+                            "Thread Support": getattr(system_info, "support_thread", False),
+                            "Memory": f"{getattr(system_info, 'memory_size', '')} MB",
+                            "Storage": f"{storage.get('available', '')}/{storage.get('total', '')}"
+                        }
+                    else:
+                        # 默认系统信息（统一风格）
+                        result = {
+                            "Device Model": "LinuxBox",
+                            "Device Name": "3RHUB-Unknown",
+                            "Build Number": "1.0.0",
+                            "Zigbee Support": False,
+                            "Thread Support": False,
+                            "Memory": "",
+                            "Storage": "/"
+                        }
+
+                    # WiFi 信息
+                    if hasattr(self._supervisor, 'wifi_status') and self._supervisor.wifi_status:
+                        wifi_status = self._supervisor.wifi_status
+                        result["WIFI Connected"] = getattr(wifi_status, "connected", False)
+                        result["SSID"] = getattr(wifi_status, "ssid", "")
+                        result["Ip Address"] = getattr(wifi_status, "ip_address", "")
+                        result["Mac Address"] = getattr(wifi_status, "mac_address", "")
+                except Exception as e:
+                    # 捕获异常，返回最简系统信息和错误提示
+                    result = {
+                        "Device Model": "LinuxBox",
+                        "Device Name": "3RHUB-Unknown",
+                        "Build Number": "1.0.0",
+                        "Error": f"system info error: {e}"
+                    }
+                self._set_headers()
+                self.wfile.write(json.dumps(result).encode())
+
+
+            def _handle_browser_info(self):
+                """查询 HomeAssistant/zigbee2mqtt 服务状态并返回可访问URL"""
+                browser_url = []
+                error_message = ""
+                try:
+                    # 获取当前IP地址
+                    ip = ""
+                    if hasattr(self._supervisor, 'wifi_status') and self._supervisor.wifi_status:
+                        ip = getattr(self._supervisor.wifi_status, 'ip_address', "")
+                    if not ip:
+                        raise Exception("No IP address available")
+
+                    # 检查服务状态
+                    def is_service_active(service):
+                        try:
+                            result = subprocess.run([
+                                "systemctl", "is-active", service
+                            ], capture_output=True, text=True)
+                            return result.returncode == 0 and result.stdout.strip() == "active"
+                        except Exception:
+                            return False
+
+                    # HomeAssistant
+                    if is_service_active("home-assistant.service"):
+                        browser_url.append({
+                            "name": "HomeAssistant",
+                            "url": f"http://{ip}:8123"
+                        })
+                    # zigbee2mqtt
+                    if is_service_active("zigbee2mqtt.service"):
+                        browser_url.append({
+                            "name": "zigbee2mqtt",
+                            "url": f"http://{ip}:8099"
+                        })
+                    if not browser_url:
+                        error_message = "No browser services are currently running."
+                except Exception as e:
+                    error_message = f"Error: {e}"
+                result = {
+                    "browser_url": browser_url,
+                    "message": error_message
+                }
+                self._set_headers()
+                self.wfile.write(json.dumps(result).encode())
 
             def _handle_software_info(self): 
                 homeassistant_core_result={

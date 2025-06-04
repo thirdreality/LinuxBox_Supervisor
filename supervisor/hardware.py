@@ -420,6 +420,23 @@ class GpioLed:
 # -----------------------------------------------------------------------------
 
 class GpioButton:
+    def cleanup_gpiomon(self):
+        """清理所有gpiomon进程，防止资源残留"""
+        try:
+            # 查找所有gpiomon进程并kill
+            result = subprocess.run(["pgrep", "gpiomon"], capture_output=True, text=True)
+            pids = result.stdout.strip().split("\n")
+            for pid in pids:
+                if pid.isdigit():
+                    os.kill(int(pid), signal.SIGKILL)
+            self.logger.info("Cleaned up all gpiomon processes")
+        except Exception as e:
+            self.logger.warning(f"Failed to cleanup gpiomon: {e}")
+
+    def __del__(self):
+        # 析构时自动清理gpiomon
+        self.cleanup_gpiomon()
+
     def __init__(self, supervisor=None):
         self.supervisor = supervisor
         self.logger = logging.getLogger("Supervisor")
@@ -441,25 +458,6 @@ class GpioButton:
         # No initialization needed for gpioget approach
         pass
 
-    def is_pressed(self):
-        """Check if button is pressed using gpioget command"""
-        try:
-            cmd = ["gpioget", str(self.button['chip']), str(self.button['line'])]
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            return result.stdout.strip() == "1"
-        except subprocess.SubprocessError as e:
-            self.logger.error(f"Failed to get button state from GPIO chip {self.button['chip']} line {self.button['line']}: {e}")
-            return False
-    
-    def _check_button_physical_state(self):
-        """检查按钮当前物理状态"""
-        try:
-            cmd = ["gpioget", str(self.button['chip']), str(self.button['line'])]
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            return result.stdout.strip() == "1"
-        except subprocess.SubprocessError as e:
-            self.logger.error(f"Failed to get button state from GPIO chip {self.button['chip']} line {self.button['line']}: {e}")
-            return False
     
     def _monitor_button_events(self):
         """监控按键按下和释放事件的主线程"""
@@ -468,6 +466,8 @@ class GpioButton:
         # 错误计数器和状态检查计时器
         error_count = 0
         last_state_check = 0
+
+        self.cleanup_gpiomon
         
         while not self.stop_event.is_set():
             current_time = time.time()
@@ -497,6 +497,9 @@ class GpioButton:
                         
                         # 重置错误计数器
                         error_count = 0
+                    else:
+                        # 增加异常日志
+                        self.logger.warning(f"gpiomon returncode={result.returncode}, stdout='{result.stdout}', stderr='{result.stderr}'")
                 except subprocess.TimeoutExpired:
                     # 正常超时，继续等待
                     pass
@@ -527,6 +530,9 @@ class GpioButton:
                         
                         # 重置错误计数器
                         error_count = 0
+                    else:
+                        # 增加异常日志
+                        self.logger.warning(f"gpiomon (release) returncode={result.returncode}, stdout='{result.stdout}', stderr='{result.stderr}'")
                 except subprocess.TimeoutExpired:
                     # 正常超时，继续等待
                     pass
