@@ -166,8 +166,6 @@ class SupervisorHTTPServer:
                                 # 没有提供服务名，返回所有服务的信息
                                 self._logger.info("No service name provided, returning info for all services")
                                 self._handle_service_info(None)
-                    elif path == "/api/firmware/info":
-                        self._handle_firmware_info()
                     elif path == "/api/zigbee/info":
                         self._handle_zigbee_info()
                     elif path == "/api/browser/info":
@@ -548,14 +546,14 @@ class SupervisorHTTPServer:
                     homeassistant_core_result['installed'] = system_info.hainfo.installed
                     homeassistant_core_result['enabled'] = system_info.hainfo.enabled
 
-                    # get_ha_zigbee_mode
-                    zigbee_mode = util.get_ha_zigbee_mode()
-                    if zigbee_mode == "z2m":
-                        homeassistant_core_result['zigbee'] = "z2m"
-                    elif zigbee_mode == "zha":
-                        homeassistant_core_result['zigbee'] = "zha"
-                    else:
-                        homeassistant_core_result['zigbee'] = "none"
+                    # # get_ha_zigbee_mode
+                    # zigbee_mode = util.get_ha_zigbee_mode()
+                    # if zigbee_mode == "z2m":
+                    #     homeassistant_core_result['zigbee'] = "z2m"
+                    # elif zigbee_mode == "zha":
+                    #     homeassistant_core_result['zigbee'] = "zha"
+                    # else:
+                    #     homeassistant_core_result['zigbee'] = "none"
 
                     homeassistant_core_result['software'] = homeassistant_core_items
 
@@ -634,21 +632,6 @@ class SupervisorHTTPServer:
                 self._set_headers()
                 self.wfile.write(json.dumps(result).encode())
 
-            def _handle_firmware_info(self):
-                homeassistant_core_result={
-                    'name': 'Home Assistant'
-                }
-                openhab_result = {
-                    'name': 'openhab'
-                }
-
-                result = {
-                    "homeassistant_core":homeassistant_core_result,
-                    "openhab":openhab_result
-                }
-                self._set_headers()
-                self.wfile.write(json.dumps(result).encode())
-                
             def _handle_zigbee_info(self):
                 """处理Zigbee信息请求，返回Zigbee的模式（zha、z2m或none）"""
                 try:

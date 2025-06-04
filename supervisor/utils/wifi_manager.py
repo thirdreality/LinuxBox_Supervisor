@@ -143,12 +143,39 @@ class WifiManager:
         # Wait for the connection to be established
         for _ in range(20): # 20 seconds timeout
             if self.check_wifi_connected():
-                logging.info(f"Successfully connected to WiFi network: {ssid}")             
+                logging.info(f"Successfully connected to WiFi network: {ssid}")
+                self.delete_other_connections(ssid)
                 return 0
+
             time.sleep(1)
         
         logging.error("Timed out waiting for WiFi connection")
         return -2
+
+    def delete_other_connections(self, ssid):
+        """
+        Delete all WiFi connections except the one matching the given ssid.
+        """
+        logging.info(f"Deleting all WiFi connections except SSID: {ssid}")
+        # List all connections with their names and uuids
+        cmd = "nmcli -t -f name,uuid connection show"
+        result, state = self.execute_command(cmd)
+        if state != 0 or not result:
+            logging.error("Failed to list WiFi connections.")
+            return -1
+        for line in result.splitlines():
+            try:
+                name, uuid = line.strip().split(":", 1)
+                if name != ssid:
+                    del_cmd = f"nmcli connection delete uuid {uuid}"
+                    _, del_state = self.execute_command(del_cmd)
+                    if del_state == 0:
+                        logging.info(f"Deleted connection: {name} (UUID: {uuid})")
+                    else:
+                        logging.error(f"Failed to delete connection: {name} (UUID: {uuid})")
+            except Exception as e:
+                logging.error(f"Error parsing connection line '{line}': {e}")
+        return 0
 
     def get_status(self):
         """
