@@ -172,8 +172,10 @@ class SupervisorHTTPServer:
                         self._handle_zigbee_info()
                     elif path == "/api/browser/info":
                         self._handle_browser_info()       
-                    elif path == "/api/file/download":
+                    elif path == "/api/example/node":
                         self._handle_file_download(query_params)
+                    elif path == "/api/setting/info":
+                        self._handle_setting_info()
                     elif path == "/api/health" or path == "/health":
                         # 处理健康检查请求
                         self._handle_health_check()
@@ -213,7 +215,11 @@ class SupervisorHTTPServer:
                 elif path == "/api/service/control":
                     self._handle_service_command(post_data)
                 elif path == "/api/software/command":
-                    self._handle_software_command(post_data)                               
+                    self._handle_software_command(post_data)
+                elif path == "/api/zigbee/command":
+                    self._handle_zigbee_command(post_data)
+                elif path == "/api/setting/command":
+                    self._handle_setting_command(post_data)
                 # 处理未知路径
                 else:
                     self.send_response(404)
@@ -293,6 +299,157 @@ class SupervisorHTTPServer:
                 self._set_headers()
                 self.wfile.write(json.dumps(result).encode())
 
+
+            def _handle_setting_info(self):
+                """返回最近5个backup文件信息"""
+                backup_dir = "/lib/thirdreality/backup"
+                if not os.path.exists(backup_dir):
+                    os.makedirs(backup_dir) 
+                
+                files = []
+                try:
+                    if os.path.isdir(backup_dir):
+                        all_files = [f for f in os.listdir(backup_dir) if os.path.isfile(os.path.join(backup_dir, f))]
+                        # 按修改时间排序，取最新5个
+                        all_files.sort(key=lambda f: os.path.getmtime(os.path.join(backup_dir, f)), reverse=True)
+                        files = all_files[:5]
+                    result = {"backups": files}
+                except Exception as e:
+                    result = {"error": str(e)}
+                self._set_headers()
+                self.wfile.write(json.dumps(result).encode())
+
+            def _handle_zigbee_command(self, post_data):
+                """切换zigbee模式: action=zha, z2m, disable"""
+                try:
+                    params = json.loads(post_data) if post_data.strip().startswith('{') else dict(urllib.parse.parse_qsl(post_data))
+                    action = params.get('action')
+                    if action not in ('zha', 'z2m', 'disable'):
+                        self._set_headers()
+                        self.wfile.write(json.dumps({"success": False, "error": "Invalid action"}).encode())
+                        return
+                    # 这里只写日志，实际切换逻辑需后续实现
+                    self._logger.info(f"[Zigbee] Switch mode to: {action}")
+                    # TODO: 调用supervisor方法或具体切换实现
+                    self._set_headers()
+                    self.wfile.write(json.dumps({"success": True, "mode": action}).encode())
+                except Exception as e:
+                    self._set_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode())
+
+            def _handle_setting_command(self, post_data):
+                """处理系统备份和恢复: action=backup, restore, restore可带filename"""
+                try:
+                    params = json.loads(post_data) if post_data.strip().startswith('{') else dict(urllib.parse.parse_qsl(post_data))
+                    action = params.get('action')
+                    filename = params.get('filename')
+                    backup_dir = "/lib/thirdreality/backup"
+                    if not os.path.exists(backup_dir):
+                        os.makedirs(backup_dir) 
+
+                    if action == 'backup':
+                        # 这里只写日志，实际备份逻辑需后续实现
+                        self._logger.info("[Setting] Backup requested")
+                        # TODO: 调用supervisor方法或具体实现备份
+                        self._set_headers()
+                        self.wfile.write(json.dumps({"success": True, "msg": "Backup started"}).encode())
+                    elif action == 'restore':
+                        if filename:
+                            self._logger.info(f"[Setting] Restore from {filename}")
+                            # TODO: 调用supervisor方法或具体实现恢复
+                            found = False
+                            if os.path.isfile(os.path.join(backup_dir, filename)):
+                                found = True
+                            if found:
+                                self._set_headers()
+                                self.wfile.write(json.dumps({"success": True, "msg": f"Restore from {filename} started"}).encode())
+                            else:
+                                self._set_headers()
+                                self.wfile.write(json.dumps({"success": False, "error": "Backup file not found"}).encode())
+                        else:
+                            self._set_headers()
+                            self.wfile.write(json.dumps({"success": False, "error": "No filename specified"}).encode())
+                    else:
+                        self._set_headers()
+                        self.wfile.write(json.dumps({"success": False, "error": "Invalid action"}).encode())
+                except Exception as e:
+                    self._set_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode())
+
+            def _handle_service_command(self, post_data):
+                """处理服务控制命令，使用集中的签名验证逻辑"""
+                try:
+                    self._logger.info(f"Processing service command with data: {post_data}")
+                    # 解析POST参数和签名
+                    params, signature, is_valid = self._parse_post_data(post_data)
+                    # 校验action参数
+                    if 'action' not in params:
+                        self._send_error("action is required")
+                        return
+                    # 校验签名
+                    if not signature:
+                        self._send_error("Signature is required")
+                        return
+                    if not is_valid:
+                        self._logger.warning("Security verification failed: Invalid signature")
+                        self.send_response(401)
+                        self.send_header('Content-type', 'application/json')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"error": "Unauthorized: Invalid signature"}).encode())
+                        return
+                    action = params['action']
+                    service_name = params.get('service')
+
+                    # 如果params中没有service，尝试从param_json中解析
+                    if not service_name and 'param' in params:
+                        try:
+                            param_data_base64 = params['param']
+                            import urllib.parse, base64
+                            param_data_url_decoded = urllib.parse.unquote(param_data_base64)
+                            param_data_json = base64.b64decode(param_data_url_decoded).decode()
+                            self._logger.info(f"param_data (decoded): {param_data_json}")
+                            param_dict = json.loads(param_data_json)
+                            service_name = param_dict.get('service')
+                            self._logger.info(f"service (from param_data): {service_name}")
+                        except Exception as e:
+                            self._logger.error(f"Failed to parse param_data for service: {e}")
+
+                    self._logger.info(f"action: {action}")
+                    self._logger.info(f"service: {service_name}")
+
+                    if not service_name:
+                        self._send_error("Service name is required")
+                        return
+                    result = {"success": False}
+                    try:
+                        if action == "enable":
+                            self._logger.info(f"Enabling service: {service_name}")
+                            process = subprocess.run(["systemctl", "enable", service_name], capture_output=True, text=True)
+                            result = {"success": process.returncode == 0, "stdout": process.stdout, "stderr": process.stderr}
+                        elif action == "disable":
+                            self._logger.info(f"Disabling service: {service_name}")
+                            process = subprocess.run(["systemctl", "disable", service_name], capture_output=True, text=True)
+                            result = {"success": process.returncode == 0, "stdout": process.stdout, "stderr": process.stderr}
+                        elif action == "start":
+                            self._logger.info(f"Starting service: {service_name}")
+                            process = subprocess.run(["systemctl", "start", service_name], capture_output=True, text=True)
+                            result = {"success": process.returncode == 0, "stdout": process.stdout, "stderr": process.stderr}
+                        elif action == "stop":
+                            self._logger.info(f"Stopping service: {service_name}")
+                            process = subprocess.run(["systemctl", "stop", service_name], capture_output=True, text=True)
+                            result = {"success": process.returncode == 0, "stdout": process.stdout, "stderr": process.stderr}
+                        else:
+                            result = {"success": False, "error": f"Unknown action: {action}"}
+                        self._set_headers()
+                        self.wfile.write(json.dumps(result).encode())
+                    except Exception as e:
+                        self._logger.error(f"Error executing systemctl command: {e}")
+                        self._set_headers()
+                        self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode())
+                except Exception as e:
+                    self._logger.error(f"Error in _handle_service_command: {str(e)}")
+                    self._set_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode())
 
             def _handle_browser_info(self):
                 """查询 HomeAssistant/zigbee2mqtt 服务状态并返回可访问URL"""
@@ -390,6 +547,16 @@ class SupervisorHTTPServer:
 
                     homeassistant_core_result['installed'] = system_info.hainfo.installed
                     homeassistant_core_result['enabled'] = system_info.hainfo.enabled
+
+                    # get_ha_zigbee_mode
+                    zigbee_mode = util.get_ha_zigbee_mode()
+                    if zigbee_mode == "z2m":
+                        homeassistant_core_result['zigbee'] = "z2m"
+                    elif zigbee_mode == "zha":
+                        homeassistant_core_result['zigbee'] = "zha"
+                    else:
+                        homeassistant_core_result['zigbee'] = "none"
+
                     homeassistant_core_result['software'] = homeassistant_core_items
 
                     openhab_items = [
@@ -485,38 +652,11 @@ class SupervisorHTTPServer:
             def _handle_zigbee_info(self):
                 """处理Zigbee信息请求，返回Zigbee的模式（zha、z2m或none）"""
                 try:
-                    # Home Assistant配置文件路径
-                    config_file = "/var/lib/homeassistant/homeassistant/.storage/core.config_entries"
-                    
-                    # 默认模式为none
-                    zigbee_mode = "none"
-                    
-                    # 检查文件是否存在
-                    if os.path.exists(config_file):
-                        with open(config_file, 'r') as f:
-                            config_data = json.load(f)
-                            
-                        # 检查entries列表
-                        if "data" in config_data and "entries" in config_data["data"]:
-                            entries = config_data["data"]["entries"]
-                            
-                            # 检查是否有mqtt集成（z2m模式）
-                            has_mqtt = any(entry["domain"] == "mqtt" for entry in entries)
-                            
-                            # 检查是否有zha集成
-                            has_zha = any(entry["domain"] == "zha" for entry in entries)
-                            
-                            # 确定Zigbee模式
-                            if has_zha:
-                                zigbee_mode = "zha"
-                            elif has_mqtt:
-                                zigbee_mode = "z2m"
-                    
-                    # 返回结果
-                    result = {"mode": zigbee_mode}
+                    import supervisor.utils.util as util
+                    zigbee_mode = util.get_ha_zigbee_mode()
+                    result = {"zigbee": zigbee_mode}
                     self._set_headers()
                     self.wfile.write(json.dumps(result).encode())
-                    
                 except Exception as e:
                     self._logger.error(f"Error getting Zigbee info: {e}")
                     self.send_response(500)
@@ -783,256 +923,157 @@ class SupervisorHTTPServer:
                     self._send_error(f"Error processing command: {str(e)}")
 
 
-                def _handle_service_command(self, post_data):
-                    """处理服务控制命令，使用集中的签名验证逻辑"""
-                    try:
-                        self._logger.info(f"Processing service command with data: {post_data}")
-                        
-                        # 使用共用方法解析和验证参数
-                        params, signature, is_valid = self._parse_post_data(post_data)
-                        
-                        # 验证必须有action参数
-                        if 'action' not in params:
-                            self._send_error("action is required")
-                            return
-                        
-                        # 验证签名
-                        if not signature:
-                            self._send_error("Signature is required")
-                            return
-                        
-                        # 验证签名有效性
-                        if not is_valid:
-                            self._logger.warning("Security verification failed: Invalid signature")
-                            self.send_response(401)
-                            self._set_headers()
-                            self.wfile.write(json.dumps({"success": False, "error": "Invalid signature"}).encode())
-                            return
-                        
-                        action = params['action']
-                        service_name = params.get('service')
-                        
-                        if not service_name:
-                            self._send_error("Service name is required")
-                            return
-                        
-                        result = {"success": False}
-                        
-                        try:
-                            if action == "enable":
-                                self._logger.info(f"Enabling service: {service_name}")
-                                process = subprocess.run(["systemctl", "enable", service_name], 
-                                                    capture_output=True, text=True, check=False)
-                                
-                                if process.returncode == 0:
-                                    result["success"] = True
-                                    result["message"] = f"Service {service_name} enabled successfully"
-                                else:
-                                    result["message"] = f"Failed to enable service: {process.stderr}"
+            def _verify_signature(self, params, signature):
+                """验证请求签名
                             
-                            elif action == "disable":
-                                # 禁用服务
-                                self._logger.info(f"Disabling service: {service_name}")
-                                process = subprocess.run(["systemctl", "disable", service_name], 
-                                                        capture_output=True, text=True, check=False)
+                Args:
+                    params: 参数字典
+                    signature: 请求提供的签名
                                 
-                                if process.returncode == 0:
-                                    result["success"] = True
-                                    result["message"] = f"Service {service_name} disabled successfully"
-                                else:
-                                    result["message"] = f"Failed to disable service: {process.stderr}"
-                            
-                            elif action == "start":
-                                # 启动服务
-                                self._logger.info(f"Starting service: {service_name}")
-                                process = subprocess.run(["systemctl", "start", service_name], 
-                                                        capture_output=True, text=True, check=False)
+                Returns:
+                    bool: 签名是否有效
+                """
+                try:
+                    # 获取API密钥
+                    secret_key = self._supervisor.http_server.API_SECRET_KEY
                                 
-                                if process.returncode == 0:
-                                    result["success"] = True
-                                    result["message"] = f"Service {service_name} started successfully"
-                                else:
-                                    result["message"] = f"Failed to start service: {process.stderr}"
-                            
-                            elif action == "stop":
-                                # 停止服务
-                                self._logger.info(f"Stopping service: {service_name}")
-                                process = subprocess.run(["systemctl", "stop", service_name], 
-                                                        capture_output=True, text=True, check=False)
+                    # 按key排序并重新组装参数字符串
+                    sorted_keys = sorted(params.keys())
+                    param_string = '&'.join([f"{k}={params[k]}" for k in sorted_keys])
                                 
-                                if process.returncode == 0:
-                                    result["success"] = True
-                                    result["message"] = f"Service {service_name} stopped successfully"
-                                else:
-                                    result["message"] = f"Failed to stop service: {process.stderr}"
-                            else:
-                                self._send_error(f"Unknown action: {action}")
-                                return
-                            
-                            # 返回处理结果
-                            self._set_headers()
-                            self.wfile.write(json.dumps(result).encode())
-                            
-                        except Exception as e:
-                            self._logger.error(f"Error executing systemctl command: {e}")
-                            self._logger.error(traceback.format_exc())
-                            self._send_error(f"Error executing command: {str(e)}")       
-                    except Exception as e:
-                        self._logger.error(f"Error in _handle_service_command: {str(e)}")
-                        self._logger.error(traceback.format_exc())
-                        self._send_error(f"Internal server error: {str(e)}")
-
-                def _verify_signature(self, params, signature):
-                    """验证请求签名
-                            
-                    Args:
-                        params: 参数字典
-                        signature: 请求提供的签名
+                    # 添加安全密钥并计算MD5
+                    security_string = f"{param_string}&{secret_key}"
+                    calculated_md5 = hashlib.md5(security_string.encode()).hexdigest()
                                 
-                    Returns:
-                        bool: 签名是否有效
-                    """
-                    try:
-                        # 获取API密钥
-                        secret_key = self._supervisor.http_server.API_SECRET_KEY
+                    self._logger.debug(f"Signature verification: expected={calculated_md5}, received={signature}")
                                 
-                        # 按key排序并重新组装参数字符串
-                        sorted_keys = sorted(params.keys())
-                        param_string = '&'.join([f"{k}={params[k]}" for k in sorted_keys])
-                                
-                        # 添加安全密钥并计算MD5
-                        security_string = f"{param_string}&{secret_key}"
-                        calculated_md5 = hashlib.md5(security_string.encode()).hexdigest()
-                                
-                        self._logger.debug(f"Signature verification: expected={calculated_md5}, received={signature}")
-                                
-                        return calculated_md5 == signature
-                    except Exception as e:
-                        self._logger.error(f"Error verifying signature: {e}")
-                        return False
+                    return calculated_md5 == signature
+                except Exception as e:
+                    self._logger.error(f"Error verifying signature: {e}")
+                    return False
             
-                def _parse_post_data(self, post_data):
-                    """解析POST数据并验证签名
+            def _parse_post_data(self, post_data):
+                """解析POST数据并验证签名
                     
-                    Args:
-                        post_data: POST请求数据
+                Args:
+                    post_data: POST请求数据
                         
-                    Returns:
-                        tuple: (params, signature, is_valid)
-                    """
-                    params = {}
-                    signature = None
+                Returns:
+                    tuple: (params, signature, is_valid)
+                """
+                params = {}
+                signature = None
                     
-                    # 按&分割参数
-                    param_pairs = post_data.split('&')
-                    for pair in param_pairs:
-                        if '=' in pair:
-                            key, value = pair.split('=', 1)
-                            if key == '_sig':
-                                signature = value
-                            else:
-                                params[key] = value
-                    
-                    # 验证签名
-                    if not signature:
-                        return params, signature, False
-                    
-                    is_valid = self._verify_signature(params, signature)
-                    return params, signature, is_valid
-                    
-                def _send_error(self, message):
-                    """发送错误响应"""
-                    self.send_response(400)
-                    self.send_header('Content-type', 'application/json')
-                    self.end_headers()
-                    self.wfile.write(json.dumps({"error": message}).encode())
-                    
-                def _handle_file_download(self, query_params):
-                    """处理文件下载请求，增强安全性检查"""
-                    # 获取文件路径参数
-                    if 'file_path' not in query_params:
-                        self._send_error("Missing file_path parameter")
-                        return
-                        
-                    file_path = query_params['file_path'][0]
-                    
-                    # 更严格的路径验证
-                    real_path = os.path.realpath(file_path)  # 解析符号链接并获取绝对路径
-                    
-                    # 检查是否在允许的路径中
-                    allowed = False
-                    for allowed_path in self._supervisor.http_server.ALLOWED_DOWNLOAD_PATHS:
-                        if real_path.startswith(allowed_path):
-                            allowed = True
-                            break
-                            
-                    if not allowed:
-                        self._logger.warning(f"Security: Attempted to access restricted file: {file_path}")
-                        self._send_error("Access denied: File access restricted to allowed directories")
-                        return
-                    
-                    # 检查文件是否存在且是常规文件
-                    if not os.path.isfile(real_path):
-                        self._send_error(f"File not found: {file_path}")
-                        return
-                        
-                    # 检查文件大小限制
-                    try:
-                        file_size = os.path.getsize(real_path)
-                        max_size = 100 * 1024 * 1024  # 100MB限制
-                        
-                        if file_size > max_size:
-                            self._logger.warning(f"File too large for download: {file_path} ({file_size} bytes)")
-                            self._send_error(f"File too large for download. Maximum size is 100MB.")
-                            return
-                            
-                        # 获取文件名
-                        file_name = os.path.basename(real_path)
-                        
-                        # 确定文件的MIME类型
-                        content_type, _ = mimetypes.guess_type(real_path)
-                        if content_type is None:
-                            content_type = 'application/octet-stream'
-                        
-                        # 设置响应头
-                        self.send_response(200)
-                        self.send_header('Content-Type', content_type)
-                        self.send_header('Content-Length', str(file_size))
-                        self.send_header('Content-Disposition', f'attachment; filename="{file_name}"')
-                        self.send_header('Access-Control-Allow-Origin', '*')  # 启用CORS
-                        self.end_headers()
-                        
-                        # 使用线程池处理大文件传输
-                        def send_file_content():
-                            try:
-                                with open(real_path, 'rb') as file:
-                                    chunk_size = 8192  # 8KB 块
-                                    while True:
-                                        chunk = file.read(chunk_size)
-                                        if not chunk:
-                                            break
-                                        self.wfile.write(chunk)
-                                self._logger.info(f"File downloaded successfully: {real_path}")
-                                return True
-                            except Exception as e:
-                                self._logger.error(f"Error sending file {real_path}: {str(e)}")
-                                return False
-                        
-                        # 对于小文件，直接在当前线程中发送
-                        # 对于大文件，使用线程池
-                        if file_size < 1024 * 1024:  # 1MB以下的文件直接发送
-                            send_file_content()
+                # 按&分割参数
+                param_pairs = post_data.split('&')
+                for pair in param_pairs:
+                    if '=' in pair:
+                        key, value = pair.split('=', 1)
+                        if key == '_sig':
+                            signature = value
                         else:
-                            # 对于大文件，使用线程池处理
-                            self._supervisor.http_server.thread_pool.submit(send_file_content)
+                            params[key] = value
+                    
+                # 验证签名
+                if not signature:
+                    return params, signature, False
+                    
+                is_valid = self._verify_signature(params, signature)
+                return params, signature, is_valid
+                    
+            def _send_error(self, message):
+                """发送错误响应"""
+                self.send_response(400)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": message}).encode())
+                    
+            def _handle_file_download(self, query_params):
+                """处理文件下载请求，增强安全性检查"""
+                # 获取文件路径参数
+                if 'file_path' not in query_params:
+                    self._send_error("Missing file_path parameter")
+                    return
                         
-                    except Exception as e:
-                        self._logger.error(f"Error preparing file download {real_path}: {str(e)}")
-                        # 如果还没有发送响应头，则发送错误
+                file_path = query_params['file_path'][0]
+                    
+                # 更严格的路径验证
+                real_path = os.path.realpath(file_path)  # 解析符号链接并获取绝对路径
+                    
+                # 检查是否在允许的路径中
+                allowed = False
+                for allowed_path in self._supervisor.http_server.ALLOWED_DOWNLOAD_PATHS:
+                    if real_path.startswith(allowed_path):
+                        allowed = True
+                        break
+                            
+                if not allowed:
+                    self._logger.warning(f"Security: Attempted to access restricted file: {file_path}")
+                    self._send_error("Access denied: File access restricted to allowed directories")
+                    return
+                    
+                # 检查文件是否存在且是常规文件
+                if not os.path.isfile(real_path):
+                    self._send_error(f"File not found: {file_path}")
+                    return
+                        
+                # 检查文件大小限制
+                try:
+                    file_size = os.path.getsize(real_path)
+                    max_size = 100 * 1024 * 1024  # 100MB限制
+                        
+                    if file_size > max_size:
+                        self._logger.warning(f"File too large for download: {file_path} ({file_size} bytes)")
+                        self._send_error(f"File too large for download. Maximum size is 100MB.")
+                        return
+                            
+                    # 获取文件名
+                    file_name = os.path.basename(real_path)
+                        
+                    # 确定文件的MIME类型
+                    content_type, _ = mimetypes.guess_type(real_path)
+                    if content_type is None:
+                        content_type = 'application/octet-stream'
+                        
+                    # 设置响应头
+                    self.send_response(200)
+                    self.send_header('Content-Type', content_type)
+                    self.send_header('Content-Length', str(file_size))
+                    self.send_header('Content-Disposition', f'attachment; filename="{file_name}"')
+                    self.send_header('Access-Control-Allow-Origin', '*')  # 启用CORS
+                    self.end_headers()
+                        
+                    # 使用线程池处理大文件传输
+                    def send_file_content():
                         try:
-                            self._send_error(f"Error preparing file download: {str(e)}")
-                        except:
-                            pass  # 可能已经发送了部分响应，忽略错误
+                            with open(real_path, 'rb') as file:
+                                chunk_size = 8192  # 8KB 块
+                                while True:
+                                    chunk = file.read(chunk_size)
+                                    if not chunk:
+                                        break
+                                    self.wfile.write(chunk)
+                            self._logger.info(f"File downloaded successfully: {real_path}")
+                            return True
+                        except Exception as e:
+                            self._logger.error(f"Error sending file {real_path}: {str(e)}")
+                            return False
+                        
+                    # 对于小文件，直接在当前线程中发送
+                    # 对于大文件，使用线程池
+                    if file_size < 1024 * 1024:  # 1MB以下的文件直接发送
+                        send_file_content()
+                    else:
+                        # 对于大文件，使用线程池处理
+                        self._supervisor.http_server.thread_pool.submit(send_file_content)
+                        
+                except Exception as e:
+                    self._logger.error(f"Error preparing file download {real_path}: {str(e)}")
+                    # 如果还没有发送响应头，则发送错误
+                    try:
+                        self._send_error(f"Error preparing file download: {str(e)}")
+                    except:
+                        pass  # 可能已经发送了部分响应，忽略错误
         
         return LinuxBoxHTTPHandler
 

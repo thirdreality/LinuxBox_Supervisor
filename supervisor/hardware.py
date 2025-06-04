@@ -24,6 +24,7 @@ class LedState(Enum):
     REBOOT = "reboot"
     POWER_OFF = "power_off"
     FACTORY_RESET = "factory_reset"
+    STARTUP = "startup"
     
     # 用户按键事件状态（次高优先级）
     USER_EVENT_RED = "red"      #  红灯
@@ -33,11 +34,7 @@ class LedState(Enum):
     USER_EVENT_WHITE = "white"   # 白灯
     USER_EVENT_OFF = "off"  
     
-    # 普通状态
-    NORMAL = "normal"
-    NETWORK_ERROR = "network_error"
-    NETWORK_LOST = "network_lost"
-    STARTUP = "startup"
+    # 工作当中的特殊状态
     MQTT_PARING = "mqtt_paring"
     MQTT_PARED = "mqtt_pared"
     MQTT_ERROR = "mqtt_error"
@@ -45,6 +42,11 @@ class LedState(Enum):
     MQTT_ZIGBEE = "mqtt_zigbee"
     MQTT_NETWORK = "mqtt_network"
 
+    # 普通状态
+    NORMAL = "normal"
+    NETWORK_ERROR = "network_error"
+    NETWORK_LOST = "network_lost"
+    
 # -----------------------------------------------------------------------------
 class GpioLed:
     def __init__(self, supervisor=None):
@@ -180,11 +182,16 @@ class GpioLed:
         self.off()  # Turn off LED
         self.logger.info("LED controller stopped")
 
+    def set_led_off_state(self):
+        with self.state_lock:
+            self.current_led_state = LedState.NORMAL
+            self.step_counter = 0
+
     def set_led_state(self, state):
         """Set the current LED state"""
         with self.state_lock:
             # 定义状态优先级
-            system_states = [LedState.REBOOT, LedState.POWER_OFF, LedState.FACTORY_RESET]
+            system_states = [LedState.REBOOT, LedState.POWER_OFF, LedState.FACTORY_RESET, LedState.STARTUP]
             user_event_states = [
                 LedState.USER_EVENT_RED, LedState.USER_EVENT_BLUE, 
                 LedState.USER_EVENT_YELLOW, LedState.USER_EVENT_GREEN, 
@@ -497,6 +504,10 @@ class GpioButton:
             self.cleanup_gpiomon()
             time.sleep(0.5)
         
+        last_press_time = 0
+        click_count = 0
+        double_click_interval = 0.5  # 500ms内判定为双击
+
         while not self.stop_event.is_set():
             current_time = time.time()
                 
@@ -508,7 +519,16 @@ class GpioButton:
                     
                     if result.returncode == 0:
                         # 按键被按下
-                        self.logger.info("Button pressed")
+                        self.logger.info("[Button]: pressed")
+                        # 检查双击
+                        if last_press_time != 0 and (time.time() - last_press_time) < double_click_interval:
+                            click_count += 1
+                        else:
+                            click_count = 1
+                        last_press_time = time.time()
+                        if click_count == 2:
+                            self.logger.info("[Button]: double clicked")
+                            click_count = 0
                         self.button_pressed.set()
                         self.press_start_time = time.time()
                         
@@ -545,7 +565,7 @@ class GpioButton:
                     if result.returncode == 0:
                         # 按键被释放
                         press_duration = time.time() - self.press_start_time
-                        self.logger.info(f"Button released after {press_duration:.2f} seconds")
+                        self.logger.info(f"[Button]: released after {press_duration:.2f} seconds")
                         self.button_pressed.clear()
                         
                         # 根据按键时间执行相应操作

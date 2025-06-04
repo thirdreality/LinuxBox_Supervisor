@@ -211,6 +211,31 @@ def perform_wifi_provision_restore():
 
 # ====== End of merged content ======
 
+def get_ha_zigbee_mode(config_file="/var/lib/homeassistant/homeassistant/.storage/core.config_entries"):
+    """
+    检查 HomeAssistant 当前 Zigbee 工作模式。
+    - 如果有 "domain": "mqtt"，返回 'z2m'
+    - 如果有 "domain": "zha"，返回 'zha'
+    - 都没有则返回 'none'
+    """
+    try:
+        with open(config_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            # 正确获取 entries 列表
+            entries = data.get('data', {}).get('entries', [])
+            has_zha = any(e.get('domain') == 'zha' for e in entries)
+            has_mqtt = any(e.get('domain') == 'mqtt' for e in entries)
+            if has_mqtt:
+                return 'z2m'
+            elif has_zha:
+                return 'zha'
+            else:
+                return 'none'
+    except Exception as e:
+        logging.error(f"读取 HomeAssistant config_entries 失败: {e}")
+        return 'none'
+
+
 def detect_zigbee_mode(config_file="/srv/homeassistant/config/.storage/core.config_entrity"):
     """
     检查配置文件中包含ZHA或MQTT配置。

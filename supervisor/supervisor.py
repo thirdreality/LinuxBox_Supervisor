@@ -324,6 +324,9 @@ class Supervisor:
                         self.gatt_server = SupervisorGattServer(self)
                         self.gatt_server.start()
                         logger.info("GATT server started successfully")
+
+                        self.led.set_led_off_state()
+                        logger.info("[LED]Switch to other mode...")
                         return
                     except Exception as e:
                         if "org.freedesktop.DBus.Error.ServiceUnknown" in str(e):

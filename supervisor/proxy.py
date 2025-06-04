@@ -19,42 +19,6 @@ class SupervisorProxy:
         self.supervisor = supervisor
         self.logger = logging.getLogger("Supervisor")
         self.stop_event = threading.Event()
-        
-    def _is_tmp_mounted(self):
-        return os.system("mountpoint -q /tmp") == 0
-
-    def _ensure_tmp_ready(self, timeout=60, interval=1):
-        start_time = time.time()
-        
-        while not self._is_tmp_mounted():
-            time.sleep(interval)
-
-        successful_check = False
-
-        time.sleep(5)
-
-        while time.time() - start_time < timeout:
-            if self.stop_event.is_set():
-                break
-            try:
-                if os.path.exists("/tmp") and os.access("/tmp", os.W_OK):
-                    fd, temp_path = tempfile.mkstemp(dir='/tmp')
-                    try:
-                        os.write(fd, b'Test Write')
-                        os.fsync(fd)  # Ensure data is flushed to disk
-                        successful_check = True
-                    finally:
-                        os.close(fd)
-                        os.remove(temp_path)
-                    if successful_check:
-                        logging.info("checking /tmp: OK")
-                        return True
-            except OSError as e:
-                logging.error(f"OS error while checking /tmp: {e}")
-            
-            time.sleep(interval)
-
-        return False
 
     def _setup_socket(self):
         # Directly try to create socket, no longer check /tmp directory
@@ -85,6 +49,7 @@ class SupervisorProxy:
 
     def run(self):
         self._setup_socket()
+
         logging.info("Starting local socket monitor...")
         while not self.stop_event.is_set():
             try:
