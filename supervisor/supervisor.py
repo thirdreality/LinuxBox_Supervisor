@@ -6,9 +6,6 @@ import threading
 import time
 import logging
 import signal
-import socket
-import tempfile
-import platform
 import json
 import sys
 import subprocess
@@ -22,10 +19,9 @@ from .ble.gattserver import SupervisorGattServer
 from .http_server import SupervisorHTTPServer  
 from .proxy import SupervisorProxy
 from .cli import SupervisorClient
-from .sysinfo import SystemInfoUpdater, SystemInfo, HomeAssistantInfo, OpenHabInfo
+from .sysinfo import SystemInfoUpdater, SystemInfo, OpenHabInfo
 
-from .utils import utils
-from .utils.utils import OtaStatus
+from .utils import util
 
 # Configure logging
 logging.basicConfig(
@@ -55,7 +51,7 @@ class Supervisor:
         self.stop_event = threading.Event()
         
         self.wifi_status = WifiStatus()
-        self.ota_status = OtaStatus()
+        self.ota_status = util.OtaStatus()
         self.system_info = SystemInfo()
 
         self.wifi_manager = WifiManager()
@@ -82,9 +78,100 @@ class Supervisor:
     def set_ota_command(self, cmd):
         logger.info(f"OTA Command: param={cmd}")
 
+    def start_zigbee_pairing(self):
+        """异步启动zigbee配对流程，根据配置文件自动选择zha或mqtt"""
+        @util.threaded
+        def pairing_task():
+            mode = util.detect_zigbee_mode()
+            if mode == "zha":
+                util.run_zha_pairing()
+            elif mode == "mqtt":
+                util.run_mqtt_pairing()
+            else:
+                logger.warning("未检测到Zigbee配对模式 (zha/mqtt)")
+        pairing_task()
+
+    def start_zigbee_ota(self):
+        """异步启动zigbee OTA刷新流程"""
+        @util.threaded
+        def ota_task():
+            util.run_zigbee_ota_update()
+        ota_task()
+
     def set_zigbee_command(self, cmd):
         logger.info(f"zigbee Command: param={cmd}")
+        cmd_lower = cmd.strip().lower() if isinstance(cmd, str) else ""
+        
+        if cmd_lower == "zha":
+            # 切换到zha模式
+            script = "/srv/homeassistant/bin/home_assistant_zha_enable.py"
+            if not os.path.exists(script):
+                logger.error(f"脚本不存在: {script}")
+                return f"脚本不存在: {script}"
+            try:
+                result = subprocess.run(["python3", script], capture_output=True, check=True, text=True)
+                logger.info(f"ZHA mode enabled: {result.stdout}")
+                return "ZHA模式已启用"
+            except Exception as e:
+                logger.error(f"切换到ZHA模式失败: {e}")
+                return f"切换到ZHA模式失败: {e}"
+        elif cmd_lower == "z2m":
+            # 切换到z2m模式
+            script = "/srv/homeassistant/bin/home_assistant_z2m_enable.py"
+            if not os.path.exists(script):
+                logger.error(f"脚本不存在: {script}")
+                return f"脚本不存在: {script}"
+            try:
+                result = subprocess.run(["python3", script], capture_output=True, check=True, text=True)
+                logger.info(f"Z2M mode enabled: {result.stdout}")
+                return "Zigbee2MQTT模式已启用"
+            except Exception as e:
+                logger.error(f"切换到Zigbee2MQTT模式失败: {e}")
+                return f"切换到Zigbee2MQTT模式失败: {e}"
+        elif cmd_lower == "info":
+            # 查询zigbee信息
+            script = "/srv/homeassistant/bin/home_assistant_zigbee_info.py"
+            if not os.path.exists(script):
+                logger.error(f"脚本不存在: {script}")
+                return f"脚本不存在: {script}"
+            try:
+                result = subprocess.run(["python3", script], capture_output=True, check=True, text=True)
+                logger.info(f"Zigbee info: {result.stdout}")
+                return result.stdout.strip() if result.stdout else "无Zigbee信息输出"
+            except Exception as e:
+                logger.error(f"获取Zigbee信息失败: {e}")
+                return f"获取Zigbee信息失败: {e}"
+        elif cmd_lower == "scan":
+            # zigbee设备开始配对
+            if hasattr(self, "start_zigbee_pairing"):
+                try:
+                    self.start_zigbee_pairing()
+                    logger.info("Zigbee设备开始配对")
+                    return "Zigbee设备开始配对"
+                except Exception as e:
+                    logger.error(f"Zigbee配对启动失败: {e}")
+                    return f"Zigbee配对启动失败: {e}"
+            else:
+                logger.error("未实现start_zigbee_pairing方法")
+                return "未实现设备配对功能"
+        elif cmd_lower == "update":
+            # 强制刷新ota信息
+            if hasattr(self, "ota_server") and hasattr(self.ota_server, "force_update"):
+                try:
+                    self.ota_server.force_update()
+                    logger.info("Zigbee OTA信息已刷新")
+                    return "Zigbee OTA信息已刷新"
+                except Exception as e:
+                    logger.error(f"OTA信息刷新失败: {e}")
+                    return f"OTA信息刷新失败: {e}"
+            else:
+                logger.error("未实现OTA强制刷新功能")
+                return "未实现OTA强制刷新功能"
+        else:
+            logger.warning(f"未知的Zigbee命令: {cmd}")
+            return f"未知的Zigbee命令: {cmd}"
 
+            
     def set_thread_command(self, cmd):
         logger.info(f"thread Command: param={cmd}")
         
@@ -97,6 +184,20 @@ class Supervisor:
             logger.info("Disabling Thread support")
             self.disableThreadSupported()
             return "Thread support disabled"
+
+
+    def set_setting_command(self, cmd):
+        logger.info(f"setting Command: param={cmd}")
+        
+        # 如果命令是enable，则启用Thread支持
+        if cmd.lower() == "backup":
+            logger.info("Backup setting for all modules")
+            #self.enableThreadSupported()
+            return "Setting backup finish"
+        elif cmd.lower() == "restore":
+            logger.info("Restore setting for all modules")
+            #self.disableThreadSupported()
+            return "Setting restore finish"
 
     def get_led_state(self):
         # Get the LED state from the GpioLed instance
@@ -137,7 +238,7 @@ class Supervisor:
             # Start home-assistant in a separate thread
             def start_ha_service():
                 logger.info("Starting home-assistant service...")
-                utils.execute_system_command(["systemctl", "start", "home-assistant"])
+                util.execute_system_command(["systemctl", "start", "home-assistant"])
                 logger.info("home-assistant service started")
                 # Reset the flag
                 self.ha_resume_need = False
@@ -255,18 +356,18 @@ class Supervisor:
 
     def perform_reboot(self):
         logging.info("Performing reboot...")
-        utils.perform_reboot()
+        util.perform_reboot()
 
     def perform_factory_reset(self):
         logging.info("Performing factory reset...")
 
         self.set_led_state(LedState.FACTORY_RESET)
-        utils.perform_factory_reset()
+        util.perform_factory_reset()
 
     def perform_power_off(self):
         logging.info("Performing power off...")
         # 这里可以启动一个脚本
-        utils.perform_power_off()
+        util.perform_power_off()
     
     def perform_wifi_provision_prepare(self):
         logging.info("Performing prepare wifi provision...")
@@ -283,7 +384,7 @@ class Supervisor:
             logging.error(f"Error checking home-assistant status: {e}")
         
         # Start thread to stop home-assistant
-        thread = threading.Thread(target=utils.perform_wifi_provision_prepare)
+        thread = threading.Thread(target=util.perform_wifi_provision_prepare)
         thread.daemon = True
         thread.start()
 
@@ -339,7 +440,7 @@ class Supervisor:
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Supervisor Service")
-    parser.add_argument('command', nargs='?', default='daemon', choices=['daemon', 'led', 'ota', 'zigbee','thread','sysinfo'], help="Command to run: daemon | led <color> | sysinfo")
+    parser.add_argument('command', nargs='?', default='daemon', choices=['daemon', 'led', 'ota', 'zigbee','thread','setting', 'sysinfo'], help="Command to run: daemon | led <color> | sysinfo")
     parser.add_argument('arg', nargs='?', default=None, help="Argument for command (e.g., color for led)")
     args = parser.parse_args()
 
@@ -355,14 +456,26 @@ def main():
             supervisor.cleanup()
     elif args.command == 'led':
         color = args.arg
+        print(f"[Main]input color: {color}")
         if color is None:
             print("Usage: supervisor.py led <color>")
-            print("Support colors: mqtt_paring|mqtt_pared|mqtt_error|mqtt_normal|reboot|power_off|normal|network_error|network_lost|startup")
+            print("Support colors: [mqtt_paring|mqtt_pared|mqtt_error|mqtt_normal|reboot|power_off|normal|network_error|network_lost|startu]")
             sys.exit(1)
         try:
+            # 支持简化颜色名到USER_EVENT映射
+            user_event_map = {
+                'red': LedState.USER_EVENT_RED,
+                'blue': LedState.USER_EVENT_BLUE,
+                'yellow': LedState.USER_EVENT_YELLOW,
+                'green': LedState.USER_EVENT_GREEN,
+                'white': LedState.USER_EVENT_WHITE,
+                'off': LedState.USER_EVENT_OFF
+            }
             led_state = getattr(LedState, color.upper(), None)
             if led_state is None:
-                print(f"Unknown color: {color}, support [mqtt_paring|mqtt_pared|mqtt_error|mqtt_normal|reboot|power_off|normal|network_error|network_lost|startup")
+                led_state = user_event_map.get(color.lower())
+            if led_state is None:
+                print(f"[Main]Unknown color: {color}, support [mqtt_paring|mqtt_pared|mqtt_error|mqtt_normal|reboot|power_off|normal|network_error|network_lost|startup|red|blue|yellow|green|white|off]")
                 sys.exit(1)
             client = SupervisorClient()
             client.send_command("led", color.upper(), "Led command")
@@ -371,8 +484,7 @@ def main():
         except Exception as e:
             print(f"Error setting LED color: {e}")
             sys.exit(1)
-    # Handle command types that follow the same pattern (ota, zigbee, thread)
-    elif args.command in ['ota', 'zigbee', 'thread']:
+    elif args.command in ['ota', 'zigbee', 'thread', 'setting']:
         param = args.arg
         if param is None:
             print(f"Usage: supervisor.py {args.command} <parameter>")

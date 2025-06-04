@@ -19,7 +19,7 @@ import logging
 import mimetypes
 from concurrent.futures import ThreadPoolExecutor
 
-from .utils import utils
+from .utils import util
 from .hardware import LedState
 
 from .sysinfo import get_package_version
@@ -148,12 +148,28 @@ class SupervisorHTTPServer:
                         self._handle_system_info()
                     elif path == "/api/software/info":
                         self._handle_software_info()
-                    elif path == "/api/service/info":
-                        # 检查是否有服务名参数
-                        service_name = query_params.get('service', [None])[0]
-                        self._handle_service_info(service_name)
+                    elif path.startswith("/api/service/info"):
+                        # 支持两种方式获取服务名：
+                        # 1. 通过路径: /api/service/info/服务名
+                        # 2. 通过查询参数: /api/service/info?service=服务名
+                        path_parts = path.split('/')
+                        if len(path_parts) > 4 and path_parts[4]:  # 通过路径获取
+                            service_name = path_parts[4]
+                            self._logger.info(f"Getting service info for {service_name} (via path)")
+                            self._handle_service_info(service_name)
+                        else:  # 尝试通过查询参数获取
+                            service_name = query_params.get('service', [None])[0]
+                            if service_name:
+                                self._logger.info(f"Getting service info for {service_name} (via query param)")
+                                self._handle_service_info(service_name)
+                            else:
+                                # 没有提供服务名，返回所有服务的信息
+                                self._logger.info("No service name provided, returning info for all services")
+                                self._handle_service_info(None)
                     elif path == "/api/firmware/info":
                         self._handle_firmware_info()
+                    elif path == "/api/zigbee/info":
+                        self._handle_zigbee_info()
                     elif path == "/api/file/download":
                         self._handle_file_download(query_params)
                     elif path == "/api/health" or path == "/health":
@@ -204,7 +220,16 @@ class SupervisorHTTPServer:
             
             def _handle_wifi_status(self):
                 """处理GET /api/wifi/status - 等同于WifiStatusCharacteristic"""
-                # 从supervisor获取WiFi状态信息
+                # 默认结果
+                result = {
+                    "connected": False,
+                    "ssid": "",
+                    "ip_address": "",
+                    "mac_address": "",
+                    "error_message": "WiFi information not available"
+                }
+                
+                # 从管理器获取WiFi状态信息
                 if hasattr(self._supervisor, 'wifi_status'):
                     wifi_status = self._supervisor.wifi_status
                     result = {
@@ -214,49 +239,7 @@ class SupervisorHTTPServer:
                         "mac_address": wifi_status.mac_address,
                         "error_message": wifi_status.error_message if hasattr(wifi_status, 'error_message') else ""
                     }
-                else:
-                    # 如果supervisor没有WiFi信息，返回默认值
-                    result = {
-                        "connected": False,
-                        "ssid": "",
-                        "ip_address": "",
-                        "mac_address": "",
-                        "error_message": "WiFi information not available"
-                    }
                 
-                self._set_headers()
-                self.wfile.write(json.dumps(result).encode())
-            
-            def _handle_sys_info(self):
-                """处理GET /api/system/info - 等同于SystemInfoCharacteristic"""
-                result = {}
-                # 从supervisor获取系统信息
-                if hasattr(self._supervisor, 'system_info') and self._supervisor.system_info:
-                    system_info = self._supervisor.system_info
-                    result = {
-                        "Device Model": system_info.model,
-                        "Device Name": system_info.name,
-                        "Build Number": system_info.build_number,
-                        "Zigbee Support": system_info.support_zigbee,
-                        "Thread Support": system_info.support_thread,
-                        "Memory": f"{system_info.memory_size} MB",
-                        "Storage": f"{system_info.storage_space['available']}/{system_info.storage_space['total']}"   
-                    }
-                else:
-                    # 默认系统信息
-                    result = {
-                        "model": "LinuxBox",
-                        "version": "1.0.0",
-                        "name": "3RHUB-Unknown"
-                    }
-                
-                if hasattr(self._supervisor, 'wifi_status'):
-                    wifi_status = self._supervisor.wifi_status
-                    result['WIFI Connected'] = wifi_status.connected
-                    result['SSID'] = wifi_status.ssid
-                    result['Ip Address'] = wifi_status.ip_address
-                    result['Mac Address'] = wifi_status.mac_address
-                    
                 self._set_headers()
                 self.wfile.write(json.dumps(result).encode())
             
@@ -374,8 +357,8 @@ class SupervisorHTTPServer:
                     # 检查服务状态
                     services_status = []
                     for service in config["services"]:
-                        is_running = utils.is_service_running(service)
-                        is_enabled = utils.is_service_enabled(service)
+                        is_running = util.is_service_running(service)
+                        is_enabled = util.is_service_enabled(service)
                         service_info = {
                             "name": service,
                             "running": is_running,
@@ -402,7 +385,49 @@ class SupervisorHTTPServer:
                     "openhab":openhab_result
                 }
                 self._set_headers()
-                self.wfile.write(json.dumps(result).encode())                
+                self.wfile.write(json.dumps(result).encode())
+                
+            def _handle_zigbee_info(self):
+                """处理Zigbee信息请求，返回Zigbee的模式（zha、z2m或none）"""
+                try:
+                    # Home Assistant配置文件路径
+                    config_file = "/var/lib/homeassistant/homeassistant/.storage/core.config_entries"
+                    
+                    # 默认模式为none
+                    zigbee_mode = "none"
+                    
+                    # 检查文件是否存在
+                    if os.path.exists(config_file):
+                        with open(config_file, 'r') as f:
+                            config_data = json.load(f)
+                            
+                        # 检查entries列表
+                        if "data" in config_data and "entries" in config_data["data"]:
+                            entries = config_data["data"]["entries"]
+                            
+                            # 检查是否有mqtt集成（z2m模式）
+                            has_mqtt = any(entry["domain"] == "mqtt" for entry in entries)
+                            
+                            # 检查是否有zha集成
+                            has_zha = any(entry["domain"] == "zha" for entry in entries)
+                            
+                            # 确定Zigbee模式
+                            if has_zha:
+                                zigbee_mode = "zha"
+                            elif has_mqtt:
+                                zigbee_mode = "z2m"
+                    
+                    # 返回结果
+                    result = {"mode": zigbee_mode}
+                    self._set_headers()
+                    self.wfile.write(json.dumps(result).encode())
+                    
+                except Exception as e:
+                    self._logger.error(f"Error getting Zigbee info: {e}")
+                    self.send_response(500)
+                    self.send_header('Content-type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": str(e)}).encode())
             
             def _handle_health_check(self):
                 """处理健康检查请求，返回服务器状态信息"""

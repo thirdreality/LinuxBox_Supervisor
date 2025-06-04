@@ -25,12 +25,12 @@ class LedState(Enum):
     FACTORY_RESET = "factory_reset"
     
     # 用户按键事件状态（次高优先级）
-    USER_EVENT_RED = "user_event_red"      # 15秒以上按键 - 红灯
-    USER_EVENT_BLUE = "user_event_blue"    # 9-15秒按键 - 蓝灯
-    USER_EVENT_YELLOW = "user_event_yellow"  # 6-9秒按键 - 黄灯
-    USER_EVENT_GREEN = "user_event_green"   # 3-6秒按键 - 绿灯
-    USER_EVENT_WHITE = "user_event_white"   # 0-3秒按键 - 白灯
-    USER_EVENT_OFF = "user_event_off"  
+    USER_EVENT_RED = "red"      #  红灯
+    USER_EVENT_BLUE = "blue"    # 蓝灯
+    USER_EVENT_YELLOW = "yellow" # 黄灯
+    USER_EVENT_GREEN = "green"   # 绿灯
+    USER_EVENT_WHITE = "white"   # 白灯
+    USER_EVENT_OFF = "off"  
     
     # 普通状态
     NORMAL = "normal"
@@ -186,9 +186,18 @@ class GpioLed:
             user_event_states = [
                 LedState.USER_EVENT_RED, LedState.USER_EVENT_BLUE, 
                 LedState.USER_EVENT_YELLOW, LedState.USER_EVENT_GREEN, 
-                LedState.USER_EVENT_WHITE,LedState.USER_EVENT_OFF
+                LedState.USER_EVENT_WHITE, LedState.USER_EVENT_OFF
             ]
-            
+            # 明确列出所有MQTT_相关状态
+            mqtt_event_states = [
+                LedState.MQTT_PARING,
+                LedState.MQTT_PARED,
+                LedState.MQTT_ERROR,
+                LedState.MQTT_NORMAL,
+                LedState.MQTT_ZIGBEE,
+                LedState.MQTT_NETWORK
+            ]
+
             # 检查是否需要更新状态
             state_changed = False
             
@@ -199,7 +208,7 @@ class GpioLed:
                     state_changed = True
                     self.logger.info(f"Setting LED to system state: {state}")
                 return
-                
+
             # 次高优先级：用户事件状态
             if state in user_event_states:
                 # 如果当前状态是系统级，则不更新
@@ -207,34 +216,43 @@ class GpioLed:
                     self.logger.info(f"Not updating LED: current system state {self.current_led_state} has higher priority than user event {state}")
                     return
                 # 否则设置为用户事件状态
-                if self.current_led_state != state:
+                if self.current_led_state not in user_event_states or self.current_led_state != state:
                     self.current_led_state = state
                     state_changed = True
                     self.logger.info(f"Setting LED to user event state: {state}")
                     if self.current_led_state == LedState.USER_EVENT_OFF:                    
                         self.current_led_state = LedState.NORMAL
                 return
-                
-            # 如果当前状态是系统级或用户事件，则不更新
-            if self.current_led_state in system_states or self.current_led_state in user_event_states:
-                self.logger.info(f"Not updating LED: current state {self.current_led_state} has higher priority than {state}")
+
+            # MQTT_* 优先级（比普通高，比用户事件低）
+            if state in mqtt_event_states:
+                # 如果当前状态是系统级或用户事件，则不更新
+                if self.current_led_state in system_states or self.current_led_state in user_event_states:
+                    self.logger.info(f"Not updating LED: current state {self.current_led_state} has higher priority than MQTT event {state}")
+                    return
+                # 否则设置为MQTT事件状态
+                if self.current_led_state not in mqtt_event_states or self.current_led_state != state:
+                    self.current_led_state = state
+                    state_changed = True
+                    self.logger.info(f"Setting LED to MQTT event state: {state}")
+                    if self.current_led_state == LedState.MQTT_NORMAL or self.current_led_state == LedState.MQTT_PARED:                    
+                        self.current_led_state = LedState.NORMAL                    
+                return
+
+            # 如果当前状态属于高优先级（系统级、用户事件、MQTT事件），则不更新
+            if (
+                self.current_led_state in system_states
+                or self.current_led_state in user_event_states
+                or self.current_led_state in mqtt_event_states
+            ):
+                self.logger.info(
+                    f"Not updating LED: current state {self.current_led_state} has higher priority than {state}"
+                )
                 return
                 
             # 处理特殊状态转换
             old_state = self.current_led_state
-            if self.current_led_state == LedState.MQTT_PARING and state == LedState.MQTT_PARED:
-                self.current_led_state = LedState.NORMAL
-            elif self.current_led_state == LedState.MQTT_ERROR and state == LedState.MQTT_NORMAL:
-                self.current_led_state = LedState.NORMAL                    
-            elif self.current_led_state == LedState.MQTT_ZIGBEE and state == LedState.MQTT_NORMAL:
-                self.current_led_state = LedState.NORMAL        
-            elif self.current_led_state == LedState.MQTT_ZIGBEE and state == LedState.MQTT_NETWORK:
-                self.current_led_state = LedState.MQTT_NETWORK                        
-            elif self.current_led_state == LedState.MQTT_NETWORK and state == LedState.MQTT_NORMAL:
-                self.current_led_state = LedState.NORMAL
-            else:
-                # 其他普通状态更新
-                self.current_led_state = state
+            self.current_led_state = state
             
             # 检查状态是否发生变化
             if old_state != self.current_led_state:

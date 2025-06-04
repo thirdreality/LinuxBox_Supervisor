@@ -12,8 +12,8 @@ from .hardware import LedState
 
 
 class SupervisorProxy:
-    '''通过本地socket，连接SupervisorClient和Supervisor, 方便本地调试，以及其他模块服用本地功能'''
-    SOCKET_PATH = "/run/led_socket"  # 使用/run目录，这是一个内存文件系统，通常总是可写的
+    '''Connects SupervisorClient and Supervisor via local socket for local debugging and reuse of local functions by other modules.'''
+    SOCKET_PATH = "/run/led_socket"  # Use /run directory, which is a memory filesystem and usually always writable
 
     def __init__(self, supervisor):
         self.supervisor = supervisor
@@ -57,22 +57,22 @@ class SupervisorProxy:
         return False
 
     def _setup_socket(self):
-        # 直接尝试创建socket，不再检查/tmp目录
+        # Directly try to create socket, no longer check /tmp directory
         try:
-            # 确保目录存在
+            # Ensure the directory exists
             socket_dir = os.path.dirname(self.SOCKET_PATH)
             if not os.path.exists(socket_dir):
                 try:
-                    # 尝试创建目录，如果需要的话
+                    # Try to create the directory if needed
                     os.makedirs(socket_dir, exist_ok=True)
                 except Exception as e_dir:
                     self.logger.warning(f"Could not create directory {socket_dir}: {e_dir}")
             
-            # 移除已存在的socket文件
+            # Remove existing socket file if present
             if os.path.exists(self.SOCKET_PATH):
                 os.remove(self.SOCKET_PATH)
                 
-            # 创建和绑定socket
+            # Create and bind the socket
             self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             self.server.bind(self.SOCKET_PATH)
             self.server.listen(1)
@@ -80,7 +80,7 @@ class SupervisorProxy:
             self.logger.info(f"Socket created at {self.SOCKET_PATH}")
         except Exception as e:
             self.logger.error(f"Failed to create socket at {self.SOCKET_PATH}: {e}")
-            # 如果创建失败，直接抛出异常
+            # If creation fails, raise the exception
             raise
 
     def run(self):
@@ -99,56 +99,68 @@ class SupervisorProxy:
     def stop(self):
         self.stop_event.set()
         if hasattr(self, 'proxy_thread') and self.proxy_thread.is_alive():
-            self.proxy_thread.join(timeout=5)  # 等待最多5秒
+            self.proxy_thread.join(timeout=5)  # Wait for up to 5 seconds
             if self.proxy_thread.is_alive():
                 self.logger.warning("Proxy thread did not terminate gracefully")
 
     def handle_request(self, data):
         try:
-            # 解析JSON数据
+            # Parse JSON data
             payload = json.loads(data)
             
-            # 处理LED命令（特殊处理，因为需要转换为LedState枚举）
+            # Handle LED command (special handling, as it needs to convert to LedState enum)
             if "cmd-led" in payload:
                 state_str = payload["cmd-led"].strip().lower()
                 try:
-                    # 将状态字符串转换为LedState枚举
-                    state = LedState(state_str)
-                    # 使用supervisor设置LED状态
-                    if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
-                        self.supervisor.set_led_state(state)
-                        self.logger.info(f"LED state set to {state}")
-                        return "LED state set successfully"
-                    else:
-                        error_msg = "Supervisor not available or missing set_led_state method"
+                    # Support mapping of simple color names to USER_EVENT
+                    user_event_map = {
+                        'red': LedState.USER_EVENT_RED,
+                        'blue': LedState.USER_EVENT_BLUE,
+                        'yellow': LedState.USER_EVENT_YELLOW,
+                        'green': LedState.USER_EVENT_GREEN,
+                        'white': LedState.USER_EVENT_WHITE,
+                        'off': LedState.USER_EVENT_OFF
+                    }
+                    state = None
+                    try:
+                        state = LedState(state_str)
+                    except ValueError:
+                        state = user_event_map.get(state_str)
+                    if state is None:
+                        error_msg = f"Invalid LED state: {state_str}"
                         self.logger.error(error_msg)
                         return error_msg
-                except ValueError:
-                    error_msg = f"Invalid LED state: {state_str}"
+                    # Use supervisor to set LED state
+                    if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
+                        self.supervisor.set_led_state(state)
+                    return "LED state has been set"
+                except Exception as e:
+                    error_msg = f"Error setting LED state: {e}"
                     self.logger.error(error_msg)
                     return error_msg
             
-            # 处理其他命令类型
-            # 定义命令类型和对应的方法映射
+            # Handle other command types
+            # Define command types and corresponding method mapping
             command_mapping = {
                 "cmd-ota": "set_ota_command",
                 "cmd-thread": "set_thread_command",
-                "cmd-zigbee": "set_zigbee_command"
+                "cmd-zigbee": "set_zigbee_command",
+                "cmd-setting": "set_setting_command"
             }
             
-            # 查找匹配的命令类型
+            # Find matching command type
             for cmd_key, method_name in command_mapping.items():
                 if cmd_key in payload:
                     command_str = payload[cmd_key].strip().lower()
                     cmd_type = cmd_key.replace("cmd-", "")
                     
                     try:
-                        # 检查supervisor是否有对应的方法
+                        # Check if supervisor has the corresponding method
                         if self.supervisor and hasattr(self.supervisor, method_name):
-                            # 动态调用对应的方法
+                            # Dynamically call the corresponding method
                             getattr(self.supervisor, method_name)(command_str)
                             self.logger.info(f"{cmd_type.capitalize()} command executed: {command_str}")
-                            return f"{cmd_type} command successfully"
+                            return f"{cmd_type} command successfully executed"
                         else:
                             error_msg = f"Supervisor not available or missing {method_name} method"
                             self.logger.error(error_msg)
@@ -162,10 +174,10 @@ class SupervisorProxy:
                         self.logger.error(error_msg)
                         return error_msg
                     
-                    # 如果找到并处理了命令，就不需要继续检查其他命令类型
+                    # If a command is found and processed, no need to check other command types
                     return
             
-            # 如果没有找到支持的命令
+            # If no supported command is found
             error_msg = "Missing valid command in request. Supported commands: cmd-led, cmd-ota, cmd-thread, cmd-zigbee"
             self.logger.error(error_msg)
             return error_msg
