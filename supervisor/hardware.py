@@ -6,6 +6,7 @@ import os
 import time
 import logging
 import threading
+import signal
 import subprocess
 
 from enum import Enum
@@ -62,6 +63,7 @@ class GpioLed:
         self.timer_thread = None
         # Store the current LED state
         self.current_led_state = LedState.STARTUP
+        self.next_led_state = None
         # Add a lock for thread safety
         self.state_lock = threading.Lock()
         # Cache for last LED values
@@ -207,6 +209,7 @@ class GpioLed:
                     self.current_led_state = state
                     state_changed = True
                     self.logger.info(f"Setting LED to system state: {state}")
+                self.next_led_state = state
                 return
 
             # 次高优先级：用户事件状态
@@ -214,6 +217,7 @@ class GpioLed:
                 # 如果当前状态是系统级，则不更新
                 if self.current_led_state in system_states:
                     self.logger.info(f"Not updating LED: current system state {self.current_led_state} has higher priority than user event {state}")
+                    self.next_led_state = state
                     return
                 # 否则设置为用户事件状态
                 if self.current_led_state not in user_event_states or self.current_led_state != state:
@@ -222,13 +226,17 @@ class GpioLed:
                     self.logger.info(f"Setting LED to user event state: {state}")
                     if self.current_led_state == LedState.USER_EVENT_OFF:                    
                         self.current_led_state = LedState.NORMAL
+                        if self.next_led_state is not None:
+                            self.current_led_state = self.next_led_state
+                            self.next_led_state = None
                 return
 
             # MQTT_* 优先级（比普通高，比用户事件低）
             if state in mqtt_event_states:
                 # 如果当前状态是系统级或用户事件，则不更新
                 if self.current_led_state in system_states or self.current_led_state in user_event_states:
-                    self.logger.info(f"Not updating LED: current state {self.current_led_state} has higher priority than MQTT event {state}")
+                    self.logger.info(f"Not updating LED: current state {self.current_led_state} has higher priority than MQTT event {state}")   
+                    self.next_led_state = state
                     return
                 # 否则设置为MQTT事件状态
                 if self.current_led_state not in mqtt_event_states or self.current_led_state != state:
@@ -236,7 +244,10 @@ class GpioLed:
                     state_changed = True
                     self.logger.info(f"Setting LED to MQTT event state: {state}")
                     if self.current_led_state == LedState.MQTT_NORMAL or self.current_led_state == LedState.MQTT_PARED:                    
-                        self.current_led_state = LedState.NORMAL                    
+                        self.current_led_state = LedState.NORMAL
+                        if self.next_led_state is not None:
+                            self.current_led_state = self.next_led_state
+                            self.next_led_state = None                        
                 return
 
             # 如果当前状态属于高优先级（系统级、用户事件、MQTT事件），则不更新
@@ -248,6 +259,7 @@ class GpioLed:
                 self.logger.info(
                     f"Not updating LED: current state {self.current_led_state} has higher priority than {state}"
                 )
+                self.next_led_state = state
                 return
                 
             # 处理特殊状态转换
@@ -419,7 +431,12 @@ class GpioLed:
 
 # -----------------------------------------------------------------------------
 
+import os
+import signal
+import subprocess
+
 class GpioButton:
+
     def cleanup_gpiomon(self):
         """清理所有gpiomon进程，防止资源残留"""
         try:
@@ -467,7 +484,18 @@ class GpioButton:
         error_count = 0
         last_state_check = 0
 
-        self.cleanup_gpiomon
+        self.logger.info("Check gpiomon procedure...")
+        self.cleanup_gpiomon()
+        time.sleep(0.5)
+        # 检查gpiomon是否还在运行，若有则重复清理并等待
+        while True:
+            result = subprocess.run(["pgrep", "gpiomon"], capture_output=True, text=True)
+            pids = [pid for pid in result.stdout.strip().split("\n") if pid.isdigit()]
+            if not pids:
+                break
+            self.logger.warning(f"gpiomon still running (pids: {pids}), retry cleanup...")
+            self.cleanup_gpiomon()
+            time.sleep(0.5)
         
         while not self.stop_event.is_set():
             current_time = time.time()
