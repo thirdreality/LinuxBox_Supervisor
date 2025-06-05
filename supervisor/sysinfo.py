@@ -44,6 +44,14 @@ class SystemInfo:
         self.hainfo = HomeAssistantInfo()
         self.openhabinfo = OpenHabInfo()
 
+class ProcedureInfo:
+    def __init__(self):
+        self.tag = ""
+        self.finished = False
+        self.success = True
+        self.percent= 0
+
+
 def get_package_version(package_name):
     """查询指定包的版本号"""
     try:

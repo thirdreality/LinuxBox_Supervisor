@@ -102,9 +102,6 @@ class SupervisorOTAServer:
                             # 下载并安装
                             self._download_and_install(download_url, temp_dir, component)
                             
-                            # 如果是 otbr-agent 并且安装成功，启用 Thread 支持
-                            if component == "otbr-agent" and hasattr(self.supervisor, 'enableThreadSupported'):
-                                self.supervisor.enableThreadSupported()
             
             # 处理 zigbee2mqtt 部分
             if "zigbee2mqtt" in version_info:

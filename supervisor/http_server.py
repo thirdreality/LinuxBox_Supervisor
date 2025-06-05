@@ -212,12 +212,12 @@ class SupervisorHTTPServer:
                     self._handle_sys_command(post_data)
                 elif path == "/api/service/control":
                     self._handle_service_command(post_data)
-                elif path == "/api/software/command":
-                    self._handle_software_command(post_data)
-                elif path == "/api/zigbee/command":
-                    self._handle_zigbee_command(post_data)
-                elif path == "/api/setting/command":
-                    self._handle_setting_command(post_data)
+                # elif path == "/api/software/command":
+                #     self._handle_software_command(post_data)
+                # elif path == "/api/zigbee/command":
+                #     self._handle_zigbee_command(post_data)
+                # elif path == "/api/setting/command":
+                #     self._handle_setting_command(post_data)
                 # 处理未知路径
                 else:
                     self.send_response(404)
@@ -317,137 +317,6 @@ class SupervisorHTTPServer:
                 self._set_headers()
                 self.wfile.write(json.dumps(result).encode())
 
-            def _handle_zigbee_command(self, post_data):
-                """切换zigbee模式: action=zha, z2m, disable"""
-                try:
-                    params = json.loads(post_data) if post_data.strip().startswith('{') else dict(urllib.parse.parse_qsl(post_data))
-                    action = params.get('action')
-                    if action not in ('zha', 'z2m', 'disable'):
-                        self._set_headers()
-                        self.wfile.write(json.dumps({"success": False, "error": "Invalid action"}).encode())
-                        return
-                    # 这里只写日志，实际切换逻辑需后续实现
-                    self._logger.info(f"[Zigbee] Switch mode to: {action}")
-                    # TODO: 调用supervisor方法或具体切换实现
-                    self._set_headers()
-                    self.wfile.write(json.dumps({"success": True, "mode": action}).encode())
-                except Exception as e:
-                    self._set_headers()
-                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode())
-
-            def _handle_setting_command(self, post_data):
-                """处理系统备份和恢复: action=backup, restore, restore可带filename"""
-                try:
-                    params = json.loads(post_data) if post_data.strip().startswith('{') else dict(urllib.parse.parse_qsl(post_data))
-                    action = params.get('action')
-                    filename = params.get('filename')
-                    backup_dir = "/lib/thirdreality/backup"
-                    if not os.path.exists(backup_dir):
-                        os.makedirs(backup_dir) 
-
-                    if action == 'backup':
-                        # 这里只写日志，实际备份逻辑需后续实现
-                        self._logger.info("[Setting] Backup requested")
-                        # TODO: 调用supervisor方法或具体实现备份
-                        self._set_headers()
-                        self.wfile.write(json.dumps({"success": True, "msg": "Backup started"}).encode())
-                    elif action == 'restore':
-                        if filename:
-                            self._logger.info(f"[Setting] Restore from {filename}")
-                            # TODO: 调用supervisor方法或具体实现恢复
-                            found = False
-                            if os.path.isfile(os.path.join(backup_dir, filename)):
-                                found = True
-                            if found:
-                                self._set_headers()
-                                self.wfile.write(json.dumps({"success": True, "msg": f"Restore from {filename} started"}).encode())
-                            else:
-                                self._set_headers()
-                                self.wfile.write(json.dumps({"success": False, "error": "Backup file not found"}).encode())
-                        else:
-                            self._set_headers()
-                            self.wfile.write(json.dumps({"success": False, "error": "No filename specified"}).encode())
-                    else:
-                        self._set_headers()
-                        self.wfile.write(json.dumps({"success": False, "error": "Invalid action"}).encode())
-                except Exception as e:
-                    self._set_headers()
-                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode())
-
-            def _handle_service_command(self, post_data):
-                """处理服务控制命令，使用集中的签名验证逻辑"""
-                try:
-                    self._logger.info(f"Processing service command with data: {post_data}")
-                    # 解析POST参数和签名
-                    params, signature, is_valid = self._parse_post_data(post_data)
-                    # 校验action参数
-                    if 'action' not in params:
-                        self._send_error("action is required")
-                        return
-                    # 校验签名
-                    if not signature:
-                        self._send_error("Signature is required")
-                        return
-                    if not is_valid:
-                        self._logger.warning("Security verification failed: Invalid signature")
-                        self.send_response(401)
-                        self.send_header('Content-type', 'application/json')
-                        self.end_headers()
-                        self.wfile.write(json.dumps({"error": "Unauthorized: Invalid signature"}).encode())
-                        return
-                    action = params['action']
-                    service_name = params.get('service')
-
-                    # 如果params中没有service，尝试从param_json中解析
-                    if not service_name and 'param' in params:
-                        try:
-                            param_data_base64 = params['param']
-                            import urllib.parse, base64
-                            param_data_url_decoded = urllib.parse.unquote(param_data_base64)
-                            param_data_json = base64.b64decode(param_data_url_decoded).decode()
-                            self._logger.info(f"param_data (decoded): {param_data_json}")
-                            param_dict = json.loads(param_data_json)
-                            service_name = param_dict.get('service')
-                            self._logger.info(f"service (from param_data): {service_name}")
-                        except Exception as e:
-                            self._logger.error(f"Failed to parse param_data for service: {e}")
-
-                    self._logger.info(f"action: {action}")
-                    self._logger.info(f"service: {service_name}")
-
-                    if not service_name:
-                        self._send_error("Service name is required")
-                        return
-                    result = {"success": False}
-                    try:
-                        if action == "enable":
-                            self._logger.info(f"Enabling service: {service_name}")
-                            process = subprocess.run(["systemctl", "enable", service_name], capture_output=True, text=True)
-                            result = {"success": process.returncode == 0, "stdout": process.stdout, "stderr": process.stderr}
-                        elif action == "disable":
-                            self._logger.info(f"Disabling service: {service_name}")
-                            process = subprocess.run(["systemctl", "disable", service_name], capture_output=True, text=True)
-                            result = {"success": process.returncode == 0, "stdout": process.stdout, "stderr": process.stderr}
-                        elif action == "start":
-                            self._logger.info(f"Starting service: {service_name}")
-                            process = subprocess.run(["systemctl", "start", service_name], capture_output=True, text=True)
-                            result = {"success": process.returncode == 0, "stdout": process.stdout, "stderr": process.stderr}
-                        elif action == "stop":
-                            self._logger.info(f"Stopping service: {service_name}")
-                            process = subprocess.run(["systemctl", "stop", service_name], capture_output=True, text=True)
-                            result = {"success": process.returncode == 0, "stdout": process.stdout, "stderr": process.stderr}
-                        else:
-                            result = {"success": False, "error": f"Unknown action: {action}"}
-                        self._set_headers()
-                        self.wfile.write(json.dumps(result).encode())
-                    except Exception as e:
-                        self._logger.error(f"Error executing systemctl command: {e}")
-                        self._set_headers()
-                        self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode())
-                except Exception as e:
-                    self._logger.error(f"Error in _handle_service_command: {str(e)}")
-                    self._set_headers()
-                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode())
 
             def _handle_browser_info(self):
                 """查询 HomeAssistant/zigbee2mqtt 服务状态并返回可访问URL"""
@@ -790,7 +659,24 @@ class SupervisorHTTPServer:
                     # 签名验证通过，处理命令
                     command = params.get("command", "")
                     self._logger.info(f"Processing validated command: {command}")
-                    
+
+                    action = params.get("action", "")
+
+                    param_data_base64 = params.get("param", "")
+                    param_dict = {}
+                    if param_data_base64:
+                        try:
+                            param_data_url_decoded = urllib.parse.unquote(param_data_base64)
+                            param_data_json = base64.b64decode(param_data_url_decoded).decode()
+                            self._logger.info(f"param_data (decoded): {param_data_json}")
+                            param_dict = json.loads(param_data_json)
+                            action = param_dict.get('action')
+                        except Exception as e:
+                            self._logger.error(f"param解码失败: {e}")
+                            self._set_headers()
+                            self.wfile.write(json.dumps({"success": False, "error": "param decode error"}).encode())
+                            return
+
                     # 处理系统命令
                     if command == "reboot":
                         # 直接调用supervisor的重启方法
@@ -805,13 +691,43 @@ class SupervisorHTTPServer:
                         self._set_headers()
                         self.wfile.write(json.dumps({"success": True}).encode())
                         threading.Timer(3.0, self._supervisor.perform_factory_reset).start()
-                    
-                    elif command == "delete_networks":
-                        # 直接调用supervisor的删除网络配置方法
-                        self._set_headers()
-                        self.wfile.write(json.dumps({"success": True}).encode())
-                        threading.Timer(1.0, self._supervisor.perform_delete_networks).start()                        
-                    
+                                      
+                    elif command == "zigbee":
+                        if action in ("z2m", "zha", "disable"):
+                            # 这里只写日志，实际切换逻辑可后续实现
+                            self._logger.info(f"[Zigbee] Switch mode to: {action}")
+                            self._set_headers()
+                            self.wfile.write(json.dumps({"success": True, "mode": action}).encode())
+                        else:
+                            self._set_headers()
+                            self.wfile.write(json.dumps({"success": False, "error": "Invalid action"}).encode())
+
+                    elif command == "setting":                 
+                        backup_dir = "/lib/thirdreality/backup"
+                        if not os.path.exists(backup_dir):
+                            os.makedirs(backup_dir)
+                        if action == "backup":
+                            self._logger.info("[Setting] Backup requested")
+                            self._set_headers()
+                            self.wfile.write(json.dumps({"success": True, "msg": "Backup started"}).encode())
+                        elif action == "restore":
+                            filename = param_dict.get("file")
+                            if filename:
+                                self._logger.info(f"[Setting] Restore from {filename}")
+                                found = os.path.isfile(os.path.join(backup_dir, filename))
+                                if found:
+                                    self._set_headers()
+                                    self.wfile.write(json.dumps({"success": True, "msg": f"Restore from {filename} started"}).encode())
+                                else:
+                                    self._set_headers()
+                                    self.wfile.write(json.dumps({"success": False, "error": "Backup file not found"}).encode())
+                            else:
+                                self._set_headers()
+                                self.wfile.write(json.dumps({"success": False, "error": "No filename specified"}).encode())
+                        else:
+                            self._set_headers()
+                            self.wfile.write(json.dumps({"success": False, "error": "Invalid action"}).encode())
+
                     elif command == "hello_world":
                         self._set_headers()
                         result = {
@@ -829,25 +745,80 @@ class SupervisorHTTPServer:
                     self._send_error(f"Error: {str(e)}")
                     # 添加详细的异常跟踪
 
-            def _handle_software_command(self, post_data):
-                """处理软件命令请求，使用共用签名验证方法"""
+
+            # def _handle_zigbee_command(self, post_data):
+            #     """切换zigbee模式: action=zha, z2m, disable"""
+            #     try:
+            #         params = json.loads(post_data) if post_data.strip().startswith('{') else dict(urllib.parse.parse_qsl(post_data))
+            #         action = params.get('action')
+            #         if action not in ('zha', 'z2m', 'disable'):
+            #             self._set_headers()
+            #             self.wfile.write(json.dumps({"success": False, "error": "Invalid action"}).encode())
+            #             return
+            #         # 这里只写日志，实际切换逻辑需后续实现
+            #         self._logger.info(f"[Zigbee] Switch mode to: {action}")
+            #         # TODO: 调用supervisor方法或具体切换实现
+            #         self._set_headers()
+            #         self.wfile.write(json.dumps({"success": True, "mode": action}).encode())
+            #     except Exception as e:
+            #         self._set_headers()
+            #         self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode())
+
+
+            # def _handle_setting_command(self, post_data):
+            #     """处理系统备份和恢复: action=backup, restore, restore可带filename"""
+            #     try:
+            #         params = json.loads(post_data) if post_data.strip().startswith('{') else dict(urllib.parse.parse_qsl(post_data))
+            #         action = params.get('action')
+            #         filename = params.get('filename')
+            #         backup_dir = "/lib/thirdreality/backup"
+            #         if not os.path.exists(backup_dir):
+            #             os.makedirs(backup_dir) 
+
+            #         if action == 'backup':
+            #             # 这里只写日志，实际备份逻辑需后续实现
+            #             self._logger.info("[Setting] Backup requested")
+            #             # TODO: 调用supervisor方法或具体实现备份
+            #             self._set_headers()
+            #             self.wfile.write(json.dumps({"success": True, "msg": "Backup started"}).encode())
+            #         elif action == 'restore':
+            #             if filename:
+            #                 self._logger.info(f"[Setting] Restore from {filename}")
+            #                 # TODO: 调用supervisor方法或具体实现恢复
+            #                 found = False
+            #                 if os.path.isfile(os.path.join(backup_dir, filename)):
+            #                     found = True
+            #                 if found:
+            #                     self._set_headers()
+            #                     self.wfile.write(json.dumps({"success": True, "msg": f"Restore from {filename} started"}).encode())
+            #                 else:
+            #                     self._set_headers()
+            #                     self.wfile.write(json.dumps({"success": False, "error": "Backup file not found"}).encode())
+            #             else:
+            #                 self._set_headers()
+            #                 self.wfile.write(json.dumps({"success": False, "error": "No filename specified"}).encode())
+            #         else:
+            #             self._set_headers()
+            #             self.wfile.write(json.dumps({"success": False, "error": "Invalid action"}).encode())
+            #     except Exception as e:
+            #         self._set_headers()
+            #         self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode())
+
+
+            def _handle_service_command(self, post_data):
+                """处理服务控制命令，使用集中的签名验证逻辑"""
                 try:
-                    self._logger.info(f"Processing software command with data: {post_data}")
-                    
-                    # 使用共用方法解析和验证参数
+                    self._logger.info(f"Processing service command with data: {post_data}")
+                    # 解析POST参数和签名
                     params, signature, is_valid = self._parse_post_data(post_data)
-                    
-                    # 验证必须有command参数
-                    if 'command' not in params:
-                        self._send_error("Command is required")
+                    # 校验action参数
+                    if 'action' not in params:
+                        self._send_error("action is required")
                         return
-                    
-                    # 验证签名
+                    # 校验签名
                     if not signature:
                         self._send_error("Signature is required")
                         return
-                    
-                    # 验证签名有效性
                     if not is_valid:
                         self._logger.warning("Security verification failed: Invalid signature")
                         self.send_response(401)
@@ -855,55 +826,135 @@ class SupervisorHTTPServer:
                         self.end_headers()
                         self.wfile.write(json.dumps({"error": "Unauthorized: Invalid signature"}).encode())
                         return
-                    
-                    # 签名验证通过，处理命令
-                    command = params.get("command", "")
-                    self._logger.info(f"Processing validated software command: {command}")
-                    
+                    action = params['action']
+                    service_name = params.get('service')
+
+                    # 如果params中没有service，尝试从param_json中解析
+                    if not service_name and 'param' in params:
+                        try:
+                            param_data_base64 = params['param']
+                            import urllib.parse, base64
+                            param_data_url_decoded = urllib.parse.unquote(param_data_base64)
+                            param_data_json = base64.b64decode(param_data_url_decoded).decode()
+                            self._logger.info(f"param_data (decoded): {param_data_json}")
+                            param_dict = json.loads(param_data_json)
+                            service_name = param_dict.get('service')
+                            self._logger.info(f"service (from param_data): {service_name}")
+                        except Exception as e:
+                            self._logger.error(f"Failed to parse param_data for service: {e}")
+
+                    self._logger.info(f"action: {action}")
+                    self._logger.info(f"service: {service_name}")
+
+                    if not service_name:
+                        self._send_error("Service name is required")
+                        return
+                    result = {"success": False}
                     try:
-                        # 处理软件命令
-                        if command == "update":
-                            # 获取软件包URL
-                            if 'url' not in params:
-                                self._send_error("URL is required for update command")
-                                return
-                            
-                            url = params['url']
-                            
-                            # 验证URL是否有效
-                            if not url.startswith('http'):
-                                self._send_error("Invalid URL format")
-                                return
-                            
-                            # TODO: Implement update logic here
-                            self._set_headers()
-                            self.wfile.write(json.dumps({"success": True, "message": "Update started"}).encode())
-                            
-                        elif command == "install":
-                            self._set_headers()
-                            self.wfile.write(json.dumps({"success": True, "message": "Install command received"}).encode())                    
-                        elif command == "uninstall":
-                            self._set_headers()
-                            self.wfile.write(json.dumps({"success": True, "message": "Uninstall command received"}).encode())
-                        elif command == "enable":
-                            self._set_headers()
-                            self.wfile.write(json.dumps({"success": True, "message": "Enable command received"}).encode())                   
-                        elif command == "disable":
-                            self._set_headers()
-                            self.wfile.write(json.dumps({"success": True, "message": "Disable command received"}).encode())
-                        elif command == "upgrade":
-                            self._set_headers()
-                            self.wfile.write(json.dumps({"success": True, "message": "Upgrade command received"}).encode())
+                        if action == "enable":
+                            self._logger.info(f"Enabling service: {service_name}")
+                            process = subprocess.run(["systemctl", "enable", service_name], capture_output=True, text=True)
+                            result = {"success": process.returncode == 0, "stdout": process.stdout, "stderr": process.stderr}
+                        elif action == "disable":
+                            self._logger.info(f"Disabling service: {service_name}")
+                            process = subprocess.run(["systemctl", "disable", service_name], capture_output=True, text=True)
+                            result = {"success": process.returncode == 0, "stdout": process.stdout, "stderr": process.stderr}
+                        elif action == "start":
+                            self._logger.info(f"Starting service: {service_name}")
+                            process = subprocess.run(["systemctl", "start", service_name], capture_output=True, text=True)
+                            result = {"success": process.returncode == 0, "stdout": process.stdout, "stderr": process.stderr}
+                        elif action == "stop":
+                            self._logger.info(f"Stopping service: {service_name}")
+                            process = subprocess.run(["systemctl", "stop", service_name], capture_output=True, text=True)
+                            result = {"success": process.returncode == 0, "stdout": process.stdout, "stderr": process.stderr}
                         else:
-                            self._send_error(f"Unknown command: {command}")
+                            result = {"success": False, "error": f"Unknown action: {action}"}
+                        self._set_headers()
+                        self.wfile.write(json.dumps(result).encode())
                     except Exception as e:
                         self._logger.error(f"Error executing systemctl command: {e}")
-                        self._logger.error(traceback.format_exc())
-                        self._send_error(f"Error executing command: {str(e)}")                                
+                        self._set_headers()
+                        self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode())
                 except Exception as e:
-                    self._logger.error(f"Error processing software command: {str(e)}")
-                    self._logger.error(traceback.format_exc())
-                    self._send_error(f"Error processing command: {str(e)}")
+                    self._logger.error(f"Error in _handle_service_command: {str(e)}")
+                    self._set_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode())
+
+            # def _handle_software_command(self, post_data):
+            #     """处理软件命令请求，使用共用签名验证方法"""
+            #     try:
+            #         self._logger.info(f"Processing software command with data: {post_data}")
+                    
+            #         # 使用共用方法解析和验证参数
+            #         params, signature, is_valid = self._parse_post_data(post_data)
+                    
+            #         # 验证必须有command参数
+            #         if 'command' not in params:
+            #             self._send_error("Command is required")
+            #             return
+                    
+            #         # 验证签名
+            #         if not signature:
+            #             self._send_error("Signature is required")
+            #             return
+                    
+            #         # 验证签名有效性
+            #         if not is_valid:
+            #             self._logger.warning("Security verification failed: Invalid signature")
+            #             self.send_response(401)
+            #             self.send_header('Content-type', 'application/json')
+            #             self.end_headers()
+            #             self.wfile.write(json.dumps({"error": "Unauthorized: Invalid signature"}).encode())
+            #             return
+                    
+            #         # 签名验证通过，处理命令
+            #         command = params.get("command", "")
+            #         self._logger.info(f"Processing validated software command: {command}")
+                    
+            #         try:
+            #             # 处理软件命令
+            #             if command == "update":
+            #                 # 获取软件包URL
+            #                 if 'url' not in params:
+            #                     self._send_error("URL is required for update command")
+            #                     return
+                            
+            #                 url = params['url']
+                            
+            #                 # 验证URL是否有效
+            #                 if not url.startswith('http'):
+            #                     self._send_error("Invalid URL format")
+            #                     return
+                            
+            #                 # TODO: Implement update logic here
+            #                 self._set_headers()
+            #                 self.wfile.write(json.dumps({"success": True, "message": "Update started"}).encode())
+                            
+            #             elif command == "install":
+            #                 self._set_headers()
+            #                 self.wfile.write(json.dumps({"success": True, "message": "Install command received"}).encode())                    
+            #             elif command == "uninstall":
+            #                 self._set_headers()
+            #                 self.wfile.write(json.dumps({"success": True, "message": "Uninstall command received"}).encode())
+            #             elif command == "enable":
+            #                 self._set_headers()
+            #                 self.wfile.write(json.dumps({"success": True, "message": "Enable command received"}).encode())                   
+            #             elif command == "disable":
+            #                 self._set_headers()
+            #                 self.wfile.write(json.dumps({"success": True, "message": "Disable command received"}).encode())
+            #             elif command == "upgrade":
+            #                 self._set_headers()
+            #                 self.wfile.write(json.dumps({"success": True, "message": "Upgrade command received"}).encode())
+            #             else:
+            #                 self._send_error(f"Unknown command: {command}")
+            #         except Exception as e:
+            #             self._logger.error(f"Error executing systemctl command: {e}")
+            #             self._logger.error(traceback.format_exc())
+            #             self._send_error(f"Error executing command: {str(e)}")                                
+            #     except Exception as e:
+            #         self._logger.error(f"Error processing software command: {str(e)}")
+            #         self._logger.error(traceback.format_exc())
+            #         self._send_error(f"Error processing command: {str(e)}")
 
 
             def _verify_signature(self, params, signature):

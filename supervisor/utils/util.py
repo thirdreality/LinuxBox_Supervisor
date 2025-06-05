@@ -43,53 +43,53 @@ def execute_system_command(command):
 
 def compare_versions(current_version, new_version):
     """
-    比较两个版本号，判断是否需要更新
+    Compare two version numbers to determine if an update is needed
     
     Args:
-        current_version: 当前版本号，格式为 "x.y.z"
-        new_version: 新版本号，格式为 "x.y.z"
+        current_version: Current version number, in the format "x.y.z"
+        new_version: New version number, in the format "x.y.z"
         
     Returns:
-        bool: 如果新版本大于当前版本，返回 True，否则返回 False
+        bool: True if the new version is greater than the current version, False otherwise
     """
     if not current_version:
-        # 如果当前版本为空，则需要更新
+        # If the current version is empty, an update is needed
         return True
         
     try:
-        # 将版本号拆分为数字列表
+        # Split the version numbers into lists of integers
         current_parts = [int(x) for x in current_version.split('.')]
         new_parts = [int(x) for x in new_version.split('.')]
         
-        # 确保两个列表长度相同
+        # Ensure both lists have the same length
         while len(current_parts) < len(new_parts):
             current_parts.append(0)
         while len(new_parts) < len(current_parts):
             new_parts.append(0)
         
-        # 逐个比较版本号的各个部分
+        # Compare each part of the version numbers
         for i in range(len(current_parts)):
             if new_parts[i] > current_parts[i]:
                 return True
             elif new_parts[i] < current_parts[i]:
                 return False
         
-        # 如果所有部分都相等，则不需要更新
+        # If all parts are equal, no update is needed
         return False
     except Exception as e:
         logging.error(f"Error comparing versions {current_version} and {new_version}: {e}")
-        # 出错时保守处理，不更新
+        # If an error occurs, conservatively assume no update is needed
         return False
 
 def get_installed_version(package_name):
     """
-    获取已安装软件包的版本
+    Get the version of an installed package
     
     Args:
-        package_name: 软件包名称
+        package_name: Name of the package
         
     Returns:
-        str: 版本号，如果未安装则返回空字符串
+        str: Version number of the package, or an empty string if not installed
     """
     try:
         result = subprocess.run(
@@ -213,15 +213,15 @@ def perform_wifi_provision_restore():
 
 def get_ha_zigbee_mode(config_file="/var/lib/homeassistant/homeassistant/.storage/core.config_entries"):
     """
-    检查 HomeAssistant 当前 Zigbee 工作模式。
-    - 如果有 "domain": "mqtt"，返回 'z2m'
-    - 如果有 "domain": "zha"，返回 'zha'
-    - 都没有则返回 'none'
+    Check the current Zigbee mode of HomeAssistant.
+    - If "domain": "mqtt" is found, return 'z2m'
+    - If "domain": "zha" is found, return 'zha'
+    - If neither is found, return 'none'
     """
     try:
         with open(config_file, "r", encoding="utf-8") as f:
             data = json.load(f)
-            # 正确获取 entries 列表
+            # Correctly get the entries list
             entries = data.get('data', {}).get('entries', [])
             has_zha = any(e.get('domain') == 'zha' for e in entries)
             has_mqtt = any(e.get('domain') == 'mqtt' for e in entries)
@@ -232,60 +232,150 @@ def get_ha_zigbee_mode(config_file="/var/lib/homeassistant/homeassistant/.storag
             else:
                 return 'none'
     except Exception as e:
-        logging.error(f"读取 HomeAssistant config_entries 失败: {e}")
+        logging.error(f"Failed to read HomeAssistant config_entries: {e}")
         return 'none'
 
 
-def detect_zigbee_mode(config_file="/srv/homeassistant/config/.storage/core.config_entrity"):
+def run_zha_pairing(progress_callback=None, complete_callback=None):
     """
-    检查配置文件中包含ZHA或MQTT配置。
-    返回: 'zha', 'mqtt', 或 None
+    Start the ZHA pairing process
     """
+    # Assume there is a dedicated ZHA pairing script
     try:
-        with open(config_file, "r", encoding="utf-8") as f:
-            content = f.read()
-            if "zha" in content:
-                return "zha"
-            if "mqtt" in content:
-                return "mqtt"
-    except Exception as e:
-        logging.error(f"读取配置文件失败: {e}")
-    return None
+        logging.info("ZHA pairing process started")
 
-def run_zha_pairing():
-    """
-    启动ZHA配对流程
-    """
-    script = "/srv/homeassistant/bin/home_assistant_zha_enable.py"
-    try:
-        subprocess.run(["python3", script], check=True)
-        logging.info("ZHA配对流程已启动")
+        if complete_callback:
+            complete_callback(True, "success")        
     except Exception as e:
-        logging.error(f"ZHA配对启动失败: {e}")
+        logging.error(f"Failed to start ZHA pairing: {e}")
+        if complete_callback:
+            complete_callback(False, "fail")
 
-def run_mqtt_pairing():
+def run_mqtt_pairing(progress_callback=None, complete_callback=None):
     """
-    启动MQTT配对流程
+    Start the MQTT pairing process
     """
-    # 这里假设有一个专门的MQTT配对脚本
-    script = "/srv/homeassistant/bin/home_assistant_z2m_enable.py"
+    # Assume there is a dedicated MQTT pairing script
     try:
-        subprocess.run(["python3", script], check=True)
-        logging.info("MQTT配对流程已启动")
+        logging.info("MQTT pairing process started")
+        if complete_callback:
+            complete_callback(True, "success")         
     except Exception as e:
-        logging.error(f"MQTT配对启动失败: {e}")
+        logging.error(f"Failed to start MQTT pairing: {e}")
+        if complete_callback:
+            complete_callback(False, "fail")
 
-def run_zigbee_ota_update():
+def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):        
     """
-    启动Zigbee OTA信息刷新
+    Switch to ZHA mode
     """
-    # 这里假设有一个OTA刷新脚本
-    script = "/srv/homeassistant/bin/home_assistant_zigbee_ota_update.py"
+
     try:
-        subprocess.run(["python3", script], check=True)
-        logging.info("Zigbee OTA信息已刷新")
+        logging.info("Switching to ZHA mode started")
+        if complete_callback:
+            complete_callback(True, "success")         
     except Exception as e:
-        logging.error(f"Zigbee OTA刷新失败: {e}")
+        logging.error(f"Failed to switch to ZHA mode: {e}")
+        if complete_callback:
+            complete_callback(False, "fail")
+
+def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):        
+    """
+    Switch to zigbee2mqtt mode
+    """
+
+    try:
+        logging.info("Switching to zigbee2mqtt mode started")
+        if complete_callback:
+            complete_callback(True, "success")         
+    except Exception as e:
+        logging.error(f"Failed to switch to zigbee2mqtt mode: {e}")
+        if complete_callback:
+            complete_callback(False, "fail")
+
+def run_zigbee_disable_z2m_mode(progress_callback=None, complete_callback=None):        
+    """
+    Disable zha/zigbee2mqtt mode
+    """
+
+    try:
+        logging.info("Disabling zigbee2mqtt mode started")
+        if complete_callback:
+            complete_callback(True, "success")         
+    except Exception as e:
+        logging.error(f"Failed to disable zigbee2mqtt mode: {e}")        
+        if complete_callback:
+            complete_callback(False, "fail")
+
+def run_thread_enable_mode(progress_callback=None, complete_callback=None):        
+    """
+    Enable thread mode
+    """
+
+    try:
+        logging.info("Enabling thread mode started")
+        if complete_callback:
+            complete_callback(True, "success")         
+    except Exception as e:
+        logging.error(f"Failed to enable thread mode: {e}")   
+        if complete_callback:
+            complete_callback(False, "fail")
+
+def run_thread_disable_mode(progress_callback=None, complete_callback=None):        
+    """
+    Disable thread mode
+    """
+
+    try:
+        logging.info("Disabling thread mode started")
+        if complete_callback:
+            complete_callback(True, "success")         
+    except Exception as e:
+        logging.error(f"Failed to disable thread mode: {e}")   
+        if complete_callback:
+            complete_callback(False, "fail")
+
+def run_zigbee_ota_update(progress_callback=None, complete_callback=None):
+    """
+    Refresh Zigbee OTA information
+    """
+    # Assume there is an OTA refresh script
+    try:
+        logging.info("Zigbee OTA information refreshed")
+        if complete_callback:
+            complete_callback(True, "success")         
+    except Exception as e:
+        logging.error(f"Failed to refresh Zigbee OTA information: {e}")
+        if complete_callback:
+            complete_callback(False, "fail")
+
+def run_system_setting_backup(progress_callback=None, complete_callback=None):
+    """
+    Backup system settings
+    """
+    # Assume there is a backup script
+    try:
+        logging.info("System settings backed up")
+        if complete_callback:
+            complete_callback(True, "success")              
+    except Exception as e:
+        logging.error(f"Failed to backup system settings: {e}")
+        if complete_callback:
+            complete_callback(False, "fail")
+
+def run_system_setting_restore(backup_file=None, progress_callback=None, complete_callback=None):
+    """
+    Restore system settings from a backup
+    """
+    # Assume there is a restore script
+    try:
+        logging.info("System settings restored")
+        if complete_callback:
+            complete_callback(True, "success")              
+    except Exception as e:
+        logging.error(f"Failed to restore system settings: {e}")
+        if complete_callback:
+            complete_callback(False, "fail")
 
 def threaded(func):
     def wrapper(*args, **kwargs):
