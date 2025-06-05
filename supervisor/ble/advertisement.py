@@ -1,3 +1,5 @@
+# maintainer: guoping.liu@3reality.com
+
 import dbus
 import dbus.service
 import logging

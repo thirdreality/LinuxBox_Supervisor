@@ -1,4 +1,7 @@
+# maintainer: guoping.liu@3reality.com
+
 import dbus
+
 try:
   from gi.repository import GObject
 except ImportError:

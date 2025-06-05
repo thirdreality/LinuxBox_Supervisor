@@ -1,4 +1,4 @@
-# maintainer: guoping.liu@thirdreality.com
+# maintainer: guoping.liu@3reality.com
 
 import socket
 import logging
