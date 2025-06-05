@@ -259,29 +259,89 @@ def run_zha_pairing(progress_callback=None, complete_callback=None):
 
 def run_mqtt_pairing(progress_callback=None, complete_callback=None):
     """
-    Start the MQTT pairing process
+    Start the MQTT pairing process by enabling Zigbee joining via zigbee2mqtt.
+    Checks if mosquitto and zigbee2mqtt services are running before attempting to pair.
     """
-    # Assume there is a dedicated MQTT pairing script
+    services_to_check = ["mosquitto.service", "zigbee2mqtt.service"]
+    all_services_active = True
+
+    def _call_progress(percent, message):
+        logging.info(f"zigbee2mqtt Pairing progress ({percent}%): {message}")
+        if progress_callback:
+            progress_callback(percent)
+
     try:
-        logging.info("MQTT pairing process started")
+        _call_progress(0, "Starting zigbee2mqtt pairing process (Zigbee permit join).")
+
+        for i, service in enumerate(services_to_check):
+            progress_step = 10 + (i * 10) # Progress from 10% to 30% for checks
+            _call_progress(progress_step, f"Checking status of {service}.")
+            try:
+                # Use systemctl is-active --quiet to check service status
+                # It exits with 0 if active, non-zero otherwise.
+                subprocess.run(["systemctl", "is-active", "--quiet", service], check=True)
+                logging.info(f"Service {service} is active.")
+            except subprocess.CalledProcessError:
+                logging.warning(f"Service {service} is not active. zigbee2mqtt pairing cannot proceed.")
+                all_services_active = False
+                _call_progress(100, f"Service {service} not active. zigbee2mqtt pairing aborted.")
+                if complete_callback:
+                    complete_callback(False, f"Service {service} not active")
+                return
+            except FileNotFoundError:
+                logging.error(f"systemctl command not found. Cannot check service {service}.")
+                all_services_active = False
+                _call_progress(100, f"systemctl not found. Pairing aborted.")
+                if complete_callback:
+                    complete_callback(False, "systemctl not found")
+                return
+
+        if all_services_active:
+            _call_progress(50, "All required services active. Attempting to enable Zigbee joining.")
+            pairing_command = [
+                "/usr/bin/mosquitto_pub",
+                "-h", "localhost",
+                "-t", "zigbee2mqtt/bridge/request/permit_join",
+                "-m", '{"time": 254}',
+                "-u", "thirdreality",
+                "-P", "thirdreality"
+            ]
+            try:
+                logging.info(f"Executing zigbee2mqtt pairing command: {' '.join(pairing_command)}")
+                result = subprocess.run(pairing_command, check=True, capture_output=True, text=True)
+                logging.info(f"zigbee2mqtt pairing enabled successfully via MQTT: {result.stdout.strip()}")
+                _call_progress(100, "zigbee2mqtt pairing successfully enabled.")
+                if complete_callback:
+                    complete_callback(True, "success - zigbee2mqtt pairing enabled")
+            except subprocess.CalledProcessError as e_cmd:
+                logging.error(f"Failed to execute mosquitto_pub command. RC: {e_cmd.returncode}. Error: {e_cmd.stderr.strip()}")
+                _call_progress(100, f"Failed to enable zigbee2mqtt pairing: {e_cmd.stderr.strip()}")
+                if complete_callback:
+                    complete_callback(False, f"Command failed: {e_cmd.stderr.strip()}")
+            except FileNotFoundError:
+                logging.error("mosquitto_pub command not found. Cannot enable pairing.")
+                _call_progress(100, "mosquitto_pub not found.")
+                if complete_callback:
+                    complete_callback(False, "mosquitto_pub not found")
+        # No else needed here as we return early if services are not active
+
+    except Exception as e:
+        logging.error(f"An unexpected error occurred during MQTT pairing: {e}")
+        _call_progress(100, f"Unexpected error: {e}")
+        if complete_callback:
+            complete_callback(False, f"Unexpected error: {str(e)}")
+
+def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
+    """
+    Switch to zha mode
+    """
+
+    try:
+        logging.info("Switching to zha mode started")
         if complete_callback:
             complete_callback(True, "success")         
     except Exception as e:
-        logging.error(f"Failed to start MQTT pairing: {e}")
-        if complete_callback:
-            complete_callback(False, "fail")
-
-def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):        
-    """
-    Switch to ZHA mode
-    """
-
-    try:
-        logging.info("Switching to ZHA mode started")
-        if complete_callback:
-            complete_callback(True, "success")         
-    except Exception as e:
-        logging.error(f"Failed to switch to ZHA mode: {e}")
+        logging.error(f"Failed to switch to zha mode: {e}")
         if complete_callback:
             complete_callback(False, "fail")
 

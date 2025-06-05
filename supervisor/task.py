@@ -1,16 +1,9 @@
 # maintainer: guoping.liu@3reality.com
 
-import os
-import threading
-import time
 import logging
-import signal
-import json
-import sys
-import subprocess
-
 
 from .utils import util
+from .utils import zigbee_util
 
 
 class TaskManager:
@@ -28,8 +21,8 @@ class TaskManager:
         self.logger.info("Cleaning up Task manager")
 
     def start_zigbee_switch_zha_mode(self):
-        def _internal_progress(percent):
-            self.logger.info(f"zigbee switch to zha: percent={percent}")
+        def _internal_progress(percent, message):
+            self.logger.info(f"zigbee switch to zha: percent={percent}, message='{message}'")
             
         def _internal_complete(success, result):
             if success:
@@ -39,14 +32,14 @@ class TaskManager:
 
         @util.threaded
         def zigbee_switch_zha_task():
-            util.run_zigbee_switch_zha_mode(
+            zigbee_util.run_zigbee_switch_zha_mode(
                 progress_callback=_internal_progress,
                 complete_callback=_internal_complete)
         zigbee_switch_zha_task()
 
     def start_zigbee_switch_z2m_mode(self):
-        def _internal_progress(percent):
-            self.logger.info(f"zigbee switch to z2m: percent={percent}")
+        def _internal_progress(percent, message):
+            self.logger.info(f"zigbee switch to z2m: percent={percent}, message='{message}'")
             
         def _internal_complete(success, result):
             if success:
@@ -56,34 +49,35 @@ class TaskManager:
 
         @util.threaded
         def zigbee_switch_z2m_task():
-            util.run_zigbee_switch_z2m_mode(
+            zigbee_util.run_zigbee_switch_z2m_mode(
                 progress_callback=_internal_progress,
                 complete_callback=_internal_complete)
         zigbee_switch_z2m_task()
 
     def start_zigbee_pairing(self):
-        def _internal_progress(percent):
-            self.logger.info(f"zigbee paring: percent={percent}")
+        def _internal_progress(percent, message):
+            self.logger.info(f"zigbee paring: percent={percent}, message='{message}'")
 
         def _internal_complete(success, result):
             if success:
-                self.ogger.info(f"zigbee paring success: {result}")
+                self.logger.info(f"zigbee paring success: {result}")
             else:
                 self.logger.info(f"zigbee paring failed: {result}")
 
         @util.threaded
         def pairing_task():
             mode = util.get_ha_zigbee_mode()
+            self.logger.info(f"zigbee paring mode: {mode}")
             if mode == "zha":
                 util.run_zha_pairing(
                 progress_callback=_internal_progress,
                 complete_callback=_internal_complete)
-            elif mode == "mqtt":
+            elif mode == "z2m":
                 util.run_mqtt_pairing(
                 progress_callback=_internal_progress,
                 complete_callback=_internal_complete)
             else:
-                self.logger.warning("未检测到Zigbee配对模式 (zha/mqtt)")
+                self.logger.warning("未检测到Zigbee配对模式 (zha/z2m)")
         pairing_task()
 
     def start_zigbee_ota(self):
