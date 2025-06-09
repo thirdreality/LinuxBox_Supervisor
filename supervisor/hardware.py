@@ -43,16 +43,12 @@ class LedState(Enum):
     SYS_FIRMWARE_UPDATING = "sys_firmware_updating"  # 设备升级中: 绿色类呼吸灯效果 (1Hz pulse)
     SYS_EVENT_OFF = "sys_stop" #系统操作完成  
     
-    # 系统级运行态状态
+    # 系统级运行态
     SYS_SYSTEM_CORRUPTED = "sys_system_corrupted"  # 系统未安装（如系统损坏）: 红色慢闪（1Hz）
     SYS_ERROR_CONDITION = "sys_error_condition"  # 异常/错误提示: 红色慢闪（1Hz）
     SYS_OFFLINE = "sys_offline"  # 离线: 黄色快闪（3Hz）    
     SYS_NORMAL_OPERATION = "sys_normal_operation"  # 正常运行: 蓝色常亮
 
-
-
-
-    
 # -----------------------------------------------------------------------------
 class GpioLed:
     def __init__(self, supervisor=None):
@@ -189,8 +185,8 @@ class GpioLed:
             with self.state_lock:
                 state = self.current_led_state
             
-            # 使用process_led_state函数处理LED状态
             # 该函数会处理闪烁效果并在需要时自动触发下一次闪烁
+            self.logger.info(f"led_control_task: Processing LED state {state}")
             self.process_led_state(state)
     
     def start(self):
@@ -207,12 +203,7 @@ class GpioLed:
         self.logger.info("LED controller stopped")
 
     def set_led_off_state(self):
-        # Setting to USER_EVENT_OFF will clear the user event priority.
-        # If a true 'off' is needed, consider clearing all priority tiers or using a specific SYS_OFF state.
-        self.set_led_state(LedState.USER_EVENT_OFF)
-        # self.current_led_state = LedState.USER_EVENT_OFF # Direct assignment might bypass priority logic
-        self.step_counter = 0
-
+        self.set_led_state(LedState.STARTUP_OFF)
 
     def set_led_state(self, state):
         self.logger.debug(f"[GpioLed set_led_state] START - state: {state}")
@@ -391,9 +382,8 @@ class GpioLed:
                     self.logger.debug(f"[GpioLed set_led_state] Timer delay set to {calculated_reset_delay} for state {self.current_led_state}.")
                 else:
                     self.logger.debug(f"[GpioLed set_led_state] No specific timer delay set for state {self.current_led_state} via set_led_state match block.")
-
-                self.logger.debug(f"[GpioLed set_led_state] About to set led_control_event for {self.current_led_state}.")
-                self.led_control_event.set() # Notify the LED control task
+                    self.logger.debug(f"[GpioLed set_led_state] About to set led_control_event for {self.current_led_state}.")
+                    self.led_control_event.set() # Notify the LED control task
                 self.logger.debug(f"[GpioLed set_led_state] led_control_event set.")
             self.logger.debug(f"[GpioLed set_led_state] END - Releasing state_lock")
 
@@ -437,18 +427,17 @@ class GpioLed:
                     state = self.current_led_state
                 
                 # Process the LED state
+                self.logger.info(f"timer_trigger_task: Processing LED state {state}")
                 self.process_led_state(state)
                 self.step_counter += 1 # Increment step counter for next cycle
-
-                #     # 不要在这里直接触发LED控制，而是让当前循环结束后自然进入下一次循环
-                #     # 这样可以避免重复触发和级联效应
                 
                 # Log only when explicitly triggered (not by timer)
                 if triggered:
-                    self.logger.debug("LED control triggered by external event")
+                    self.logger.debug("LED control triggered by timer event")
     
     def process_led_state(self, state):
         """Process the LED state and set appropriate color"""
+        self.logger.info(f"Processing LED state {state}")        
         match state:
             case LedState.REBOOT:
                 self.white() # Solid white during the brief reboot trigger phase
@@ -466,7 +455,6 @@ class GpioLed:
                 self.white()
             case LedState.STARTUP:
                 self.white()
-            # New System States Processing
             case LedState.SYS_WIFI_CONFIG_PENDING: # Yellow slow flash (1Hz)
                 if self.step_counter % 2 == 0:
                     self.yellow()
@@ -633,12 +621,7 @@ class GpioButton:
                             self.timer_thread = threading.Thread(target=self._button_timer_task)
                             self.timer_thread.daemon = True
                             self.timer_thread.start()
-                        
-                        # 触发LED控制并重置计时器
-                        if self.supervisor and hasattr(self.supervisor, 'led') and hasattr(self.supervisor.led, 'trigger_led_control'):
-                            self.supervisor.led.trigger_led_control(0.5)  # 重置为500毫秒
-                            self.logger.debug("Reset LED timer trigger on button press")
-                        
+                                                
                         # 重置错误计数器
                         error_count = 0
                     else:
@@ -666,12 +649,7 @@ class GpioButton:
                         
                         # 根据按键时间执行相应操作
                         self._handle_button_release(press_duration)
-                        
-                        # 触发LED控制并重置计时器
-                        if self.supervisor and hasattr(self.supervisor, 'led') and hasattr(self.supervisor.led, 'trigger_led_control'):
-                            self.supervisor.led.trigger_led_control(0.5)  # 重置为500毫秒
-                            self.logger.debug("Reset LED timer trigger on button release")
-                        
+                                                
                         # 重置错误计数器
                         error_count = 0
                     else:
