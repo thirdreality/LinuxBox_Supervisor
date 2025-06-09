@@ -184,7 +184,7 @@ class NetworkMonitor:
         """处理网络连接建立"""
         with self._lock:
             if self.supervisor:
-                self.supervisor.set_led_state(LedState.NORMAL)
+                self.supervisor.set_led_state(LedState.SYS_NORMAL_OPERATION)
                 
                 if hasattr(self.supervisor, 'wifi_status'):
                     self.supervisor.wifi_status.connected = True

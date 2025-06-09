@@ -56,8 +56,11 @@ class SupervisorProxy:
                 conn, _ = self.server.accept()
                 with conn:
                     data = conn.recv(1024).decode('utf-8')
+                    self.logger.info(f"[Proxy Run] Received data: {data[:100]}") # Log received data (truncated)
                     response = self.handle_request(data)
+                    self.logger.info(f"[Proxy Run] handle_request returned: '{response}'. Sending response.")
                     conn.sendall(response.encode('utf-8'))
+                    self.logger.info(f"[Proxy Run] Response sent.")
             except socket.timeout:
                 continue
 
@@ -69,6 +72,7 @@ class SupervisorProxy:
                 self.logger.warning("Proxy thread did not terminate gracefully")
 
     def handle_request(self, data):
+        self.logger.info(f"[Proxy HandleRequest] Start handling request for data: {data[:100]}") # Log start (truncated)
         try:
             # Parse JSON data
             payload = json.loads(data)
@@ -97,7 +101,9 @@ class SupervisorProxy:
                         return error_msg
                     # Use supervisor to set LED state
                     if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
+                        self.logger.info(f"[Proxy HandleRequest] Calling supervisor.set_led_state with {state}")
                         self.supervisor.set_led_state(state)
+                        self.logger.info(f"[Proxy HandleRequest] supervisor.set_led_state returned")
                     return "LED state has been set"
                 except Exception as e:
                     error_msg = f"Error setting LED state: {e}"

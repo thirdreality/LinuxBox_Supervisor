@@ -300,15 +300,15 @@ class WIFIConfigCharacteristic(Characteristic):
         self._notification_ready = False  # Track if notification is fully ready
         self._notification_lock = threading.Lock()  # Lock for thread safety
         self.service = service
-        # 使用indicate模式替代notify模式，提高通信可靠性
+        # Using notify mode
         Characteristic.__init__(
                 self, self._CHARACTERISTIC_UUID,
-                ["indicate", "write"], service)
+                ["notify", "write"], service)
         self.add_descriptor(WIFIConfigDescriptor(self))
         
-        # 记录使用indicate模式
-        self._use_indicate = True
-        self.logger.info("Using indicate mode for better reliability")
+        # Record using notify mode (was indicate)
+        self._use_indicate = False # Set to False for notify
+        self.logger.info("Using notify mode")
 
     def WriteValue(self, value, options):
         #self.logger.info(f"Write Value: {value}")

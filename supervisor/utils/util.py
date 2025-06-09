@@ -9,6 +9,11 @@ from datetime import datetime
 import glob
 import shutil
 import tempfile
+import time
+import urllib.request
+import urllib.error
+import json # Ensure json is imported, though it likely is already
+from .wifi_utils import get_wlan0_ip
 
 # ====== Merged from utils/utils.py below ======
 """
@@ -16,7 +21,6 @@ System utility functions for performing system operations like reboot, shutdown,
 """
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
 class OtaStatus:
     """
     Class to store WiFi connection status information
@@ -224,38 +228,150 @@ def get_ha_zigbee_mode(config_file="/var/lib/homeassistant/homeassistant/.storag
     - If "domain": "zha" is found, return 'zha'
     - If neither is found, return 'none'
     """
-    try:
-        with open(config_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            # Correctly get the entries list
-            entries = data.get('data', {}).get('entries', [])
-            has_zha = any(e.get('domain') == 'zha' for e in entries)
-            has_mqtt = any(e.get('domain') == 'mqtt' for e in entries)
-            if has_mqtt:
-                return 'z2m'
-            elif has_zha:
-                return 'zha'
+    attempts = 0
+    max_attempts = 3
+    retry_delay_seconds = 0.5
+
+    while attempts < max_attempts:
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                # Correctly get the entries list
+                entries = data.get('data', {}).get('entries', [])
+                has_zha = any(e.get('domain') == 'zha' for e in entries)
+                has_mqtt = any(e.get('domain') == 'mqtt' for e in entries)
+                if has_mqtt:
+                    return 'z2m'
+                elif has_zha:
+                    return 'zha'
+                else:
+                    return 'none'
+        except (FileNotFoundError, IOError, json.JSONDecodeError) as e:
+            attempts += 1
+            logging.warning(f"Attempt {attempts}/{max_attempts} failed to read/parse {config_file}: {e}")
+            if attempts < max_attempts:
+                time.sleep(retry_delay_seconds)
             else:
+                logging.error(f"All {max_attempts} attempts to read/parse {config_file} failed.")
                 return 'none'
-    except Exception as e:
-        logging.error(f"Failed to read HomeAssistant config_entries: {e}")
-        return 'none'
+        except Exception as e: # Catch any other unexpected errors
+            logging.error(f"An unexpected error occurred while reading HomeAssistant config_entries: {e}")
+            return 'none'
+    return 'none' # Should be unreachable if logic is correct, but as a fallback
 
 
 def run_zha_pairing(progress_callback=None, complete_callback=None):
     """
-    Start the ZHA pairing process
+    Start the ZHA pairing process by calling the Home Assistant API.
+    Reads Bearer token from /etc/automation-robot.conf.
     """
-    # Assume there is a dedicated ZHA pairing script
-    try:
-        logging.info("ZHA pairing process started")
+    token_file = "/etc/automation-robot.conf"
+    bearer_token = None
 
+    def _call_progress(percent, message):
+        logging.info(f"ZHA Pairing progress ({percent}%): {message}")
+        if progress_callback:
+            progress_callback(percent, message)
+
+    try:
+        _call_progress(0, "Starting ZHA pairing process.")
+
+        # 1. Read Bearer token
+        _call_progress(10, f"Reading Bearer token from {token_file}.")
+        if not os.path.exists(token_file):
+            err_msg = f"Token file not found: {token_file}"
+            logging.error(err_msg)
+            if complete_callback:
+                complete_callback(False, err_msg)
+            return
+        with open(token_file, "r", encoding="utf-8") as f:
+            bearer_token = f.read().strip()
+        
+        if not bearer_token:
+            err_msg = f"Bearer token is empty in {token_file}."
+            logging.error(err_msg)
+            if complete_callback:
+                complete_callback(False, err_msg)
+            return
+        _call_progress(25, "Bearer token read successfully.")
+
+        # 2. Get local IP address
+        _call_progress(40, "Fetching wlan0 IP address.")
+        local_ip = get_wlan0_ip()
+        if not local_ip:
+            err_msg = "Failed to determine wlan0 IP address."
+            logging.error(err_msg)
+            if complete_callback:
+                complete_callback(False, err_msg)
+            return
+        _call_progress(50, f"wlan0 IP address: {local_ip}.")
+
+        # 3. Prepare and send the request
+        api_url = f"http://{local_ip}:8123/api/services/zha/permit"
+        headers = {
+            "Authorization": f"Bearer {bearer_token}",
+            "Content-Type": "application/json",
+            "User-Agent": "CascadeAI/1.0",
+            "Accept": "*/*",
+            "Host": f"{local_ip}:8123",
+            "Connection": "keep-alive"
+        }
+        data = {
+            "duration": 254
+        }
+
+        _call_progress(60, f"Sending ZHA permit join request to {api_url}.")
+        
+        json_data = json.dumps(data).encode('utf-8')
+        req = urllib.request.Request(api_url, data=json_data, headers=headers, method='POST')
+        
+        try:
+            with urllib.request.urlopen(req, timeout=10) as http_response:
+                response_content = http_response.read().decode('utf-8')
+                status_code = http_response.getcode()
+                _call_progress(90, f"Received response: {status_code}.")
+
+                if 200 <= status_code < 300:
+                    success_msg = f"ZHA pairing successfully initiated. Response: {response_content}"
+                    logging.info(success_msg)
+                    if complete_callback:
+                        complete_callback(True, success_msg)
+                else:
+                    err_msg = f"Failed to initiate ZHA pairing. Status: {status_code}, Response: {response_content}"
+                    logging.error(err_msg)
+                    if complete_callback:
+                        complete_callback(False, err_msg)
+        except urllib.error.HTTPError as e:
+            status_code = e.code
+            response_content = "No content (HTTPError)"
+            try:
+                response_content = e.read().decode('utf-8')
+            except Exception:
+                pass # Keep default error content
+            err_msg = f"ZHA pairing request failed (HTTPError). Status: {status_code}, Response: {response_content}"
+            logging.error(err_msg)
+            _call_progress(95, f"Error: {err_msg}")
+            if complete_callback:
+                complete_callback(False, err_msg)
+        except urllib.error.URLError as e:
+            err_msg = f"ZHA pairing request failed (URLError): {e.reason}"
+            logging.error(err_msg)
+            _call_progress(95, f"Error: {err_msg}")
+            if complete_callback:
+                complete_callback(False, err_msg)
+    except Exception as e: # Catch other exceptions like issues with token file, IP, etc.
+
+        err_msg = f"ZHA pairing request failed: {e}"
+        logging.error(err_msg)
+        _call_progress(95, f"Error: {err_msg}")
         if complete_callback:
-            complete_callback(True, "success")        
+            complete_callback(False, err_msg)
     except Exception as e:
-        logging.error(f"Failed to start ZHA pairing: {e}")
+        err_msg = f"An unexpected error occurred during ZHA pairing: {e}"
+        logging.error(err_msg, exc_info=True)
+        _call_progress(95, f"Error: {err_msg}")
         if complete_callback:
-            complete_callback(False, "fail")
+            complete_callback(False, err_msg)
 
 def run_mqtt_pairing(progress_callback=None, complete_callback=None):
     """
@@ -268,7 +384,7 @@ def run_mqtt_pairing(progress_callback=None, complete_callback=None):
     def _call_progress(percent, message):
         logging.info(f"zigbee2mqtt Pairing progress ({percent}%): {message}")
         if progress_callback:
-            progress_callback(percent)
+            progress_callback(percent, message)
 
     try:
         _call_progress(0, "Starting zigbee2mqtt pairing process (Zigbee permit join).")
@@ -331,47 +447,6 @@ def run_mqtt_pairing(progress_callback=None, complete_callback=None):
         if complete_callback:
             complete_callback(False, f"Unexpected error: {str(e)}")
 
-def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
-    """
-    Switch to zha mode
-    """
-
-    try:
-        logging.info("Switching to zha mode started")
-        if complete_callback:
-            complete_callback(True, "success")         
-    except Exception as e:
-        logging.error(f"Failed to switch to zha mode: {e}")
-        if complete_callback:
-            complete_callback(False, "fail")
-
-def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):        
-    """
-    Switch to zigbee2mqtt mode
-    """
-
-    try:
-        logging.info("Switching to zigbee2mqtt mode started")
-        if complete_callback:
-            complete_callback(True, "success")         
-    except Exception as e:
-        logging.error(f"Failed to switch to zigbee2mqtt mode: {e}")
-        if complete_callback:
-            complete_callback(False, "fail")
-
-def run_zigbee_disable_z2m_mode(progress_callback=None, complete_callback=None):        
-    """
-    Disable zha/zigbee2mqtt mode
-    """
-
-    try:
-        logging.info("Disabling zigbee2mqtt mode started")
-        if complete_callback:
-            complete_callback(True, "success")         
-    except Exception as e:
-        logging.error(f"Failed to disable zigbee2mqtt mode: {e}")        
-        if complete_callback:
-            complete_callback(False, "fail")
 
 def run_thread_enable_mode(progress_callback=None, complete_callback=None):        
     """
@@ -442,7 +517,7 @@ def run_system_setting_backup(progress_callback=None, complete_callback=None):
     def _call_progress(percent, message):
         logging.info(f"Backup progress ({percent}%): {message}")
         if progress_callback:
-            progress_callback(percent)
+            progress_callback(percent, message)
 
     try:
         _call_progress(0, "Starting system settings backup.")
@@ -586,7 +661,7 @@ def run_system_setting_restore(backup_file=None, progress_callback=None, complet
     def _call_progress(percent, message):
         logging.info(f"Restore progress ({percent}%): {message}")
         if progress_callback:
-            progress_callback(percent)
+            progress_callback(percent, message)
 
     try:
         _call_progress(0, "Starting system settings restore.")

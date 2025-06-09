@@ -6,7 +6,7 @@ import json
 
 class SupervisorClient:
     SOCKET_PATH = "/run/led_socket"
-    TIMEOUT = 0.5
+    TIMEOUT = 2.0  # Increased from 0.5s to handle potential delays
     
     def send_command(self, cmd_type, value, error_prefix="command"):
         """

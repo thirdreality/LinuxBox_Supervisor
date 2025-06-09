@@ -306,7 +306,7 @@ class Supervisor:
                             logger.warning(f"DBus service not ready yet, retrying in {retry_delay} seconds (attempt {attempt+1}/{max_retries})")
                             time.sleep(retry_delay)
                         else:
-                            logger.error(f"Failed to start GATT server: {e}")
+                            logger.error(f"Failed to start GATT server: {e} (Type: {type(e)}, Args: {e.args})")
                             return
                 
                 logger.error(f"Failed to start GATT server after {max_retries} attempts")
