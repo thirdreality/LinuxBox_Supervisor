@@ -183,6 +183,78 @@ class Supervisor:
                 logger.error(f"Setting restore fail: {e}")
                 return f"Setting restore fail: {e}"
 
+    def start_zigbee_pairing(self):
+        """Starts the Zigbee pairing process via the TaskManager."""
+        try:
+            self.task_manager.start_zigbee_pairing()
+            logger.info("Zigbee pairing process started by button.")
+            return "Zigbee pairing process started."
+        except Exception as e:
+            logger.error(f"Failed to start Zigbee pairing by button: {e}")
+            return f"Failed to start Zigbee pairing: {e}"
+
+    def start_zigbee_switch_zha(self) -> bool:
+        """
+        Starts the process of switching the Zigbee integration to ZHA mode.
+
+        Returns:
+            bool: True if the process started successfully, False otherwise.
+        """
+        try:
+            self.task_manager.start_zigbee_switch_zha_mode()
+            logger.info("Successfully started Zigbee switch to ZHA mode.")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to start Zigbee switch to ZHA mode: {e}")
+            return False
+
+    def start_zigbee_switch_z2m(self) -> bool:
+        """
+        Starts the process of switching the Zigbee integration to Z2M mode.
+
+        Returns:
+            bool: True if the process started successfully, False otherwise.
+        """
+        try:
+            self.task_manager.start_zigbee_switch_z2m_mode()
+            logger.info("Successfully started Zigbee switch to Z2M mode.")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to start Zigbee switch to Z2M mode: {e}")
+            return False
+
+    def start_setting_backup(self) -> bool:
+        """
+        Starts the setting backup process.
+
+        Returns:
+            bool: True if the backup process started successfully, False otherwise.
+        """
+        try:
+            self.task_manager.start_setting_backup()
+            logger.info("Setting backup process started successfully.")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to start setting backup process: {e}")
+            return False
+
+    def start_setting_restore(self) -> bool:
+        """
+        Starts the setting restore process.
+
+        Returns:
+            bool: True if the restore process started successfully, False otherwise.
+        """
+        try:
+            self.task_manager.start_setting_restore()
+            logger.info("Setting restore process started successfully.")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to start setting restore process: {e}")
+            return False
+
+
+
     def get_led_state(self):
         # Get the LED state from the GpioLed instance
         return self.led.get_led_state()

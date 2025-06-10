@@ -550,7 +550,6 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
     try:
         _call_progress(5, "Fetching Zigbee device info...")
         try:
-            # Assuming _get_info_from_zha_conf is defined elsewhere and raises ConfigError or returns (None, None)
             ieee, radio_type = _get_info_from_zha_conf()
             if not ieee:
                 logging.error("Could not find Device IEEE in zha.conf. Aborting switch to ZHA mode.")
@@ -568,18 +567,23 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
             if complete_callback:
                 complete_callback(False, f"unexpected_error_fetch_info: {e}")
             return
-        
+
         _call_progress(10, "Checking Home Assistant service status...")
         try:
-            status_check = subprocess.run(["systemctl", "is-active", "home-assistant.service"], capture_output=True, text=True, check=False)
+            status_check = subprocess.run(["systemctl", "is-active", "home-assistant.service"], capture_output=True, text=True, check=False, timeout=15)
             if status_check.stdout.strip() == "active":
                 ha_service_was_running = True
                 logging.info("Home Assistant service is running. Stopping it temporarily.")
                 _call_progress(15, "Stopping Home Assistant service...")
-                subprocess.run(["systemctl", "stop", "home-assistant.service"], check=True)
+                subprocess.run(["systemctl", "stop", "home-assistant.service"], check=True, timeout=60)
                 logging.info("Home Assistant service stopped.")
             else:
                 logging.info("Home Assistant service is not running or status unknown.")
+        except subprocess.TimeoutExpired as e:
+            logging.error(f"Timeout checking or stopping Home Assistant service: {e}")
+            if complete_callback:
+                complete_callback(False, f"ha_service_timeout: {e}")
+            return
         except subprocess.CalledProcessError as e:
             logging.error(f"Failed to stop Home Assistant service: {e}")
             if complete_callback:
@@ -592,7 +596,6 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
             return
 
         _call_progress(20, "Updating ZHA config entries...")
-        # Assuming _update_zha_config_entries, _update_zha_device_registry, _update_zha_entity_registry are defined
         mqtt_entry_id, zha_entry_id = _update_zha_config_entries(radio_type)
         logging.info(f"ZHA config entries updated. MQTT Entry ID: {mqtt_entry_id}, ZHA Entry ID: {zha_entry_id}")
 
@@ -610,24 +613,24 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
         for service_file, service_name in services_to_manage:
             try:
                 logging.info(f"Stopping {service_name} ({service_file})...")
-                subprocess.run(["systemctl", "stop", service_file], check=False) # Don't fail if already stopped or non-existent
+                subprocess.run(["systemctl", "stop", service_file], check=False, timeout=60)
                 logging.info(f"Disabling {service_name} ({service_file})...")
-                subprocess.run(["systemctl", "disable", service_file], check=False) # Don't fail if non-existent
+                subprocess.run(["systemctl", "disable", service_file], check=False, timeout=60)
                 logging.info(f"{service_name} ({service_file}) stopped and disabled.")
-            except subprocess.CalledProcessError as e:
-                # This might happen if disable fails for some reason other than not existing
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
                 logging.warning(f"Error managing {service_name} ({service_file}): {e}. Continuing...")
-                all_services_managed_successfully = False # Mark that not all services were perfectly managed
+                all_services_managed_successfully = False
             except FileNotFoundError:
                 logging.warning(f"systemctl not found. Cannot manage {service_name} ({service_file}).")
                 all_services_managed_successfully = False
-                break # If systemctl is gone, no point trying further services
+                break
         
         if not all_services_managed_successfully:
             logging.warning("One or more conflicting services could not be fully managed. Check logs.")
 
         _call_progress(90, "Cleaning up Zigbee2MQTT data and resetting configuration...")
         z2m_data_path = "/opt/zigbee2mqtt/data"
+        # ... (rest of the file operations remain the same) ...
         files_to_delete = [
             os.path.join(z2m_data_path, "database.db"),
             os.path.join(z2m_data_path, "state.json")
@@ -657,7 +660,6 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
             logging.warning(f"Error deleting Zigbee2MQTT directory {dir_to_delete}: {e}")
 
         try:
-            # Ensure the /opt/zigbee2mqtt/data directory exists before copying the config file
             if not os.path.exists(z2m_data_path):
                 os.makedirs(z2m_data_path, exist_ok=True)
                 logging.info(f"Created Zigbee2MQTT data directory: {z2m_data_path} as it did not exist.")
@@ -682,6 +684,11 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
         _call_progress(100, f"Failed: Configuration error - {e}")
         if complete_callback:
             complete_callback(False, f"config_error: {e}")
+    except subprocess.TimeoutExpired as e:
+        logging.error(f"A system command timed out during ZHA mode switch: {e}")
+        _call_progress(100, f"Failed: System command timeout - {e}")
+        if complete_callback:
+            complete_callback(False, f"system_command_timeout: {e}")
     except subprocess.CalledProcessError as e:
         logging.error(f"System command failed during ZHA mode switch: {e.cmd} returned {e.returncode}")
         _call_progress(100, f"Failed: System command error - {e}")
@@ -696,9 +703,9 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
         if ha_service_was_running:
             logging.info("Restoring Home Assistant service state as it was running before...")
             try:
-                subprocess.run(["systemctl", "start", "home-assistant.service"], check=True)
+                subprocess.run(["systemctl", "start", "home-assistant.service"], check=True, timeout=60)
                 logging.info("Home Assistant service started successfully.")
-            except subprocess.CalledProcessError as e:
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
                 logging.error(f"CRITICAL: Failed to restart Home Assistant service: {e}. Manual intervention may be required.")
             except FileNotFoundError:
                 logging.error("CRITICAL: systemctl not found. Cannot restart Home Assistant service. Manual intervention may be required.")

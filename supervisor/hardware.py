@@ -717,6 +717,7 @@ class GpioButton:
             if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
                 self.supervisor.set_led_state(LedState.USER_EVENT_OFF)
             if self.supervisor and hasattr(self.supervisor, 'start_zigbee_pairing'):
+                self.logger.info("Zigbee pairing action triggered: start_zigbee_pairing")
                 self.supervisor.start_zigbee_pairing()
         else:
             # 0-5秒：恢复正常状态

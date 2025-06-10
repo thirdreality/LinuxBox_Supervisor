@@ -179,6 +179,23 @@ class SupervisorHTTPServer:
                     elif path == "/api/health" or path == "/health":
                         # 处理健康检查请求
                         self._handle_health_check()
+                    elif path.startswith('/api/task/info'):
+                        query_components = parse_qs(urlparse(self.path).query)
+                        task_type = query_components.get("task", [None])[0]
+
+                        if not task_type:
+                            self._set_headers(status_code=400)
+                            self.wfile.write(json.dumps({"success": False, "error": "Missing 'task' query parameter."}).encode())
+                            return
+
+                        if task_type not in ["zigbee", "thread", "setting"]:
+                            self._set_headers(status_code=400)
+                            self.wfile.write(json.dumps({"success": False, "error": f"Invalid task type: {task_type}"}).encode())
+                            return
+                        
+                        task_info = self._supervisor.task_manager.get_task_info(task_type)
+                        self._set_headers()
+                        self.wfile.write(json.dumps({"success": True, "task": task_type, "data": task_info}).encode())
                     else:
                         # 返回404 Not Found
                         self.send_response(404)
@@ -705,40 +722,74 @@ class SupervisorHTTPServer:
                         self.wfile.write(json.dumps({"success": success, "message": "Wi-Fi provisioning stop initiated."}).encode())
 
                     elif command == "zigbee":
-                        if action in ("z2m", "zha", "disable"):
-                            # 这里只写日志，实际切换逻辑可后续实现
-                            self._logger.info(f"[Zigbee] Switch mode to: {action}")
-                            self._set_headers()
-                            self.wfile.write(json.dumps({"success": True, "mode": action}).encode())
+                        if action == "zha":
+                            self._logger.info("[Zigbee] Attempting to switch mode to: zha")
+                            if self._supervisor.start_zigbee_switch_zha():
+                                self._set_headers()
+                                self.wfile.write(json.dumps({"success": True, "msg": "Successfully started switch to ZHA mode."}).encode())
+                            else:
+                                self._set_headers(status_code=500)
+                                self.wfile.write(json.dumps({"success": False, "error": "Failed to start switch to ZHA mode."}).encode())
+                        elif action == "z2m":
+                            self._logger.info(f"[Zigbee] Attempting to switch mode to: z2m")
+                            if self._supervisor.start_zigbee_switch_z2m():
+                                self._set_headers()
+                                self.wfile.write(json.dumps({"success": True, "msg": "Successfully started switch to Z2M mode."}).encode())
+                            else:
+                                self._set_headers(status_code=500)
+                                self.wfile.write(json.dumps({"success": False, "error": "Failed to start switch to Z2M mode."}).encode())
+                        elif action == "disable":
+                            self._logger.warning("[Zigbee] 'disable' action is not yet implemented.")
+                            self._set_headers(status_code=400)
+                            self.wfile.write(json.dumps({"success": False, "error": "The 'disable' action is not yet implemented."}).encode())
                         else:
-                            self._set_headers()
-                            self.wfile.write(json.dumps({"success": False, "error": "Invalid action"}).encode())
+                            self._set_headers(status_code=400)
+                            self.wfile.write(json.dumps({"success": False, "error": "Invalid action for zigbee command."}).encode())
 
-                    elif command == "setting":                 
+                    elif command == "setting":
                         backup_dir = "/lib/thirdreality/backup"
                         if not os.path.exists(backup_dir):
                             os.makedirs(backup_dir)
+
                         if action == "backup":
                             self._logger.info("[Setting] Backup requested")
-                            self._set_headers()
-                            self.wfile.write(json.dumps({"success": True, "msg": "Backup started"}).encode())
+                            if self._supervisor.start_setting_backup():
+                                self._set_headers()
+                                self.wfile.write(json.dumps({"success": True, "msg": "Backup process started successfully."}).encode())
+                            else:
+                                self._set_headers(status_code=500)
+                                self.wfile.write(json.dumps({"success": False, "error": "Failed to start backup process."}).encode())
+
                         elif action == "restore":
                             filename = param_dict.get("file")
-                            if filename:
-                                self._logger.info(f"[Setting] Restore from {filename}")
-                                found = os.path.isfile(os.path.join(backup_dir, filename))
-                                if found:
+                            if not filename:
+                                if self._supervisor.start_setting_restore():
                                     self._set_headers()
-                                    self.wfile.write(json.dumps({"success": True, "msg": f"Restore from {filename} started"}).encode())
+                                    self.wfile.write(json.dumps({"success": True, "msg": "Restore process started successfully."}).encode())
                                 else:
-                                    self._set_headers()
-                                    self.wfile.write(json.dumps({"success": False, "error": "Backup file not found"}).encode())
-                            else:
+                                    self._set_headers(status_code=500)
+                                    self.wfile.write(json.dumps({"success": False, "error": "Failed to start restore process."}).encode())
+                                return
+
+                            backup_file_path = os.path.join(backup_dir, filename)
+                            if not os.path.isfile(backup_file_path):
+                                self._set_headers(status_code=404)
+                                self.wfile.write(json.dumps({"success": False, "error": "Backup file not found."}).encode())
+                                return
+                            
+                            self._logger.info(f"[Setting] Restore from {filename} requested")
+                            # NOTE: Assuming start_setting_restore knows which file to use,
+                            # as its signature in supervisor.py takes no arguments.
+                            if self._supervisor.start_setting_restore():
                                 self._set_headers()
-                                self.wfile.write(json.dumps({"success": False, "error": "No filename specified"}).encode())
+                                self.wfile.write(json.dumps({"success": True, "msg": f"Restore from {filename} started successfully."}).encode())
+                            else:
+                                self._set_headers(status_code=500)
+                                self.wfile.write(json.dumps({"success": False, "error": "Failed to start restore process."}).encode())
+                        
                         else:
-                            self._set_headers()
-                            self.wfile.write(json.dumps({"success": False, "error": "Invalid action"}).encode())
+                            self._set_headers(status_code=400)
+                            self.wfile.write(json.dumps({"success": False, "error": "Invalid action for setting command."}).encode())
 
                     elif command == "hello_world":
                         self._set_headers()
