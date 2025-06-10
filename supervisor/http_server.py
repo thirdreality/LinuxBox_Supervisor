@@ -524,8 +524,8 @@ class SupervisorHTTPServer:
             def _handle_zigbee_info(self):
                 """处理Zigbee信息请求，返回Zigbee的模式（zha、z2m或none）"""
                 try:
-                    import supervisor.utils.util as util
-                    zigbee_mode = util.get_ha_zigbee_mode()
+                    from supervisor.utils.zigbee_util import get_ha_zigbee_mode
+                    zigbee_mode = get_ha_zigbee_mode()
                     result = {"zigbee": zigbee_mode}
                     self._set_headers()
                     self.wfile.write(json.dumps(result).encode())

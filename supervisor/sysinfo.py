@@ -199,6 +199,14 @@ class SystemInfoUpdater:
             
             # 获取设备内存大小
             sys_info.memory_size = get_memory_size()
+
+            # 检查 otbr-agent 服务状态
+            from supervisor.utils import util
+            if util.is_service_running("otbr-agent.service"):
+                sys_info.support_thread = True
+            else:
+                sys_info.support_thread = False
+            self.logger.info(f"Thread support (otbr-agent.service running): {sys_info.support_thread}")
             self.logger.info(f"Device memory size: {sys_info.memory_size} MB")
             
             # 获取存储空间信息

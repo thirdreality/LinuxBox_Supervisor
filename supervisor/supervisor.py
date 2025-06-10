@@ -23,6 +23,7 @@ from .http_server import SupervisorHTTPServer
 from .proxy import SupervisorProxy
 from .cli import SupervisorClient
 from .sysinfo import SystemInfoUpdater, SystemInfo, OpenHabInfo
+from supervisor.utils.zigbee_util import get_ha_zigbee_mode
 
 from .utils import util
 
@@ -108,7 +109,7 @@ class Supervisor:
                 return f"Zigbee配对启动失败: {e}"
         elif cmd_lower == "info":
             # 查询zigbee信息
-            util.get_ha_zigbee_mode()
+            zigbee_util.get_ha_zigbee_mode()
         elif cmd_lower == "scan":
             try:
                 self.task_manager.start_zigbee_pairing()
