@@ -42,7 +42,7 @@ class LedState(Enum):
     SYS_WIFI_CONFIG_SUCCESS = "sys_wifi_config_success"  # 配网成功: 黄色常亮1秒后转正常运行
     SYS_DEVICE_PAIRING = "sys_device_pairing"  # 添加子设备（扫描中）: 绿色慢闪（1Hz）
     SYS_FIRMWARE_UPDATING = "sys_firmware_updating"  # 设备升级中: 绿色类呼吸灯效果 (1Hz pulse)
-    SYS_EVENT_OFF = "sys_stop" #系统操作完成
+    SYS_EVENT_OFF = "sys_event_off" #系统操作完成
 
     # 系统级运行态
     SYS_SYSTEM_CORRUPTED = "sys_system_corrupted"  # 系统未安装（如系统损坏）: 红色慢闪（0.5Hz）
@@ -440,6 +440,7 @@ class GpioLed:
                 self.yellow()
                 if self.step_counter >= 1: # After 1 second (2 steps of 0.5s timer_delay)
                     self.logger.info("WIFI_CONFIG_SUCCESS: Display time ended, transitioning to NORMAL_OPERATION.")
+                    self.set_led_state(LedState.SYS_EVENT_OFF)
                     self.set_led_state(LedState.SYS_NORMAL_OPERATION)
             case LedState.SYS_DEVICE_PAIRING: # Green slow flash (1Hz)
                 if self.step_counter % 2 == 0:

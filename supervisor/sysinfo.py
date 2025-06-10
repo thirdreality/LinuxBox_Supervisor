@@ -1,13 +1,41 @@
 # maintainer: guoping.liu@3reality.com
 
+import os
 import logging
 import threading
 import subprocess
 import time
-import os
 import re
+from .const import DEVICE_MODEL_NAME, DEVICE_BUILD_NUMBER
 
-from .const import DEVICE_MODEL_NAME,DEVICE_BUILD_NUMBER
+T3R_RELEASE_FILE = "/etc/t3r-release"
+
+def _get_t3r_release_info():
+    """Parses the /etc/t3r-release file and returns a dictionary."""
+    release_info = {}
+    if not os.path.exists(T3R_RELEASE_FILE):
+        logging.warning(f"Release file not found: {T3R_RELEASE_FILE}")
+        return release_info
+    
+    try:
+        with open(T3R_RELEASE_FILE, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                try:
+                    key, value = line.split('=', 1)
+                    if value.startswith('"') and value.endswith('"'):
+                        value = value[1:-1]
+                    elif value.startswith("'") and value.endswith("'"):
+                        value = value[1:-1]
+                    release_info[key.strip()] = value.strip()
+                except ValueError:
+                    logging.warning(f"Skipping malformed line in {T3R_RELEASE_FILE}: {line}")
+    except IOError as e:
+        logging.error(f"Error reading {T3R_RELEASE_FILE}: {e}")
+        
+    return release_info
 
 class HomeAssistantInfo:
     def __init__(self):
@@ -33,8 +61,11 @@ class OpenHabInfo:
 
 class SystemInfo:
     def __init__(self):
-        self.model = DEVICE_MODEL_NAME
+        release_info = _get_t3r_release_info()
+
+        self.model = release_info.get("PRETTY_NAME", DEVICE_MODEL_NAME)
         self.build_number = DEVICE_BUILD_NUMBER
+        self.version = release_info.get("VERSION", "v0.0.1")
         self.name = "3RHUB-XXXX"
         self.support_zigbee=True
         self.support_thread=False        
