@@ -189,10 +189,10 @@ class Supervisor:
         try:
             self.task_manager.start_zigbee_pairing()
             logger.info("Zigbee pairing process started by button.")
-            return "Zigbee pairing process started."
+            return True
         except Exception as e:
             logger.error(f"Failed to start Zigbee pairing by button: {e}")
-            return f"Failed to start Zigbee pairing: {e}"
+            return False
 
     def start_zigbee_switch_zha(self) -> bool:
         """

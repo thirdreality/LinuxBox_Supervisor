@@ -722,7 +722,15 @@ class SupervisorHTTPServer:
                         self.wfile.write(json.dumps({"success": success, "message": "Wi-Fi provisioning stop initiated."}).encode())
 
                     elif command == "zigbee":
-                        if action == "zha":
+                        if action == "scan":
+                            self._logger.info("[Zigbee] Attempting to start pairing scan")
+                            if self._supervisor.start_zigbee_pairing():
+                                self._set_headers()
+                                self.wfile.write(json.dumps({"success": True, "msg": "Zigbee pairing process started."}).encode())
+                            else:
+                                self._set_headers(status_code=500)
+                                self.wfile.write(json.dumps({"success": False, "error": "Failed to start Zigbee pairing."}).encode())
+                        elif action == "zha":
                             self._logger.info("[Zigbee] Attempting to switch mode to: zha")
                             if self._supervisor.start_zigbee_switch_zha():
                                 self._set_headers()

@@ -7,6 +7,9 @@ import json
 import uuid
 from datetime import datetime, timezone
 import shutil
+import urllib.request
+import urllib.error
+from .wifi_utils import get_wlan0_ip
 
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
