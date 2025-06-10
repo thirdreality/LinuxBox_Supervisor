@@ -203,21 +203,21 @@ def perform_factory_reset():
         logging.error(f"Error performing factory reset: {e}")
         return False
 
-def perform_wifi_provision_prepare():
-    try:
-        subprocess.run(["/usr/local/bin/wifi_provision_prepare.sh"], check=True)
-        return True
-    except Exception as e:
-        logging.error(f"Error preparing WiFi provision: {e}")
-        return False
+# def perform_wifi_provision_prepare():
+#     try:
+#         subprocess.run(["/usr/local/bin/wifi_provision_prepare.sh"], check=True)
+#         return True
+#     except Exception as e:
+#         logging.error(f"Error preparing WiFi provision: {e}")
+#         return False
 
-def perform_wifi_provision_restore():
-    try:
-        subprocess.run(["/usr/local/bin/wifi_provision_restore.sh"], check=True)
-        return True
-    except Exception as e:
-        logging.error(f"Error restoring WiFi provision: {e}")
-        return False
+# def perform_wifi_provision_restore():
+#     try:
+#         subprocess.run(["/usr/local/bin/wifi_provision_restore.sh"], check=True)
+#         return True
+#     except Exception as e:
+#         logging.error(f"Error restoring WiFi provision: {e}")
+#         return False
 
 # ====== End of merged content ======
 

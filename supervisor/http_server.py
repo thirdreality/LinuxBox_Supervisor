@@ -693,7 +693,16 @@ class SupervisorHTTPServer:
                         self._set_headers()
                         self.wfile.write(json.dumps({"success": True}).encode())
                         threading.Timer(3.0, self._supervisor.perform_factory_reset).start()
-                                      
+
+                    elif command == "stop_wifi_provision":
+                        # 直接调用supervisor的停止Wi-Fi配置方法
+                        self._logger.info("HTTP Server: Received stop_wifi_provision command.")
+                        success = self._supervisor.finish_wifi_provision() # This method already runs in a thread
+                        self._set_headers()
+                        # The success here indicates the command was received and initiated, 
+                        # not necessarily that Wi-Fi provisioning has fully stopped yet.
+                        self.wfile.write(json.dumps({"success": success, "message": "Wi-Fi provisioning stop initiated."}).encode())
+
                     elif command == "zigbee":
                         if action in ("z2m", "zha", "disable"):
                             # 这里只写日志，实际切换逻辑可后续实现

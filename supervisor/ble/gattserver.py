@@ -78,6 +78,7 @@ class SupervisorGattServer:
         
         # 添加线程锁，保护广告更新操作
         self._adv_lock = threading.RLock()
+        self._adv_registered_externally = False # Track if adv is active due to external call
 
     def _encrypt_ip_address(self, ip_address):
         """
@@ -110,11 +111,16 @@ class SupervisorGattServer:
             error_bytes = [0, 0, 0, 0, 0]  # 4个IP字节加1个校验和字节
             return error_bytes
 
-    def updateAdv(self, ip_address=None):
+    def updateAdv(self, ip_address=None, debug_disable_update=True):
         """
         更新BLE广告中的IP地址信息
         使用线程安全机制、IP地址加密和防抖机制
+        debug_disable_update: 如果为True，则禁用此函数的功能以进行调试。
         """
+        if debug_disable_update:
+            self.logger.info("[BLE] updateAdv functionality is disabled for debugging.")
+            return
+
         # 使用线程锁保护整个更新过程
         with self._adv_lock:
             # 防抖机制：如果上次更新时间太近，直接返回
@@ -150,7 +156,7 @@ class SupervisorGattServer:
                 self.logger.info(f"Added IP address to advertisement: {ip_address} -> {manufacturer_data}")
                 
                 # 注册广告使更改生效
-                self.adv.register()
+                # self.adv.register()
                 
                 # 保存当前IP地址和更新时间
                 self._previous_ip_address = ip_address
@@ -159,6 +165,36 @@ class SupervisorGattServer:
                 self.logger.error(f"Error updating advertisement with IP address: {e}")
                 import traceback
                 self.logger.error(traceback.format_exc())
+
+    def startAdv(self):
+        """Starts the BLE advertisement."""
+        with self._adv_lock:
+            if self.adv:
+                self.logger.info("[BLE] Starting advertisement...")
+                try:
+                    self.adv.register() # This handles if already registered or data changed
+                    self._adv_registered_externally = True
+                    self.logger.info("[BLE] Advertisement registration process initiated.")
+                except Exception as e:
+                    self.logger.error(f"[BLE] Error starting advertisement: {e}")
+            else:
+                self.logger.warning("[BLE] Advertisement object not initialized, cannot start.")
+
+    def stopAdv(self):
+        """Stops the BLE advertisement."""
+        with self._adv_lock:
+            if self.adv and self.adv.is_registered:
+                self.logger.info("[BLE] Stopping advertisement...")
+                try:
+                    self.adv.unregister()
+                    self._adv_registered_externally = False
+                    self.logger.info("[BLE] Advertisement unregistration process initiated.")
+                except Exception as e:
+                    self.logger.error(f"[BLE] Error stopping advertisement: {e}")
+            elif self.adv and not self.adv.is_registered:
+                self.logger.info("[BLE] Advertisement already stopped or not registered.")
+            else:
+                self.logger.warning("[BLE] Advertisement object not initialized, cannot stop.")
 
     def start(self):
         if self.running:
@@ -191,8 +227,8 @@ class SupervisorGattServer:
             # Small delay to ensure application is registered before advertisement
             time.sleep(0.5)
             
-            self.logger.info("[BLE] Registering BLE advertisement...")
-            self.adv.register()
+            self.logger.info("[BLE] Advertisement configured. Will be started based on network state.")
+            # self.adv.register() # Advertising will be started by NetworkMonitor
             
             # Start the main loop in a separate thread
             self.mainloop_thread = threading.Thread(target=self._run_mainloop)
@@ -361,16 +397,16 @@ class WIFIConfigCharacteristic(Characteristic):
         self.logger.info(f"Sending result: {result}")
 
         # Send notification with retry mechanism
-        self._send_notification_with_retry(result)
+        self.send_response_notification(result)
 
         if restore:
             self.logger.info(f"Restore previous state ...")
             utils.perform_wifi_provision_restore()            
 
-    def SendIndication(self, value):
+    def _send_notification_value(self, value):
         """
-        发送带确认的indication数据
-        这是对BlueZ DBus API的扩展，专门用于处理indication模式
+        Sends the actual notification value via D-Bus PropertiesChanged.
+        BlueZ will handle sending this as a notification if the client subscribed.
         """
         self.logger.debug(f"Sending indication with {len(value)} bytes")
         
@@ -382,29 +418,29 @@ class WIFIConfigCharacteristic(Characteristic):
                 {"Value": dbus.Array(value, signature='y')},
                 []
             )
-            self.logger.debug("Indication sent via PropertiesChanged")
+            self.logger.debug("Notification value sent via PropertiesChanged")
             return True
         except Exception as e:
-            self.logger.warning(f"Failed to send indication: {e}")
+            self.logger.warning(f"Failed to send notification value: {e}")
             raise
 
-    def _send_notification_with_retry(self, result):
-        """使用indicate模式发送数据，带重试机制确保传输可靠性"""
+    def send_response_notification(self, result):
+        """Sends a response notification with retry and chunking logic."""
         if not self._notifying:
-            self.logger.warning("Cannot send indication: indications not enabled")
+            self.logger.warning("Cannot send notification: notifications not enabled by client")
             return False
         
         # 等待indication通道完全就绪
         retry_count = 0
         success = False
         
-        # 将结果转换为字节数组用于indication
+        # 将结果转换为字节数组用于notification
         value = [dbus.Byte(c) for c in result.encode('utf-8')]
         
         # 大数据包分片处理，提高传输成功率
         max_chunk_size = 100  # 限制每次发送大小
         if len(value) > max_chunk_size:
-            self.logger.info(f"Large indication detected ({len(value)} bytes), splitting into chunks")
+            self.logger.info(f"Large notification detected ({len(value)} bytes), splitting into chunks")
             chunks = [value[i:i+max_chunk_size] for i in range(0, len(value), max_chunk_size)]
             
             # 发送分片
@@ -414,106 +450,86 @@ class WIFIConfigCharacteristic(Characteristic):
                     # 第一个分片包含分片信息
                     header_bytes = [dbus.Byte(c) for c in chunk_header.encode('utf-8')]
                     chunk_with_header = header_bytes + chunk
-                    success = self._send_single_indication(chunk_with_header)
+                    success = self._send_single_notification_packet(chunk_with_header)
                 else:
                     # 后续分片只发送数据
-                    success = self._send_single_indication(chunk)
+                    success = self._send_single_notification_packet(chunk)
                 
                 if not success:
                     self.logger.error(f"Failed to send chunk {i+1}/{len(chunks)}")
                     return False
                     
                 # 分片之间添加延迟
-                time.sleep(0.3)
+                time.sleep(0.02)  # Reduced delay
             
             return True
         else:
             # 正常发送单个数据包
-            return self._send_single_indication(value)
+            return self._send_single_notification_packet(value)
         
-    def _send_single_indication(self, value):
-        """发送单个数据包并处理重试"""
+    def _send_single_notification_packet(self, value):
+        """Sends a single notification packet and handles retries."""
         retry_count = 0
         success = False
         max_retries = 3  # indicate模式下可以使用更少的重试次数
-        retry_delay = 0.5  # 重试间隔
-        
+        retry_delay = 0.1  # Fixed retry interval
+    
         while retry_count < max_retries and not success:
             try:
                 with self._notification_lock:
-                    # 重试时添加日志和延迟
                     if retry_count > 0:
-                        self.logger.info(f"Retry #{retry_count} sending indication ({len(value)} bytes)")
-                        time.sleep(retry_delay * retry_count)  # 每次重试增加等待时间
+                        self.logger.info(f"Retry #{retry_count} sending notification packet ({len(value)} bytes)")
+                        time.sleep(retry_delay) # Use fixed retry delay
                     
-                    # 发送前添加小延迟
-                    time.sleep(0.2)
-                    
-                    # 使用SendIndication方法发送数据
-                    self.SendIndication(value)
+                    # 使用_send_notification_value方法发送数据
+                    self._send_notification_value(value)
                     
                     # 发送后添加小延迟
                     time.sleep(0.2)
                     success = True
-                    self.logger.info(f"Indication sent successfully ({len(value)} bytes)")
+                    self.logger.info(f"Notification packet sent successfully ({len(value)} bytes)")
             except Exception as e:
-                self.logger.error(f"Failed to send indication: {e}")
+                self.logger.error(f"Failed to send notification packet: {e}")
                 retry_count += 1
         
         if not success:
-            self.logger.error(f"Failed to send indication after {max_retries} retries")
+            self.logger.error(f"Failed to send notification packet after {max_retries} retries")
         
         return success
 
     def StartNotify(self):
         """
-        BlueZ GATT特性接口标准方法，用于启动通知/指示通道
-        即使在indicate模式下也需要保留此方法
+        Called by BlueZ when the client subscribes to notifications.
         """
         with self._notification_lock:
             if self._notifying:
+                self.logger.info("Client already subscribed to notifications.")
                 return
                 
             self._notifying = True
-            self._notification_ready = False
-            self.logger.info("Starting Indication Channel")
-            
-            # 延迟设置通知就绪标志
-            def set_ready():
-                self._notification_ready = True
-                self.logger.info("Indication channel ready")
-                
-                # 发送测试indication确保通道已建立
-                try:
-                    test_value = [dbus.Byte(c) for c in b'READY']
-                    self.SendIndication(test_value)
-                except Exception as e:
-                    self.logger.warning(f"Failed to send test indication: {e}")
-                return False
-            
-            # 延迟设置通知就绪标志
-            GObject.timeout_add(int(self._NOTIFICATION_SETUP_DELAY * 1000), set_ready)
+            self._notification_ready = True  # Set ready immediately ## 测试: 暂时禁用
+            self.logger.info("Client subscribed to notifications. For testing, notification channel readiness NOT set.")
+            # Send a test notification to confirm the channel is working
+            # This helps some clients establish the notification flow correctly.
+            # try:
+            #     test_value = [dbus.Byte(c) for c in "NOTIFY_READY".encode('utf-8')]
+            #     self._send_notification_value(test_value)
+            #     self.logger.info("Sent 'NOTIFY_READY' test notification.")
+            # except Exception as e:
+            #     self.logger.warning(f"Failed to send 'NOTIFY_READY' test notification: {e}")
 
     def StopNotify(self):
         """
-        BlueZ GATT特性接口标准方法，用于停止通知/指示通道
-        即使在indicate模式下也需要保留此方法
+        Called by BlueZ when the client unsubscribes from notifications.
         """
         with self._notification_lock:
             if not self._notifying:
                 return
                 
-            # 尝试发送空指示以正确关闭通道
-            try:
-                empty_value = [dbus.Byte(c) for c in b'']
-                self.SendIndication(empty_value)
-            except Exception as e:
-                self.logger.warning(f"Error sending empty indication: {e}")
-            
-            # 重置状态标志
+            # Reset status flags as client has unsubscribed
             self._notifying = False
             self._notification_ready = False
-            self.logger.info("Indication channel stopped")
+            self.logger.info("Client unsubscribed from notifications. Stopping notification channel.")
 
 
 class WIFIConfigDescriptor(Descriptor):

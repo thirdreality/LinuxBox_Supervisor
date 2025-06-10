@@ -68,6 +68,7 @@ class NetworkMonitor:
         self.disconnect_count = 0
         self.check_timer_id = None
         self._lock = threading.RLock()  # 保护状态更新
+        self._last_ip_for_adv_control = None # Track IP for adv control
     
     def _init_dbus(self):
         """初始化D-Bus连接和NetworkManager代理"""
@@ -168,6 +169,8 @@ class NetworkMonitor:
             
             # 更新LED状态
             self._update_led_state(new_state)
+            # 控制BLE广告
+            self._control_ble_advertising_based_on_ip()
     
     def _handle_nm_state_changed(self, state):
         """处理NetworkManager整体状态变化"""
@@ -178,7 +181,9 @@ class NetworkMonitor:
         """处理活动连接属性变化"""
         if "Ip4Config" in changed_properties:
             # IP配置已更改，可能需要更新IP地址
+            self.logger.debug(f"PropertiesChanged: Ip4Config changed. Old IP for adv: {self._last_ip_for_adv_control}")
             self._update_connection_info()
+            self._control_ble_advertising_based_on_ip()
     
     def _handle_connection_established(self):
         """处理网络连接建立"""
@@ -205,6 +210,9 @@ class NetworkMonitor:
                     self.connected = True
                     self.logger.info(f"Network connection re-established: {ssid} ({ip_address})")
                     self.supervisor.onNetworkConnected()
+                self.logger.info(f"Network connected: SSID='{ssid}', IP='{ip_address}'")
+                # IP acquired, control BLE advertising
+                self._control_ble_advertising_based_on_ip()
     
     def _schedule_disconnect_check(self):
         """安排断开连接检查"""
@@ -221,18 +229,18 @@ class NetworkMonitor:
         """检查断开连接状态"""
         with self._lock:
             self.check_timer_id = None
-            self.logger.debug("Checking network disconnect status")
+            #self.logger.debug("Checking network disconnect status")
             
             if not is_network_connected():
                 self.disconnect_count += 1
-                self.logger.debug(f"Network disconnected, count: {self.disconnect_count}")
+                #self.logger.debug(f"Network disconnected, count: {self.disconnect_count}")
                 
                 if self.supervisor and hasattr(self.supervisor, 'wifi_status'):
                     self.supervisor.wifi_status.connected = False
                 
                 if self.disconnect_count > 5 and self.connected:
                     self.connected = False
-                    self.logger.info("Network disconnected for too long, clearing cache")
+                    #self.logger.info("Network disconnected for too long, clearing cache")
                     
                     if self.supervisor:
                         self.supervisor.update_wifi_info("", "")
@@ -241,19 +249,21 @@ class NetworkMonitor:
                 # 更新LED状态
                 if self.supervisor:
                     if has_active_connection():
-                        self.supervisor.set_led_state(LedState.NETWORK_ERROR)
-                        self.logger.debug("Set LED state to NETWORK_ERROR")
+                        self.supervisor.set_led_state(LedState.SYS_OFFLINE)
+                        #self.logger.debug("Set LED state to NETWORK_ERROR")
                     else:
-                        self.supervisor.set_led_state(LedState.NETWORK_LOST)
-                        self.logger.debug("Set LED state to NETWORK_LOST")
+                        self.supervisor.set_led_state(LedState.SYS_OFFLINE)
+                        #self.logger.debug("Set LED state to NETWORK_LOST")
                 
                 # 继续检查，每秒一次
-                self.check_timer_id = GObject.timeout_add(1000, self._check_disconnect_status)
+                #self.check_timer_id = GObject.timeout_add(1000, self._check_disconnect_status)
                 self.logger.debug("Scheduled next disconnect check in 1 second")
                 return False  # 不再调用当前回调
             else:
                 # 网络已恢复连接
-                self.logger.debug("Network connection restored")
+                self.logger.info("Network disconnection confirmed.")
+                self._control_ble_advertising_based_on_ip() # Ensure adv starts if no IP
+                # 更新LED状态为离线
                 self._handle_connection_established()
                 return False  # 不再调用当前回调
     
@@ -270,18 +280,19 @@ class NetworkMonitor:
         if not self.supervisor:
             return
             
+        
         if device_state == NM_DEVICE_STATE_ACTIVATED:
-            self.supervisor.set_led_state(LedState.NORMAL)
+            self.supervisor.set_led_state(LedState.SYS_NORMAL_OPERATION)
         elif device_state in [NM_DEVICE_STATE_PREPARE, NM_DEVICE_STATE_CONFIG, NM_DEVICE_STATE_NEED_AUTH, 
                              NM_DEVICE_STATE_IP_CONFIG, NM_DEVICE_STATE_IP_CHECK, NM_DEVICE_STATE_SECONDARIES]:
-            # 连接过程中
-            self.supervisor.set_led_state(LedState.NETWORK_ERROR)
+            # 连接过程中 (During connection process)
+            self.supervisor.set_led_state(LedState.SYS_OFFLINE)
         elif device_state == NM_DEVICE_STATE_DISCONNECTED:
-            self.supervisor.set_led_state(LedState.NETWORK_LOST)
+            self.supervisor.set_led_state(LedState.SYS_OFFLINE)
         elif device_state == NM_DEVICE_STATE_UNAVAILABLE:
-            self.supervisor.set_led_state(LedState.STARTUP)
+            self.supervisor.set_led_state(LedState.SYS_OFFLINE)  # Or consider SYS_ERROR_CONDITION if unavailability is an error
         elif device_state == NM_DEVICE_STATE_FAILED:
-            self.supervisor.set_led_state(LedState.NETWORK_ERROR)
+            self.supervisor.set_led_state(LedState.SYS_OFFLINE)
     
     def _run_mainloop(self):
         """在单独的线程中运行GLib主循环"""
@@ -382,8 +393,10 @@ class NetworkMonitor:
             self.mainloop_thread = threading.Thread(target=self._run_mainloop, daemon=True)
             self.mainloop_thread.start()
             
-            self.logger.info("Network monitor started (event-based)")
-            return True
+            self.logger.info("NetworkMonitor started.")
+            
+            # Initial check for BLE advertising state
+            GObject.idle_add(self._initial_ble_adv_check)
         except Exception as e:
             self.logger.error(f"Failed to start network monitor: {e}")
             self.logger.error(traceback.format_exc())
@@ -399,7 +412,45 @@ class NetworkMonitor:
                 GObject.source_remove(self.check_timer_id)
                 self.check_timer_id = None
                 
-            self.logger.info("Network monitor stopped")
+            self.logger.info("NetworkMonitor stopped.")
         except Exception as e:
             self.logger.error(f"Error stopping network monitor: {e}")
             self.logger.error(traceback.format_exc())
+
+    def _initial_ble_adv_check(self):
+        with self._lock:
+            self.logger.info("Performing initial check for BLE advertising state...")
+            self._control_ble_advertising_based_on_ip()
+        return False # Run only once
+
+    def _control_ble_advertising_based_on_ip(self):
+        """Controls BLE advertising based on the current wlan0 IP address."""
+        if not self.supervisor or not hasattr(self.supervisor, 'gatt_server') or not self.supervisor.gatt_server:
+            self.logger.debug("Supervisor or GATT server not available for BLE advertising control.")
+            return
+
+        current_ip = get_wlan0_ip()
+        #self.logger.debug(f"Checking IP for BLE adv control. Current IP: '{current_ip}', Last tracked IP: '{self._last_ip_for_adv_control}'")
+
+        # Normalize empty or '0.0.0.0' IPs to None for consistent comparison
+        normalized_current_ip = current_ip if current_ip and current_ip != "0.0.0.0" else None
+        
+        if normalized_current_ip:
+            # We have a valid IP
+            if self._last_ip_for_adv_control != normalized_current_ip: # IP changed or was previously None
+                self.logger.info(f"Network has valid IP: {normalized_current_ip}. Stopping BLE advertisement.")
+                self.supervisor.gatt_server.stopAdv()
+            else:
+                self.logger.debug(f"IP {normalized_current_ip} unchanged, BLE adv state should be consistent (stopped).")
+        else:
+            # No valid IP (None, empty, or 0.0.0.0)
+            if self._last_ip_for_adv_control is not None: # IP was previously valid and now lost
+                self.logger.info("Network disconnected or no IP. Starting BLE advertisement.")
+                self.supervisor.gatt_server.startAdv()
+            elif self._last_ip_for_adv_control is None:
+                 self.logger.info("Initial check or still no IP. Ensuring BLE advertisement is started.")
+                 self.supervisor.gatt_server.startAdv()
+            else:
+                self.logger.debug("No IP, BLE adv state should be consistent (started).")
+        
+        self._last_ip_for_adv_control = normalized_current_ip

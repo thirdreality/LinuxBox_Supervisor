@@ -57,7 +57,7 @@ class Supervisor:
         self.ota_status = util.OtaStatus()
         self.system_info = SystemInfo()
 
-        self.wifi_manager = WifiManager()
+        self.wifi_manager = WifiManager(self)
         self.wifi_manager.init()
 
         self.task_manager = TaskManager(self)
@@ -202,7 +202,6 @@ class Supervisor:
 
     def onNetworkConnected(self):
         logger.info("checking Network onNetworkConnected() ...")
-        
 
     def check_ha_resume(self):
         # Check if we need to resume home-assistant
@@ -345,24 +344,39 @@ class Supervisor:
         # 这里可以启动一个脚本
         util.perform_power_off()
     
-    def perform_wifi_provision_prepare(self):
-        logging.info("Performing prepare wifi provision...")
-        
-        # Check if home-assistant is running using subprocess directly to get output
-        try:
-            result = subprocess.run(["systemctl", "is-active", "home-assistant"], 
-                                   capture_output=True, text=True, check=False)
-            if result.stdout.strip() == "active":
-                # Set the flag to resume home-assistant later
-                self.ha_resume_need = True
-                logging.info("home-assistant is running, will resume after network connected")
-        except Exception as e:
-            logging.error(f"Error checking home-assistant status: {e}")
-        
-        # Start thread to stop home-assistant
-        thread = threading.Thread(target=util.perform_wifi_provision_prepare)
+    def perform_wifi_provision(self):
+        logging.info("Initiating wifi provision in a separate thread...")
+        thread = threading.Thread(target=self.wifi_manager.start_wifi_provision)
         thread.daemon = True
         thread.start()
+        return True
+
+
+    def finish_wifi_provision(self):
+        logging.info("Initiating finish wifi provision in a separate thread...")
+        thread = threading.Thread(target=self.wifi_manager.stop_wifi_provision)
+        thread.daemon = True
+        thread.start()
+        return True
+
+
+    def startAdv(self):
+        logging.info("Supervisor: Starting BLE Advertisement...")
+        if self.gatt_server:
+            self.gatt_server.startAdv()
+            return True
+        else:
+            logging.warning("Supervisor: GATT server not initialized, cannot start advertisement.")
+            return False
+
+    def stopAdv(self):
+        logging.info("Supervisor: Stopping BLE Advertisement...")
+        if self.gatt_server:
+            self.gatt_server.stopAdv()
+            return True
+        else:
+            logging.warning("Supervisor: GATT server not initialized, cannot stop advertisement.")
+            return False
 
     def _signal_handler(self, sig, frame):
         logging.info("Signal received, stopping...")
