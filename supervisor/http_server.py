@@ -263,6 +263,7 @@ class SupervisorHTTPServer:
                         result = {
                             "Device Model": getattr(system_info, "model", "Unknown"),
                             "Device Name": getattr(system_info, "name", "Unknown"),
+                            "Version": getattr(system_info, "version", "Unknown"),
                             "Build Number": getattr(system_info, "build_number", "Unknown"),
                             "Zigbee Support": getattr(system_info, "support_zigbee", False),
                             "Thread Support": getattr(system_info, "support_thread", False),
