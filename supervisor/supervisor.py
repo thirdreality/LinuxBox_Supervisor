@@ -365,7 +365,7 @@ class Supervisor:
                         self.gatt_server = SupervisorGattServer(self)
                         self.gatt_server.start()
                         logger.info("GATT server started successfully")
-
+                        self.on_gatt_server_started()
                         return
                     except Exception as e:
                         if "org.freedesktop.DBus.Error.ServiceUnknown" in str(e):
@@ -394,6 +394,10 @@ class Supervisor:
         except Exception as e:
             logger.error(f"Failed to stop GATT server: {e}")
             return False
+
+    def on_gatt_server_started(self):
+        logger.info("GATT server is started, starting auto wifi provision...")
+        self.task_manager.start_auto_wifi_provision()
 
     def perform_reboot(self):
         logging.info("Performing reboot...")
@@ -501,8 +505,6 @@ class Supervisor:
 
         self.led.set_led_off_state()
         logger.info("[LED]Switch to other mode...")
-
-        self.task_manager.start_auto_wifi_provision()
 
         self.proxy.run()
 
