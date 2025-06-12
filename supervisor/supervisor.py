@@ -405,7 +405,7 @@ class Supervisor:
 
     def perform_factory_reset(self):
         logging.info("Performing factory reset...")
-
+        self.set_led_state(LedState.USER_EVENT_OFF)
         self.set_led_state(LedState.FACTORY_RESET)
         util.perform_factory_reset()
 
