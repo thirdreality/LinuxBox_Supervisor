@@ -113,7 +113,7 @@ class Application(dbus.service.Object):
         self.mainloop.quit()
 
 class Service(dbus.service.Object):
-    PATH_BASE = "/org/bluez/example/service"
+    PATH_BASE = "/org/bluez/t3rsupervisor/service"
 
     def __init__(self, index, uuid, primary):
         self.bus = BleTools.get_bus()

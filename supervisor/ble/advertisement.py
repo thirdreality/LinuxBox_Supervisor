@@ -16,7 +16,7 @@ LE_ADVERTISEMENT_IFACE = "org.bluez.LEAdvertisement1"
 
 
 class Advertisement(dbus.service.Object):
-    PATH_BASE = "/org/bluez/example/advertisement"
+    PATH_BASE = "/org/bluez/t3rsupervisor/advertisement"
     
     # 广告刷新配置
     MAX_RETRY_COUNT = 3
