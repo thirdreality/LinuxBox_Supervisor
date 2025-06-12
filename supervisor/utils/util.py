@@ -189,7 +189,7 @@ def perform_power_off():
 
 def perform_factory_reset():
     try:
-        subprocess.run(["/usr/local/bin/factory_reset.sh"], check=True)
+        subprocess.run(["/lib/armbian/factory-reset.sh"], check=True)
         return True
     except Exception as e:
         logging.error(f"Error performing factory reset: {e}")
