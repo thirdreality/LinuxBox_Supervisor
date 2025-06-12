@@ -384,7 +384,7 @@ class WIFIConfigCharacteristic(Characteristic):
                         ip_address = get_wlan0_ip() or ""
                         self.logger.info(f"WiFi IP address: {ip_address}")
                         self.service.supervisor.update_wifi_info(ip_address, ssid)  
-                        self.service.supervisor.check_ha_resume()
+                        #self.service.supervisor.check_ha_resume()
                 else:
                     self.logger.info("WiFi manager not initialized")
 

@@ -4,19 +4,20 @@
 # maintainer: guoping.liu@3reality.com
 
 import os
-import threading
 import time
 import logging
 import signal
 import json
 import sys
 import subprocess
+import threading
 
 from .network import NetworkMonitor
 from .hardware import GpioButton, GpioLed, LedState,GpioHwController
 from .utils.wifi_manager import WifiStatus, WifiManager
 from .ota.ota_server import SupervisorOTAServer
 from .task import TaskManager
+from .utils import util
 
 from .ble.gattserver import SupervisorGattServer
 from .http_server import SupervisorHTTPServer  
@@ -24,8 +25,6 @@ from .proxy import SupervisorProxy
 from .cli import SupervisorClient
 from .sysinfo import SystemInfoUpdater, SystemInfo, OpenHabInfo
 from supervisor.utils.zigbee_util import get_ha_zigbee_mode
-
-from .utils import util
 
 # Configure logging
 logging.basicConfig(
@@ -74,9 +73,7 @@ class Supervisor:
 
         # boot up time
         self.start_time = time.time()
-        
-        # Flag to indicate if home-assistant needs to be resumed
-        self.ha_resume_need = False
+    
 
     def set_led_state(self, state):
         # Forward the LED state to the GpioLed instance
@@ -112,7 +109,7 @@ class Supervisor:
             zigbee_util.get_ha_zigbee_mode()
         elif cmd_lower == "scan":
             try:
-                self.task_manager.start_zigbee_pairing()
+                self.task_manager.start_zigbee_pairing(led_controller=self.led)
                 logger.info("Zigbee设备开始配对")
                 return "Zigbee设备开始配对"
             except Exception as e:
@@ -187,7 +184,7 @@ class Supervisor:
     def start_zigbee_pairing(self):
         """Starts the Zigbee pairing process via the TaskManager."""
         try:
-            self.task_manager.start_zigbee_pairing()
+            self.task_manager.start_zigbee_pairing(led_controller=self.led)
             logger.info("Zigbee pairing process started by button.")
             return True
         except Exception as e:
@@ -276,23 +273,21 @@ class Supervisor:
     def onNetworkConnected(self):
         logger.info("checking Network onNetworkConnected() ...")
 
-    def check_ha_resume(self):
-        # Check if we need to resume home-assistant
-        if self.ha_resume_need:
-            logger.info("Resuming home-assistant service...")
-            # Start home-assistant in a separate thread
-            def start_ha_service():
-                logger.info("Starting home-assistant service...")
-                util.execute_system_command(["systemctl", "start", "home-assistant"])
-                logger.info("home-assistant service started")
-                # Reset the flag
-                self.ha_resume_need = False
+    # def check_ha_resume(self):
+    #     # Check if we need to resume home-assistant
+    #     if self.ha_resume_need:
+    #         logger.info("Resuming home-assistant service...")
+    #         # Start home-assistant in a separate thread
+    #         @util.threaded
+    #         def start_ha_service():
+    #             logger.info("Starting home-assistant service...")
+    #             util.execute_system_command(["systemctl", "start", "home-assistant"])
+    #             logger.info("home-assistant service started")
+    #             # Reset the flag
+    #             self.ha_resume_need = False
             
-            # Create and start the thread
-            ha_thread = threading.Thread(target=start_ha_service)
-            ha_thread.daemon = True
-            ha_thread.start()
-
+    #         # Start the thread
+    #         start_ha_service()
 
     def update_wifi_info(self, ip_address, ssid):
         """更新WiFi信息缓存"""
@@ -353,6 +348,7 @@ class Supervisor:
                     return False
             
             # Function to be run in a separate thread to monitor bluetooth service
+            @util.threaded
             def bluetooth_monitor_thread():
                 max_retries = 30
                 retry_delay = 3  # seconds
@@ -381,9 +377,8 @@ class Supervisor:
                 
                 logger.error(f"Failed to start GATT server after {max_retries} attempts")
             
-            # Start the bluetooth monitor in a separate thread
-            bluetooth_thread = threading.Thread(target=bluetooth_monitor_thread, daemon=True)
-            bluetooth_thread.start()
+            # Start the bluetooth monitor
+            bluetooth_monitor_thread()
             logger.info("Started bluetooth service monitor thread for GATT server")
             return True
         return True
@@ -415,21 +410,15 @@ class Supervisor:
         # 这里可以启动一个脚本
         util.perform_power_off()
     
+    @util.threaded
     def perform_wifi_provision(self):
-        logging.info("Initiating wifi provision in a separate thread...")
-        thread = threading.Thread(target=self.wifi_manager.start_wifi_provision)
-        thread.daemon = True
-        thread.start()
-        return True
+        logging.info("Initiating wifi provision...")
+        self.wifi_manager.start_wifi_provision()
 
-
+    @util.threaded
     def finish_wifi_provision(self):
-        logging.info("Initiating finish wifi provision in a separate thread...")
-        thread = threading.Thread(target=self.wifi_manager.stop_wifi_provision)
-        thread.daemon = True
-        thread.start()
-        return True
-
+        logging.info("Initiating finish wifi provision...")
+        self.wifi_manager.stop_wifi_provision()
 
     def startAdv(self):
         logging.info("Supervisor: Starting BLE Advertisement...")
@@ -463,10 +452,12 @@ class Supervisor:
         self._stop_http_server()
         # 停止GATT服务器
         self._stop_gatt_server()
-        # 停止WiFi管理器    
-        self.wifi_manager.cleanup()
+        # 停止WiFi管理器
+        if hasattr(self, 'wifi_manager') and self.wifi_manager:
+            self.wifi_manager.cleanup()
 
-        self.network_monitor.stop()
+        if self.network_monitor:
+            self.network_monitor.stop()
 
         self.task_manager.cleanup()
 
@@ -478,6 +469,17 @@ class Supervisor:
         if self.proxy:
             self.proxy.stop()
             self.proxy = None
+        
+        logger.info("Cleanup finished.")
+
+    @util.threaded
+    def start_zigbee_switch_zha(self):
+        self.logger.info("Starting zigbee switch to zha mode...")
+        self.task_manager.start_zigbee_switch_zha_mode()
+
+    @util.threaded
+    def start_zigbee_switch_z2m(self):
+        self.task_manager.start_zigbee_switch_z2m_mode()
 
     def run(self):
         """主运行函数"""
@@ -499,6 +501,8 @@ class Supervisor:
 
         self.led.set_led_off_state()
         logger.info("[LED]Switch to other mode...")
+
+        self.task_manager.start_auto_wifi_provision()
 
         self.proxy.run()
 

@@ -7,7 +7,6 @@ This server runs when WiFi is connected and provides the same APIs as the BLE se
 
 import json
 import hashlib
-import threading
 import time
 import base64
 import urllib.parse
@@ -19,6 +18,7 @@ import signal
 import sys
 import logging
 import mimetypes
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from .utils import util
@@ -42,7 +42,6 @@ class SupervisorHTTPServer:
         self.supervisor = supervisor
         self.port = port
         self.server = None
-        self.server_thread = None
         self.running = threading.Event()
         self.thread_pool = ThreadPoolExecutor(max_workers=5)  # 创建线程池用于处理文件下载
         self.start_time = time.time()  # 记录启动时间，用于健康检查
@@ -62,8 +61,7 @@ class SupervisorHTTPServer:
             self.running.set()
             
             # 在一个单独的线程中运行服务器
-            self.server_thread = threading.Thread(target=self._run_server, daemon=True)
-            self.server_thread.start()
+            self._run_server()
             
             self.logger.info(f"HTTP Server starting on port {self.port}")
             
@@ -84,6 +82,7 @@ class SupervisorHTTPServer:
             self.thread_pool.shutdown(wait=False)  # 关闭线程池
             self.logger.info("HTTP Server stopped")
     
+    @util.threaded
     def _run_server(self):
         """在一个单独的线程中运行HTTP服务器，添加重试机制"""
         retry_count = 0

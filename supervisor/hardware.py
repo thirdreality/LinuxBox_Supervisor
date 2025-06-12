@@ -777,5 +777,3 @@ class GpioHwController:
             self.logger.error(f"Error executing gpioset command: {e}")
         except Exception as e:
             self.logger.error(f"Error initializing GPIO pins: {e}")
-
-

@@ -10,9 +10,32 @@ import shutil
 import urllib.request
 import urllib.error
 from .wifi_utils import get_wlan0_ip
-
+from supervisor.hardware import LedState
+import threading
+import time
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
+def _call_progress(progress_callback, percent, message):
+    """Helper to log progress and call the callback if it exists."""
+    logging.info(f"Progress ({percent}%): {message}")
+    if progress_callback:
+        progress_callback(percent, message)
+
+class ZigbeePairingState:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._is_pairing = False
+
+    def is_pairing(self):
+        with self._lock:
+            return self._is_pairing
+
+    def set_pairing(self, status: bool):
+        with self._lock:
+            self._is_pairing = status
+
+pairing_state = ZigbeePairingState()
 
 class ConfigError(Exception):
     """Custom exception for configuration errors."""
@@ -192,7 +215,8 @@ def _update_zha_config_entries(radio_type="zigate"):
 
 def _update_zha_device_registry(mqtt_entry_id, zha_entry_id, ieee):
     device_registry_path = os.path.join(BASE_PATH, "homeassistant/.storage/core.device_registry")
-    
+    print(f"_update_zha_device_registry zha_entry_id: {zha_entry_id}, mqtt_entry_id: {mqtt_entry_id}")
+
     if not os.path.exists(device_registry_path):
         raise ConfigError(f"Error: {device_registry_path} does not exist")
     
@@ -242,7 +266,7 @@ def _update_zha_device_registry(mqtt_entry_id, zha_entry_id, ieee):
             "disabled_by": None,
             "entry_type": None,
             "hw_version": None,
-            "id": "af41f395068280b4b3c76734dd1444f3",
+            "id": f"{uuid.uuid4().hex}",
             "identifiers": [["zha", ieee]],
             "labels": [],
             "manufacturer": "ZiGate",
@@ -259,7 +283,7 @@ def _update_zha_device_registry(mqtt_entry_id, zha_entry_id, ieee):
         new_devices.append(zigate_device)
         print(f"Added ZiGate device with ZHA entry_id: {zha_entry_id}")
     
-    # 更新devices
+    # Update devices
     device_data['data']['devices'] = new_devices
 
     device_data['data']['deleted_devices'] = []
@@ -271,7 +295,6 @@ def _update_zha_device_registry(mqtt_entry_id, zha_entry_id, ieee):
         print(f"Updated {device_registry_path}")
     except Exception as e:
         raise ConfigError(f"Error writing to {device_registry_path}: {e}")
-
 
 def _update_zha_entity_registry():
     """Update the entity registry to remove all MQTT platform entities"""
@@ -317,9 +340,6 @@ def _update_zha_entity_registry():
             print(f"Updated {entity_registry_path}: removed {removed_count} MQTT entities")
         except Exception as e:
             print(f"Warning: Error writing to {entity_registry_path}: {e}")
-    else:
-        print("No MQTT entities found in entity registry, no changes made")
-
 
 def _update_zigbee2mqtt_config_entries():
     """Update config entries to remove ZHA and ensure MQTT is configured"""
@@ -399,9 +419,9 @@ def _update_zigbee2mqtt_config_entries():
     
     return zha_entry_id, mqtt_entry_id
 
-
 def _update_zigbee2mqtt_device_registry(zha_entry_id, mqtt_entry_id):
     """Update device registry to remove ZHA devices and add Zigbee2MQTT Bridge if needed"""
+    print(f"_update_zigbee2mqtt_device_registry zha_entry_id: {zha_entry_id}, mqtt_entry_id: {mqtt_entry_id}")
     device_registry_path = os.path.join(BASE_PATH, "homeassistant/.storage/core.device_registry")
     
     if not os.path.exists(device_registry_path):
@@ -445,35 +465,35 @@ def _update_zigbee2mqtt_device_registry(zha_entry_id, mqtt_entry_id):
                 continue
         new_devices.append(device)
     
-    # If Zigbee2MQTT Bridge doesn't exist, add it
-    if not has_z2m_bridge:
-        now = datetime.now(timezone.utc).isoformat()
-        bridge_device = {
-            "area_id": None,
-            "config_entries": [mqtt_entry_id],
-            "config_entries_subentries": {mqtt_entry_id: [None]},
-            "configuration_url": None,
-            "connections": [],
-            "created_at": now,
-            "disabled_by": None,
-            "entry_type": None,
-            "hw_version": "zigate 321",
-            "id": f"{uuid.uuid4().hex}",
-            "identifiers": [["mqtt", "zigbee2mqtt_bridge_0x1c784ba0ffca0000"]],
-            "labels": [],
-            "manufacturer": "Zigbee2MQTT",
-            "model": "Bridge",
-            "model_id": None,
-            "modified_at": now,
-            "name_by_user": None,
-            "name": "Zigbee2MQTT Bridge",
-            "primary_config_entry": mqtt_entry_id,
-            "serial_number": None,
-            "sw_version": "2.3.0",
-            "via_device_id": None
-        }
-        new_devices.append(bridge_device)
-        print("Added Zigbee2MQTT Bridge device")
+    # # If Zigbee2MQTT Bridge doesn't exist, add it
+    # if not has_z2m_bridge:
+    #     now = datetime.now(timezone.utc).isoformat()
+    #     bridge_device = {
+    #         "area_id": None,
+    #         "config_entries": [mqtt_entry_id],
+    #         "config_entries_subentries": {mqtt_entry_id: [None]},
+    #         "configuration_url": None,
+    #         "connections": [],
+    #         "created_at": now,
+    #         "disabled_by": None,
+    #         "entry_type": None,
+    #         "hw_version": "zigate 321",
+    #         "id": f"{uuid.uuid4().hex}",
+    #         "identifiers": [],
+    #         "labels": [],
+    #         "manufacturer": "Zigbee2MQTT",
+    #         "model": "Bridge",
+    #         "model_id": None,
+    #         "modified_at": now,
+    #         "name_by_user": None,
+    #         "name": "Zigbee2MQTT Bridge",
+    #         "primary_config_entry": mqtt_entry_id,
+    #         "serial_number": None,
+    #         "sw_version": "2.3.0",
+    #         "via_device_id": None
+    #     }
+    #     new_devices.append(bridge_device)
+    #     print(f"Added Zigbee2MQTT Bridge device: {bridge_device}")
     
     # Update devices
     device_data['data']['devices'] = new_devices
@@ -542,16 +562,8 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
     logging.info("Attempting to switch to ZHA mode...")
     ha_service_was_running = False
 
-    def _call_progress(percentage, message):
-        logging.info(f"Progress: {percentage}% - {message}")
-        if progress_callback:
-            try:
-                progress_callback(percentage, message)
-            except Exception as cb_e:
-                logging.warning(f"Error in progress_callback: {cb_e}")
-
     try:
-        _call_progress(5, "Fetching Zigbee device info...")
+        _call_progress(progress_callback, 5, "Fetching Zigbee device info...")
         try:
             ieee, radio_type = _get_info_from_zha_conf()
             if not ieee:
@@ -571,13 +583,13 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
                 complete_callback(False, f"unexpected_error_fetch_info: {e}")
             return
 
-        _call_progress(10, "Checking Home Assistant service status...")
+        _call_progress(progress_callback, 10, "Checking Home Assistant service status...")
         try:
             status_check = subprocess.run(["systemctl", "is-active", "home-assistant.service"], capture_output=True, text=True, check=False, timeout=15)
             if status_check.stdout.strip() == "active":
                 ha_service_was_running = True
                 logging.info("Home Assistant service is running. Stopping it temporarily.")
-                _call_progress(15, "Stopping Home Assistant service...")
+                _call_progress(progress_callback, 15, "Stopping Home Assistant service...")
                 subprocess.run(["systemctl", "stop", "home-assistant.service"], check=True, timeout=60)
                 logging.info("Home Assistant service stopped.")
             else:
@@ -598,19 +610,19 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
                 complete_callback(False, "systemctl_not_found")
             return
 
-        _call_progress(20, "Updating ZHA config entries...")
+        _call_progress(progress_callback, 20, "Updating ZHA config entries...")
         mqtt_entry_id, zha_entry_id = _update_zha_config_entries(radio_type)
         logging.info(f"ZHA config entries updated. MQTT Entry ID: {mqtt_entry_id}, ZHA Entry ID: {zha_entry_id}")
 
-        _call_progress(40, "Updating ZHA device registry...")
+        _call_progress(progress_callback, 40, "Updating ZHA device registry...")
         _update_zha_device_registry(mqtt_entry_id, zha_entry_id, ieee)
         logging.info("ZHA device registry updated.")
 
-        _call_progress(60, "Updating ZHA entity registry...")
+        _call_progress(progress_callback, 60, "Updating ZHA entity registry...")
         _update_zha_entity_registry()
         logging.info("ZHA entity registry updated.")
 
-        _call_progress(80, "Stopping and disabling conflicting services (zigbee2mqtt, mosquitto)...")
+        _call_progress(progress_callback, 80, "Stopping and disabling conflicting services (zigbee2mqtt, mosquitto)...")
         services_to_manage = [("zigbee2mqtt.service", "Zigbee2MQTT"), ("mosquitto.service", "Mosquitto")]
         all_services_managed_successfully = True
         for service_file, service_name in services_to_manage:
@@ -631,7 +643,7 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
         if not all_services_managed_successfully:
             logging.warning("One or more conflicting services could not be fully managed. Check logs.")
 
-        _call_progress(90, "Cleaning up Zigbee2MQTT data and resetting configuration...")
+        _call_progress(progress_callback, 90, "Cleaning up Zigbee2MQTT data and resetting configuration...")
         z2m_data_path = "/opt/zigbee2mqtt/data"
         # ... (rest of the file operations remain the same) ...
         files_to_delete = [
@@ -677,29 +689,29 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
         except Exception as e:
             logging.warning(f"Unexpected error during Zigbee2MQTT configuration reset: {e}")
 
-        _call_progress(100, "Successfully switched to ZHA mode.")
+        _call_progress(progress_callback, 100, "Successfully switched to ZHA mode.")
         logging.info("Successfully switched to ZHA mode.")
         if complete_callback:
             complete_callback(True, "success")
 
     except ConfigError as e:
         logging.error(f"Configuration error during ZHA mode switch: {e}")
-        _call_progress(100, f"Failed: Configuration error - {e}")
+        _call_progress(progress_callback, 100, f"Failed: Configuration error - {e}")
         if complete_callback:
             complete_callback(False, f"config_error: {e}")
     except subprocess.TimeoutExpired as e:
         logging.error(f"A system command timed out during ZHA mode switch: {e}")
-        _call_progress(100, f"Failed: System command timeout - {e}")
+        _call_progress(progress_callback, 100, f"Failed: System command timeout - {e}")
         if complete_callback:
             complete_callback(False, f"system_command_timeout: {e}")
     except subprocess.CalledProcessError as e:
         logging.error(f"System command failed during ZHA mode switch: {e.cmd} returned {e.returncode}")
-        _call_progress(100, f"Failed: System command error - {e}")
+        _call_progress(progress_callback, 100, f"Failed: System command error - {e}")
         if complete_callback:
             complete_callback(False, f"system_command_failed: {e}")
     except Exception as e:
         logging.error(f"An unexpected error occurred during ZHA mode switch: {e}", exc_info=True)
-        _call_progress(100, f"Failed: Unexpected error - {e}")
+        _call_progress(progress_callback, 100, f"Failed: Unexpected error - {e}")
         if complete_callback:
             complete_callback(False, f"unexpected_error: {e}")
     finally:
@@ -721,74 +733,66 @@ def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):
     logging.info("Attempting to switch to Zigbee2MQTT mode...")
     ha_service_was_running = False
 
-    def _call_progress(percentage, message):
-        logging.info(f"Progress: {percentage}% - {message}")
-        if progress_callback:
-            try:
-                progress_callback(percentage, message)
-            except Exception as cb_e:
-                logging.warning(f"Error in progress_callback: {cb_e}")
-
     try:
-        _call_progress(5, "Checking prerequisite services (Mosquitto, Zigbee2MQTT)...")
+        _call_progress(progress_callback, 5, "Checking prerequisite services (Mosquitto, Zigbee2MQTT)...")
         required_services = ["mosquitto.service", "zigbee2mqtt.service"]
         for service_name in required_services:
             if not _service_exists(service_name):
                 error_msg = f"Prerequisite service '{service_name}' not found. Cannot switch to Z2M mode."
                 logging.error(error_msg)
-                _call_progress(100, f"Failed: {error_msg}")
+                _call_progress(progress_callback, 100, f"Failed: {error_msg}")
                 if complete_callback:
                     complete_callback(False, f"prerequisite_service_missing: {service_name}")
                 return
         logging.info("Prerequisite services found.")
 
-        _call_progress(10, "Checking Home Assistant service status...")
+        _call_progress(progress_callback, 10, "Checking Home Assistant service status...")
         try:
             status_check = subprocess.run(["systemctl", "is-active", "home-assistant.service"], capture_output=True, text=True, check=False)
             if status_check.stdout.strip() == "active":
                 ha_service_was_running = True
                 logging.info("Home Assistant service is running. Stopping it temporarily.")
-                _call_progress(15, "Stopping Home Assistant service...")
+                _call_progress(progress_callback, 15, "Stopping Home Assistant service...")
                 subprocess.run(["systemctl", "stop", "home-assistant.service"], check=True)
                 logging.info("Home Assistant service stopped.")
             else:
                 logging.info("Home Assistant service is not running or status unknown.")
         except subprocess.CalledProcessError as e:
             logging.error(f"Failed to stop Home Assistant service: {e}")
-            _call_progress(100, f"Failed: HA service stop error - {e}")
+            _call_progress(progress_callback, 100, f"Failed: HA service stop error - {e}")
             if complete_callback:
                 complete_callback(False, f"ha_service_stop_error: {e}")
             return
         except FileNotFoundError:
             logging.error("systemctl command not found. Cannot manage Home Assistant service.")
-            _call_progress(100, "Failed: systemctl not found")
+            _call_progress(progress_callback, 100, "Failed: systemctl not found")
             if complete_callback:
                 complete_callback(False, "systemctl_not_found")
             return
 
-        _call_progress(20, "Checking if already in Z2M mode...")
+        _call_progress(progress_callback, 20, "Checking if already in Z2M mode...")
         if _check_if_z2m_configured():
             logging.info("System is already configured for Zigbee2MQTT mode. Skipping configuration updates.")
-            _call_progress(70, "Already in Z2M mode. Ensuring services are active.")
+            _call_progress(progress_callback, 70, "Already in Z2M mode. Ensuring services are active.")
         else:
-            _call_progress(25, "Not in Z2M mode or status unclear. Proceeding with configuration updates.")
+            _call_progress(progress_callback, 25, "Not in Z2M mode or status unclear. Proceeding with configuration updates.")
             logging.info("Updating Home Assistant configurations for Z2M mode...")
             
-            _call_progress(30, "Updating Z2M config entries...")
+            _call_progress(progress_callback, 30, "Updating Z2M config entries...")
             # _update_zigbee2mqtt_config_entries does not take radio_type
             mqtt_entry_id, zha_entry_id = _update_zigbee2mqtt_config_entries()
             logging.info(f"Z2M config entries updated. MQTT Entry ID: {mqtt_entry_id}, ZHA Entry ID targeted for removal: {zha_entry_id}")
 
-            _call_progress(50, "Updating Z2M device registry...")
+            _call_progress(progress_callback, 50, "Updating Z2M device registry...")
             # _update_zigbee2mqtt_device_registry does not take ieee
             _update_zigbee2mqtt_device_registry(mqtt_entry_id, zha_entry_id)
             logging.info("Z2M device registry updated.")
 
-            _call_progress(70, "Updating Z2M entity registry...")
+            _call_progress(progress_callback, 70, "Updating Z2M entity registry...")
             _update_zigbee2mqtt_entity_registry()
             logging.info("Z2M entity registry updated.")
 
-        _call_progress(80, "Starting and enabling Z2M services (Mosquitto, Zigbee2MQTT)...")
+        _call_progress(progress_callback, 80, "Starting and enabling Z2M services (Mosquitto, Zigbee2MQTT)...")
         all_services_managed_successfully = True
         for service_file, service_name in [("mosquitto.service", "Mosquitto"), ("zigbee2mqtt.service", "Zigbee2MQTT")]:
             try:
@@ -810,24 +814,24 @@ def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):
             # Decide if this is a partial success or failure for complete_callback
             # For now, continue and report overall success if other steps passed.
 
-        _call_progress(100, "Successfully switched to Z2M mode (or confirmed existing Z2M mode).")
+        _call_progress(progress_callback, 100, "Successfully switched to Z2M mode (or confirmed existing Z2M mode).")
         logging.info("Successfully switched to Zigbee2MQTT mode.")
         if complete_callback:
             complete_callback(True, "success_z2m_mode_set_or_confirmed")
 
     except ConfigError as e:
         logging.error(f"Configuration error during Z2M mode switch: {e}")
-        _call_progress(100, f"Failed: Configuration error - {e}")
+        _call_progress(progress_callback, 100, f"Failed: Configuration error - {e}")
         if complete_callback:
             complete_callback(False, f"config_error_z2m: {e}")
     except subprocess.CalledProcessError as e:
         logging.error(f"System command failed during Z2M mode switch: {e.cmd} returned {e.returncode} with output: {e.output} and stderr: {e.stderr}")
-        _call_progress(100, f"Failed: System command error - {e}")
+        _call_progress(progress_callback, 100, f"Failed: System command error - {e}")
         if complete_callback:
             complete_callback(False, f"system_command_failed_z2m: {e}")
     except Exception as e:
         logging.error(f"An unexpected error occurred during Z2M mode switch: {e}", exc_info=True)
-        _call_progress(100, f"Failed: Unexpected error - {e}")
+        _call_progress(progress_callback, 100, f"Failed: Unexpected error - {e}")
         if complete_callback:
             complete_callback(False, f"unexpected_error_z2m: {e}")
     finally:
@@ -840,8 +844,6 @@ def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):
                 logging.error(f"CRITICAL: Failed to restart Home Assistant service: {e}. Manual intervention may be required.")
             except FileNotFoundError:
                 logging.error("CRITICAL: systemctl not found. Cannot restart Home Assistant service. Manual intervention may be required.")
-
-
 
 def get_ha_zigbee_mode(config_file="/var/lib/homeassistant/homeassistant/.storage/core.config_entries"):
     """
@@ -881,8 +883,81 @@ def get_ha_zigbee_mode(config_file="/var/lib/homeassistant/homeassistant/.storag
             return 'none'
     return 'none' # Should be unreachable if logic is correct, but as a fallback
 
+def _start_pairing_led_timer(led_controller, duration):
+    """Starts a timer in a daemon thread to manage the LED state for pairing."""
+    if not led_controller:
+        pairing_state.set_pairing(False) # Ensure state is reset even without LED
+        return
 
-def run_zha_pairing(progress_callback=None, complete_callback=None):
+    def timer_task():
+        logging.info(f"Zigbee pairing LED timer started for {duration} seconds.")
+        time.sleep(duration)
+        # Check if the state is still pairing before turning it off
+        if led_controller.get_led_state() == LedState.SYS_DEVICE_PAIRING:
+            led_controller.set_led_state(LedState.SYS_EVENT_OFF)
+        pairing_state.set_pairing(False)
+        logging.info("Zigbee pairing timer finished and state reset.")
+
+    timer_thread = threading.Thread(target=timer_task, daemon=True)
+    timer_thread.start()
+
+def run_mqtt_pairing(progress_callback=None, led_controller=None) -> bool:
+    """ 
+    Start the MQTT pairing process by enabling Zigbee joining via zigbee2mqtt.
+    """
+    services_to_check = ["mosquitto.service", "zigbee2mqtt.service"]
+    all_services_active = True
+
+    try:
+        _call_progress(progress_callback, 0, "Starting zigbee2mqtt pairing process (Zigbee permit join).")
+
+        for i, service in enumerate(services_to_check):
+            progress_step = 10 + (i * 10) # Progress from 10% to 30% for checks
+            _call_progress(progress_callback, progress_step, f"Checking status of {service}.")
+            try:
+                # Use systemctl is-active --quiet to check service status
+                # It exits with 0 if active, non-zero otherwise.
+                subprocess.run(["systemctl", "is-active", "--quiet", service], check=True)
+                logging.info(f"Service {service} is active.")
+            except subprocess.CalledProcessError:
+                logging.warning(f"Service {service} is not active. zigbee2mqtt pairing cannot proceed.")
+                all_services_active = False
+                _call_progress(progress_callback, 100, f"Service {service} not active. zigbee2mqtt pairing aborted.")
+                return False
+            except FileNotFoundError:
+                logging.error(f"systemctl command not found. Cannot check service {service}.")
+                all_services_active = False
+                _call_progress(progress_callback, 100, f"systemctl not found. Pairing aborted.")
+                return False
+
+        if all_services_active:
+            _call_progress(progress_callback, 50, "All required services active. Attempting to enable Zigbee joining.")
+            pairing_command = [
+                "/usr/bin/mosquitto_pub",
+                "-h", "localhost",
+                "-t", "zigbee2mqtt/bridge/request/permit_join",
+                "-m", '{"time": 254}',
+                "-u", "thirdreality",
+                "-P", "thirdreality"
+            ]
+            logging.info(f"Executing zigbee2mqtt pairing command: {' '.join(pairing_command)}")
+            result = subprocess.run(pairing_command, check=True, capture_output=True, text=True)
+            logging.info(f"zigbee2mqtt pairing enabled successfully via MQTT: {result.stdout.strip()}")
+            _call_progress(progress_callback, 100, "zigbee2mqtt pairing successfully enabled.")
+            return True
+
+    except subprocess.CalledProcessError as e:
+        err_msg = f"Failed to enable zigbee2mqtt pairing: {e.stderr.strip()}"
+        logging.error(err_msg)
+        _call_progress(progress_callback, 100, err_msg)
+        return False
+    except Exception as e:
+        err_msg = f"An unexpected error occurred during MQTT pairing: {str(e)}"
+        logging.error(err_msg)
+        _call_progress(progress_callback, 100, err_msg)
+        return False
+
+def run_zha_pairing(progress_callback=None, led_controller=None) -> bool:
     """
     Start the ZHA pairing process by calling the Home Assistant API.
     Reads Bearer token from /etc/automation-robot.conf.
@@ -896,208 +971,132 @@ def run_zha_pairing(progress_callback=None, complete_callback=None):
             progress_callback(percent, message)
 
     try:
-        _call_progress(0, "Starting ZHA pairing process.")
+        _call_progress(10, "Starting ZHA pairing process.")
 
         # 1. Read Bearer token
-        _call_progress(10, f"Reading Bearer token from {token_file}.")
+        _call_progress(20, f"Reading token from {token_file}.")
         if not os.path.exists(token_file):
             err_msg = f"Token file not found: {token_file}"
             logging.error(err_msg)
-            if complete_callback:
-                complete_callback(False, err_msg)
-            return
+            _call_progress(100, err_msg)
+            return False
         with open(token_file, "r", encoding="utf-8") as f:
             bearer_token = f.read().strip()
         
         if not bearer_token:
             err_msg = f"Bearer token is empty in {token_file}."
             logging.error(err_msg)
-            if complete_callback:
-                complete_callback(False, err_msg)
-            return
+            _call_progress(100, err_msg)
+            return False
         _call_progress(25, "Bearer token read successfully.")
 
         # 2. Get local IP address
-        _call_progress(40, "Fetching wlan0 IP address.")
+        _call_progress(40, "Getting wlan0 IP address.")
         local_ip = get_wlan0_ip()
         if not local_ip:
             err_msg = "Failed to determine wlan0 IP address."
             logging.error(err_msg)
-            if complete_callback:
-                complete_callback(False, err_msg)
-            return
+            _call_progress(100, err_msg)
+            return False
         _call_progress(50, f"wlan0 IP address: {local_ip}.")
 
         # 3. Prepare and send the request
-        api_url = f"http://{local_ip}:8123/api/services/zha/permit"
+        _call_progress(60, "Preparing ZHA pairing request.")
+        url = f"http://{local_ip}:8123/api/services/zha/permit"
         headers = {
             "Authorization": f"Bearer {bearer_token}",
             "Content-Type": "application/json",
-            "User-Agent": "CascadeAI/1.0",
-            "Accept": "*/*",
-            "Host": f"{local_ip}:8123",
-            "Connection": "keep-alive"
         }
-        data = {
-            "duration": 254
-        }
+        data = {"duration": 254}
 
-        _call_progress(60, f"Sending ZHA permit join request to {api_url}.")
-        
-        json_data = json.dumps(data).encode('utf-8')
-        req = urllib.request.Request(api_url, data=json_data, headers=headers, method='POST')
-        
         try:
-            with urllib.request.urlopen(req, timeout=10) as http_response:
-                response_content = http_response.read().decode('utf-8')
-                status_code = http_response.getcode()
-                _call_progress(90, f"Received response: {status_code}.")
-
+            _call_progress(75, f"Sending request to {url}.")
+            req = urllib.request.Request(url, headers=headers, data=json.dumps(data).encode('utf-8'), method='POST')
+            with urllib.request.urlopen(req, timeout=10) as response:
+                status_code = response.getcode()
+                response_content = response.read().decode('utf-8')
                 if 200 <= status_code < 300:
                     success_msg = f"ZHA pairing successfully initiated. Response: {response_content}"
                     logging.info(success_msg)
-                    if complete_callback:
-                        complete_callback(True, success_msg)
+                    _call_progress(100, success_msg)
+                    return True
                 else:
                     err_msg = f"Failed to initiate ZHA pairing. Status: {status_code}, Response: {response_content}"
                     logging.error(err_msg)
-                    if complete_callback:
-                        complete_callback(False, err_msg)
+                    _call_progress(100, err_msg)
+                    return False
         except urllib.error.HTTPError as e:
             status_code = e.code
             response_content = "No content (HTTPError)"
             try:
                 response_content = e.read().decode('utf-8')
             except Exception:
-                pass # Keep default error content
+                pass
             err_msg = f"ZHA pairing request failed (HTTPError). Status: {status_code}, Response: {response_content}"
             logging.error(err_msg)
             _call_progress(95, f"Error: {err_msg}")
-            if complete_callback:
-                complete_callback(False, err_msg)
+            return False
         except urllib.error.URLError as e:
             err_msg = f"ZHA pairing request failed (URLError): {e.reason}"
             logging.error(err_msg)
             _call_progress(95, f"Error: {err_msg}")
-            if complete_callback:
-                complete_callback(False, err_msg)
+            return False
     except Exception as e: # Catch other exceptions like issues with token file, IP, etc.
 
         err_msg = f"ZHA pairing request failed: {e}"
-        logging.error(err_msg)
-        _call_progress(95, f"Error: {err_msg}")
-        if complete_callback:
-            complete_callback(False, err_msg)
-    except Exception as e:
-        err_msg = f"An unexpected error occurred during ZHA pairing: {e}"
         logging.error(err_msg, exc_info=True)
         _call_progress(95, f"Error: {err_msg}")
-        if complete_callback:
-            complete_callback(False, err_msg)
+        return False
 
-def run_mqtt_pairing(progress_callback=None, complete_callback=None):
-    """
-    Start the MQTT pairing process by enabling Zigbee joining via zigbee2mqtt.
-    Checks if mosquitto and zigbee2mqtt services are running before attempting to pair.
-    """
-    services_to_check = ["mosquitto.service", "zigbee2mqtt.service"]
-    all_services_active = True
-
-    def _call_progress(percent, message):
-        logging.info(f"zigbee2mqtt Pairing progress ({percent}%): {message}")
-        if progress_callback:
-            progress_callback(percent, message)
-
-    try:
-        _call_progress(0, "Starting zigbee2mqtt pairing process (Zigbee permit join).")
-
-        for i, service in enumerate(services_to_check):
-            progress_step = 10 + (i * 10) # Progress from 10% to 30% for checks
-            _call_progress(progress_step, f"Checking status of {service}.")
-            try:
-                # Use systemctl is-active --quiet to check service status
-                # It exits with 0 if active, non-zero otherwise.
-                subprocess.run(["systemctl", "is-active", "--quiet", service], check=True)
-                logging.info(f"Service {service} is active.")
-            except subprocess.CalledProcessError:
-                logging.warning(f"Service {service} is not active. zigbee2mqtt pairing cannot proceed.")
-                all_services_active = False
-                _call_progress(100, f"Service {service} not active. zigbee2mqtt pairing aborted.")
-                if complete_callback:
-                    complete_callback(False, f"Service {service} not active")
-                return
-            except FileNotFoundError:
-                logging.error(f"systemctl command not found. Cannot check service {service}.")
-                all_services_active = False
-                _call_progress(100, f"systemctl not found. Pairing aborted.")
-                if complete_callback:
-                    complete_callback(False, "systemctl not found")
-                return
-
-        if all_services_active:
-            _call_progress(50, "All required services active. Attempting to enable Zigbee joining.")
-            pairing_command = [
-                "/usr/bin/mosquitto_pub",
-                "-h", "localhost",
-                "-t", "zigbee2mqtt/bridge/request/permit_join",
-                "-m", '{"time": 254}',
-                "-u", "thirdreality",
-                "-P", "thirdreality"
-            ]
-            try:
-                logging.info(f"Executing zigbee2mqtt pairing command: {' '.join(pairing_command)}")
-                result = subprocess.run(pairing_command, check=True, capture_output=True, text=True)
-                logging.info(f"zigbee2mqtt pairing enabled successfully via MQTT: {result.stdout.strip()}")
-                _call_progress(100, "zigbee2mqtt pairing successfully enabled.")
-                if complete_callback:
-                    complete_callback(True, "success - zigbee2mqtt pairing enabled")
-            except subprocess.CalledProcessError as e_cmd:
-                logging.error(f"Failed to execute mosquitto_pub command. RC: {e_cmd.returncode}. Error: {e_cmd.stderr.strip()}")
-                _call_progress(100, f"Failed to enable zigbee2mqtt pairing: {e_cmd.stderr.strip()}")
-                if complete_callback:
-                    complete_callback(False, f"Command failed: {e_cmd.stderr.strip()}")
-            except FileNotFoundError:
-                logging.error("mosquitto_pub command not found. Cannot enable pairing.")
-                _call_progress(100, "mosquitto_pub not found.")
-                if complete_callback:
-                    complete_callback(False, "mosquitto_pub not found")
-        # No else needed here as we return early if services are not active
-
-    except Exception as e:
-        logging.error(f"An unexpected error occurred during MQTT pairing: {e}")
-        _call_progress(100, f"Unexpected error: {e}")
-        if complete_callback:
-            complete_callback(False, f"Unexpected error: {str(e)}")
-
-def run_zigbee_pairing(progress_callback=None, complete_callback=None):
-    """
+def run_zigbee_pairing(progress_callback=None, complete_callback=None, led_controller=None):
+    """ 
     Start the Zigbee pairing process based on the current HA Zigbee mode.
-    """
+    """ 
+    if pairing_state.is_pairing():
+        logging.warning("Pairing is already in progress.")
+        if complete_callback:
+            complete_callback(False, "Pairing is already in progress.")
+        return
+
+    pairing_state.set_pairing(True)
+    if led_controller:
+        led_controller.set_led_state(LedState.SYS_DEVICE_PAIRING)
+
+    pairing_initiated_successfully = False
     try:
-        if progress_callback:
-            progress_callback(10, "Determining Zigbee mode...")
-        
+        _call_progress(progress_callback, 10, "Determining Zigbee mode...")
         mode = get_ha_zigbee_mode()
         logging.info(f"Current Zigbee mode is: {mode}")
 
         if mode == 'zha':
-            if progress_callback:
-                progress_callback(20, "Starting ZHA pairing process...")
-            # run_zha_pairing will handle the rest of the callbacks
-            run_zha_pairing(progress_callback, complete_callback)
+            _call_progress(progress_callback, 20, "Starting ZHA pairing process...")
+            pairing_initiated_successfully = run_zha_pairing(progress_callback, led_controller)
         elif mode == 'z2m':
-            if progress_callback:
-                progress_callback(20, "Starting Zigbee2MQTT pairing process...")
-            # run_mqtt_pairing will handle the rest of the callbacks
-            run_mqtt_pairing(progress_callback, complete_callback)
+            _call_progress(progress_callback, 20, "Starting Zigbee2MQTT pairing process...")
+            pairing_initiated_successfully = run_mqtt_pairing(progress_callback, led_controller)
         else:
             error_msg = "Zigbee pairing failed: No valid Zigbee integration (ZHA or Z2M) is active."
             logging.error(error_msg)
             if complete_callback:
                 complete_callback(False, error_msg)
+        
+        if pairing_initiated_successfully:
+            _start_pairing_led_timer(led_controller, 254)
+            if complete_callback:
+                complete_callback(True, "Pairing process initiated.")
+        else:
+            if complete_callback:
+                # Check if a more specific message was already sent by the sub-function
+                # This avoids sending a generic failure message if a specific one is available.
+                if mode in ['zha', 'z2m']:
+                    # The sub-functions now handle their own failure callbacks via progress
+                    pass
+                else:
+                    complete_callback(False, "Failed to initiate pairing command.")
 
-    except Exception as e:
-        error_msg = f"An unexpected error occurred during Zigbee pairing: {e}"
-        logging.error(error_msg, exc_info=True)
-        if complete_callback:
-            complete_callback(False, error_msg)
+    finally:
+        if not pairing_initiated_successfully:
+            pairing_state.set_pairing(False)
+            if led_controller:
+                led_controller.set_led_state(LedState.SYS_EVENT_OFF)
+            logging.info("Pairing initiation failed, state reset.")

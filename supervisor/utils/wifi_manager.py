@@ -34,7 +34,6 @@ class WifiManager:
         self.supervisor = supervisor
         self.provisioning_active = False
         self.provisioning_timer = None
-        self.home_assistant_was_active = None
         # Ensure NetworkManager is checked/started early, similar to existing init() logic
         # This init() is different from the user-callable init() method below.
         if not self._is_networkmanager_running():
@@ -148,19 +147,13 @@ class WifiManager:
         
         self.provisioning_active = True
 
-        # Manage home-assistant.service
         ha_service_name = "home-assistant.service"
-        try:
-            self.home_assistant_was_active = util.is_service_running(ha_service_name)
-            if self.home_assistant_was_active:
-                self.logger.info(f"'{ha_service_name}' is active, stopping it for provisioning.")
-                if not util.start_service(ha_service_name, False):
-                    self.logger.warning(f"Failed to stop '{ha_service_name}'. Provisioning continues.")
-            else:
-                self.logger.info(f"'{ha_service_name}' was not active.")
-        except Exception as e:
-            self.logger.error(f"Error managing '{ha_service_name}': {e}")
-            self.home_assistant_was_active = None # Unsure of state
+        if util.is_service_running(ha_service_name):
+            self.logger.info(f"Service '{ha_service_name}' is running, stopping it.")
+            if not util.start_service(ha_service_name, False):
+                self.logger.warning(f"Failed to stop '{ha_service_name}'.")
+        else:
+            self.logger.info(f"Service '{ha_service_name}' is not running.")
 
         if self.supervisor:
             self.supervisor.startAdv()
@@ -208,16 +201,15 @@ class WifiManager:
             self.logger.warning("Supervisor instance not available, cannot control BLE advertising.")
 
         ha_service_name = "home-assistant.service"
-        if self.home_assistant_was_active is not None:
-            if self.home_assistant_was_active:
-                self.logger.info(f"Restoring '{ha_service_name}' to active state in background.")
-                if not util.start_service(ha_service_name, True):
-                    self.logger.warning(f"Failed to restart '{ha_service_name}' in background.")
-            else:
-                self.logger.info(f"'{ha_service_name}' was not active before, no need to restart (background check).")
-            self.home_assistant_was_active = None # Reset after attempting restoration
+        # If home-assistant.service is enabled, start it.
+        _, status = self.execute_command(f"systemctl is-enabled {ha_service_name}")
+        if status == 0:
+            self.logger.info(f"Service '{ha_service_name}' is enabled, starting it.")
+            if not util.start_service(ha_service_name, True):
+                self.logger.warning(f"Failed to start '{ha_service_name}' in background.")
         else:
-            self.logger.warning(f"Previous state of '{ha_service_name}' unknown, cannot restore reliably (background check).")
+            # Service is not enabled, so we don't start it.
+            self.logger.info(f"Service '{ha_service_name}' is not enabled, will not be started.")
 
         if timed_out:
             if self.supervisor and hasattr(self.supervisor, 'led'):
