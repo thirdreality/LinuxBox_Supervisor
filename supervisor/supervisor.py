@@ -415,9 +415,18 @@ class Supervisor:
         util.perform_power_off()
     
     @util.threaded
-    def perform_wifi_provision(self):
+    def perform_wifi_provision(self, progress_callback=None, complete_callback=None):
         logging.info("Initiating wifi provision...")
-        self.wifi_manager.start_wifi_provision()
+        try:
+            if progress_callback:
+                progress_callback(50, "Starting WiFi provision...")
+            self.wifi_manager.start_wifi_provision()
+            if complete_callback:
+                complete_callback(True, "WiFi provision completed")
+        except Exception as e:
+            logging.error(f"WiFi provision failed: {e}")
+            if complete_callback:
+                complete_callback(False, str(e))
 
     @util.threaded
     def finish_wifi_provision(self):
@@ -478,11 +487,12 @@ class Supervisor:
 
     @util.threaded
     def start_zigbee_switch_zha(self):
-        self.logger.info("Starting zigbee switch to zha mode...")
+        logger.info("Starting zigbee switch to zha mode...")
         self.task_manager.start_zigbee_switch_zha_mode()
 
     @util.threaded
     def start_zigbee_switch_z2m(self):
+        logger.info("Starting zigbee switch to z2m mode...")
         self.task_manager.start_zigbee_switch_z2m_mode()
 
     def run(self):

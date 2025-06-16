@@ -53,6 +53,25 @@ class TaskManager:
                 self.logger.warning(f"Task {task_type} is already running.")
                 return False
 
+        def progress_callback(percent, message):
+            """Update task progress and message"""
+            with self._task_lock:
+                self.tasks[task_type]["progress"] = percent
+                self.tasks[task_type]["message"] = message
+            self.logger.info(f"Task {task_type} progress: {percent}% - {message}")
+
+        def complete_callback(success, result_message):
+            """Handle task completion"""
+            with self._task_lock:
+                if success:
+                    self.tasks[task_type]["status"] = TaskStatus.SUCCESS.value
+                    self.tasks[task_type]["progress"] = 100
+                    self.tasks[task_type]["message"] = result_message or "Task completed successfully"
+                else:
+                    self.tasks[task_type]["status"] = TaskStatus.FAILED.value
+                    self.tasks[task_type]["message"] = result_message or "Task failed"
+            self.logger.info(f"Task {task_type} completed with status: {self.tasks[task_type]['status']}, message: {result_message}")
+
         @util.threaded
         def task_wrapper():
             try:
@@ -62,11 +81,15 @@ class TaskManager:
                     self.tasks[task_type]["progress"] = 0
                     self.tasks[task_type]["message"] = ""
 
-                target_func(*args, **kwargs)
+                # Call target function with progress and complete callbacks
+                target_func(*args, progress_callback=progress_callback, complete_callback=complete_callback, **kwargs)
 
+                # If no complete_callback was called (for backward compatibility)
                 with self._task_lock:
-                    self.tasks[task_type]["status"] = TaskStatus.IDLE.value
-                    self.tasks[task_type]["progress"] = 100
+                    if self.tasks[task_type]["status"] == TaskStatus.RUNNING.value:
+                        self.tasks[task_type]["status"] = TaskStatus.IDLE.value
+                        self.tasks[task_type]["progress"] = 100
+
             except Exception as e:
                 self.logger.error(f"Task {task_type} error: {e}")
                 with self._task_lock:
