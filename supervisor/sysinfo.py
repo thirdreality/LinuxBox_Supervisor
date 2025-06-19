@@ -153,6 +153,60 @@ class SystemInfoUpdater:
         self.supervisor = supervisor
         self.logger = logging.getLogger("Supervisor")
         self.sys_info_thread = None
+        
+        # Initialize device name immediately
+        self._initialize_device_name()
+    
+    def _initialize_device_name(self):
+        """Initialize device name with retry mechanism"""
+        if not hasattr(self.supervisor, 'system_info'):
+            self.logger.error("Supervisor does not have system_info attribute")
+            return
+            
+        device_name = self._generate_device_name_with_retry()
+        self.supervisor.system_info.name = device_name
+        self.logger.info(f"Device name initialized: {device_name}")
+    
+    def _generate_device_name_with_retry(self, max_retries=3, retry_delay=0.5):
+        """Generate device name with retry mechanism for MAC address retrieval"""
+        from .utils.wifi_utils import get_wlan0_mac_for_localname
+        import time
+        
+        for attempt in range(max_retries):
+            try:
+                mac_str = get_wlan0_mac_for_localname()
+                if mac_str:
+                    # Use same algorithm as btgatt-server.c and LinuxBoxAdvertisement
+                    device_name = f"3RHUB-{mac_str[-8:]}"  # Use only last 8 characters of MAC address
+                    self.logger.info(f"Generated device name from MAC (attempt {attempt + 1}): {device_name}")
+                    return device_name
+                else:
+                    self.logger.warning(f"Failed to get MAC address (attempt {attempt + 1}/{max_retries})")
+                    
+            except Exception as e:
+                self.logger.warning(f"Error getting MAC address (attempt {attempt + 1}/{max_retries}): {e}")
+            
+            # Wait before retry (except for last attempt)
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+        
+        # Fallback: try to read /etc/machine-id if all MAC retrieval attempts failed
+        try:
+            with open('/etc/machine-id', 'r') as f:
+                machine_id = f.read().strip()
+                if machine_id and len(machine_id) >= 8:
+                    # Use last 8 characters and convert to uppercase
+                    machine_suffix = machine_id[-8:].upper()
+                    fallback_name = f"3RHUB-{machine_suffix}"
+                    self.logger.info(f"Using machine-id based fallback name: {fallback_name}")
+                    return fallback_name
+        except Exception as e:
+            self.logger.warning(f"Failed to read /etc/machine-id: {e}")
+        
+        # Final fallback if machine-id is also unavailable
+        final_fallback = "3RHUB-EMB"
+        self.logger.warning(f"All attempts failed, using final fallback: {final_fallback}")
+        return final_fallback
     
     def system_info_update_task(self):
         self.logger.info("Starting updating system information ...")
@@ -162,45 +216,51 @@ class SystemInfoUpdater:
                 self.logger.error("Supervisor does not have system_info attribute")
                 return
                 
-            # 获取SystemInfo对象
+            # Get SystemInfo object
             sys_info = self.supervisor.system_info
             
-            # 确保HomeAssistantInfo对象存在
+            # Update device name if it's still the default
+            if sys_info.name in ["3RHUB-XXXX", "3RHUB-EMB"] or not sys_info.name:
+                device_name = self._generate_device_name_with_retry()
+                sys_info.name = device_name
+                self.logger.info(f"Updated device name: {device_name}")
+            
+            # Ensure HomeAssistantInfo object exists
             if not hasattr(sys_info, 'hainfo'):
                 sys_info.hainfo = HomeAssistantInfo()
                 
-            # 获取HomeAssistantInfo对象
+            # Get HomeAssistantInfo object
             ha_info = sys_info.hainfo
             
-            # 查询thirdreality-hacore-config包版本
+            # Query thirdreality-hacore-config package version
             ha_info.config = get_package_version("thirdreality-hacore-config")
             self.logger.info(f"thirdreality-hacore-config version: {ha_info.config}")
             
-            # 查询thirdreality-python3包版本
+            # Query thirdreality-python3 package version
             ha_info.python = get_package_version("thirdreality-python3")
             self.logger.info(f"thirdreality-python3 version: {ha_info.python}")
             
-            # 查询thirdreality-hacore包版本
+            # Query thirdreality-hacore package version
             ha_info.core = get_package_version("thirdreality-hacore")
             self.logger.info(f"thirdreality-hacore version: {ha_info.core}")
             
-            # 查询thirdreality-otbr-agent包版本
+            # Query thirdreality-otbr-agent package version
             ha_info.otbr = get_package_version("thirdreality-otbr-agent")
             self.logger.info(f"thirdreality-otbr-agent version: {ha_info.otbr}")
 
-            # 查询thirdreality-zigbee-mqtt包版本
+            # Query thirdreality-zigbee-mqtt package version
             ha_info.z2m = get_package_version("thirdreality-zigbee-mqtt")
             self.logger.info(f"thirdreality-zigbee-mqtt version: {ha_info.z2m}")
 
-            # 设置installed状态
+            # Set installed status
             ha_info.installed = bool(ha_info.core and ha_info.python and ha_info.config)
 
             ha_info.enabled = ha_info.installed
             
-            # 获取设备内存大小
+            # Get device memory size
             sys_info.memory_size = get_memory_size()
 
-            # 检查 otbr-agent 服务状态
+            # Check otbr-agent service status
             from supervisor.utils import util
             if util.is_service_running("otbr-agent.service"):
                 sys_info.support_thread = True
@@ -209,7 +269,7 @@ class SystemInfoUpdater:
             self.logger.info(f"Thread support (otbr-agent.service running): {sys_info.support_thread}")
             self.logger.info(f"Device memory size: {sys_info.memory_size} MB")
             
-            # 获取存储空间信息
+            # Get storage space information
             storage_info = get_storage_space()
             sys_info.storage_space = storage_info
             self.logger.info(f"Storage space - Total: {storage_info['total']}, Available: {storage_info['available']}")
@@ -218,11 +278,11 @@ class SystemInfoUpdater:
         except Exception as e:
             self.logger.error(f"Error updating system information: {e}")
         
-        # 任务完成，线程将退出
+        # Task completed, thread will exit
     
     
     def start(self):
-        """启动线程执行一次系统信息更新任务"""
+        """Start thread to execute system information update task"""
         if self.sys_info_thread and self.sys_info_thread.is_alive():
             self.logger.info("System information update already running")
             return
@@ -232,5 +292,5 @@ class SystemInfoUpdater:
         self.logger.info("System information update started")
         
     def stop(self):
-        """使用supervisor.running关闭，这里做做样子"""
+        """Use supervisor.running to close, here for show"""
         self.logger.info("System Information stopped")

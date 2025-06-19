@@ -29,9 +29,7 @@ import threading
 import time
 import json
 import logging
-import hashlib
-import base64
-import struct
+
 
 try:
     from gi.repository import GObject
@@ -41,11 +39,11 @@ except ImportError:
 from .advertisement import Advertisement
 from .service import Application, Service, Characteristic, Descriptor
 from ..utils.wifi_manager import WifiManager
-from ..utils.wifi_utils import get_wlan0_mac_for_localname,get_wlan0_ip
+from ..utils.wifi_utils import get_wlan0_ip
 
 #define HUBV3_CONFIG_SERVICE_UUID "6e400000-0000-4e98-8024-bc5b71e0893e"
 
-#配置wifi，使用json指令：写
+# Configure wifi using JSON commands: write
 #define HUBV3_WIFI_CONFIG_CHAR_UUID "6e400002-0000-4e98-8024-bc5b71e0893e"
 
 GATT_CHRC_IFACE = "org.bluez.GattCharacteristic1"
@@ -55,12 +53,11 @@ class SupervisorGattServer:
     """
     BLE GATT server manager for Supervisor BLE modules.
     Handles BLE Advertisement, Application, and Services lifecycle.
+    Optimized for embedded platforms with limited resources.
     """
-    # 加密密钥 (16字节，用于AES加密)
-    ENCRYPTION_KEY = b"ThirdRealityKey"
     
     def __init__(self, supervisor):
-        """初始化GATT服务器"""
+        """Initialize GATT server"""
         self.supervisor = supervisor
         self.logger = logging.getLogger("Supervisor")
         self.app = None
@@ -69,102 +66,35 @@ class SupervisorGattServer:
         self.running = False
         self.mainloop = None
         self.mainloop_thread = None
-        self._adv_lock = threading.Lock()
-        self._previous_ip_address = None
-        self._last_update_time = None  # 上次更新时间
-        self.logger.debug("Initialized GATT server with update tracking")
-        self.mainloop_thread = None
-        self._previous_ip_address = "0.0.0.0"
         
-        # 添加线程锁，保护广告更新操作
+        # Add thread lock to protect advertisement operations
         self._adv_lock = threading.RLock()
         self._adv_registered_externally = False # Track if adv is active due to external call
+        
+        # Add timeout control
+        self.timeout_timer = None
+        self.timeout_minutes = 5
+        
+        self.logger.debug("Initialized GATT server for embedded platform")
 
-    def _encrypt_ip_address(self, ip_address):
-        """
-        加密IP地址，返回加密后的字节数组
-        使用简单的可逆加密方法，适合资源受限的BLE设备
-        """
-        try:
-            # 将IP地址转换为字节列表
-            ip_bytes = [int(part) for part in ip_address.split('.')]
-            if len(ip_bytes) != 4:
-                raise ValueError(f"Invalid IP address format: {ip_address}")
-                
-            # 使用密钥生成一个简单的XOR掩码
-            key_hash = hashlib.md5(self.ENCRYPTION_KEY).digest()[:4]  # 取MD5的前4个字节作为掩码
+    def start_with_timeout(self, timeout_minutes=5):
+        """Start GATT server with timeout"""
+        self.timeout_minutes = timeout_minutes
+        
+        if not self.start():
+            return False
             
-            # 对IP地址进行XOR加密
-            encrypted_bytes = []
-            for i in range(4):
-                encrypted_bytes.append(ip_bytes[i] ^ key_hash[i])
-                
-            # 添加校验和 (简单的字节求和)
-            checksum = sum(encrypted_bytes) & 0xFF
-            encrypted_bytes.append(checksum)
-            
-            self.logger.debug(f"Encrypted IP {ip_address} to bytes: {encrypted_bytes}")
-            return encrypted_bytes  # 返回加密后的字节数组，包含校验和
-        except Exception as e:
-            self.logger.error(f"Error encrypting IP address: {e}")
-            # 返回全0作为错误情况，包括校验和字节
-            error_bytes = [0, 0, 0, 0, 0]  # 4个IP字节加1个校验和字节
-            return error_bytes
+        # Start timeout timer
+        timeout_seconds = timeout_minutes * 60
+        self.timeout_timer = threading.Timer(timeout_seconds, self._on_timeout)
+        self.timeout_timer.start()
+        self.logger.info(f"GATT server started with {timeout_minutes} minute timeout")
+        return True
 
-    def updateAdv(self, ip_address=None, debug_disable_update=True):
-        """
-        更新BLE广告中的IP地址信息
-        使用线程安全机制、IP地址加密和防抖机制
-        debug_disable_update: 如果为True，则禁用此函数的功能以进行调试。
-        """
-        if debug_disable_update:
-            self.logger.info("[BLE] updateAdv functionality is disabled for debugging.")
-            return
-
-        # 使用线程锁保护整个更新过程
-        with self._adv_lock:
-            # 防抖机制：如果上次更新时间太近，直接返回
-            current_time = time.time()
-            if self._last_update_time and \
-               current_time - self._last_update_time < 2:  # 至少2秒间隔
-                self.logger.debug(f"Debounced updateAdv call (interval < 2s)")
-                return
-                
-            self.logger.info(f"[BLE] Updating advertisement with IP address: {ip_address}")
-            try:
-                # 如果没有提供 IP 地址，检查当前连接状态
-                if ip_address is None:
-                    # 从 supervisor 获取当前 WiFi 状态
-                    ip_address = self.supervisor.wifi_status.ip_address
-                    
-                # 如果IP地址没有变化，直接返回
-                if self._previous_ip_address == ip_address:
-                    self.logger.debug(f"IP address unchanged ({ip_address})")
-                    return
-                    
-                # 准备制造商数据
-                manufacturer_data = [0x00, 0x00, 0x00, 0x00]  # 默认空IP地址
-                
-                # 如果有IP地址，则加密后放入广告数据
-                if ip_address:
-                    encrypted_ip = self._encrypt_ip_address(ip_address)
-                    self.logger.debug(f"Encrypted IP {ip_address} to bytes: {encrypted_ip}")
-                    manufacturer_data = encrypted_ip
-                
-                # 更新制造商数据 - 使用厂商代码 0x0059 (89)
-                self.adv.add_manufacturer_data(0x0133, manufacturer_data)
-                self.logger.info(f"Added IP address to advertisement: {ip_address} -> {manufacturer_data}")
-                
-                # 注册广告使更改生效
-                # self.adv.register()
-                
-                # 保存当前IP地址和更新时间
-                self._previous_ip_address = ip_address
-                self._last_update_time = current_time
-            except Exception as e:
-                self.logger.error(f"Error updating advertisement with IP address: {e}")
-                import traceback
-                self.logger.error(traceback.format_exc())
+    def _on_timeout(self):
+        """Timeout callback"""
+        self.logger.info("GATT server timeout reached, stopping...")
+        self.stop()
 
     def startAdv(self):
         """Starts the BLE advertisement."""
@@ -215,10 +145,6 @@ class SupervisorGattServer:
             self.manager_service = LinuxBoxManagerService(0, self.supervisor)
             self.app.add_service(self.manager_service)
             
-            # Add initial manufacturer data
-            ip_bytes = [0, 0, 0, 0]
-            self.adv.add_manufacturer_data(0x0133, ip_bytes)
-            
             # Register Application first, then Advertisement
             # This order can be important for some BlueZ implementations
             self.logger.info("[BLE] Registering GATT application...")
@@ -251,6 +177,11 @@ class SupervisorGattServer:
             self.logger.error(f"Error in GATT server main loop: {e}")
 
     def stop(self):
+        # Stop timeout timer
+        if self.timeout_timer:
+            self.timeout_timer.cancel()
+            self.timeout_timer = None
+            
         if not self.running:
             return
         
@@ -295,23 +226,23 @@ class LinuxBoxAdvertisement(Advertisement):
         self.supervisor = supervisor
         self.logger = logging.getLogger("Supervisor")
         Advertisement.__init__(self, index, "peripheral")
-        mac_str = get_wlan0_mac_for_localname()
-        if mac_str:
-            self.logger.info(f"[BLE] Adding local name: '3RHUB-{mac_str}'")
-            self.add_local_name(f"3RHUB-{mac_str}")
-            self.supervisor.system_info.name = f"3RHUB-{mac_str}"
+        
+        # Get device name from SystemInfo (set by SystemInfoUpdater)
+        device_name = getattr(self.supervisor.system_info, 'name', "3RHUB-EMB")
+        if device_name and device_name != "3RHUB-XXXX":
+            self.add_local_name(device_name)
+            self.logger.info(f"[BLE] Using device name from SystemInfo: '{device_name}'")
         else:
-            self.logger.error(f"[BLE] Adding local name: '3RHUB-XXXXXXXX'")
-            self.add_local_name("3RHUB-XXXXXXXX")
-            self.supervisor.system_info.name = "3RHUB-XXXXXXXX"
+            # Fallback if SystemInfo name is not set or is default
+            self.add_local_name("3RHUB-EMB")
+            self.logger.info(f"[BLE] Using fallback local name: '3RHUB-EMB'")
 
+        # Add only main service UUID
         self.add_service_uuid("6e400000-0000-4e98-8024-bc5b71e0893e")
-
-        # Do not add service UUID to advertisement - this appears to be causing issues with BlueZ
-        # The service will still be discoverable through the GATT service discovery process
-        self.logger.info(f"[BLE] Service UUID will be discoverable through GATT service discovery")
-        # We'll focus on making the GATT service work properly instead of adding it to the advertisement
-        self.include_tx_power = True
+        
+        # Do not include TX power, keep advertisement simple
+        self.include_tx_power = False
+        self.logger.info("[BLE] Simplified advertisement for embedded platform")
 
 class LinuxBoxManagerService(Service):
     _LINUXBOX_SVC_UUID = "6e400000-0000-4e98-8024-bc5b71e0893e"
@@ -326,9 +257,10 @@ class LinuxBoxManagerService(Service):
 
 class WIFIConfigCharacteristic(Characteristic):
     _CHARACTERISTIC_UUID = "6e400001-0000-4e98-8024-bc5b71e0893e"
-    _MAX_RETRIES = 3  # Maximum number of notification retries
-    _RETRY_DELAY = 0.5  # Delay between retries in seconds
-    _NOTIFICATION_SETUP_DELAY = 0.2  # Delay after notification is enabled before sending data
+    # Parameters optimized for MTU=23
+    _MAX_CHUNK_SIZE = 18  # 23-3(protocol overhead)-2(safety margin) 
+    _CHUNK_DELAY = 0.05   # 50ms delay is sufficient
+    _MAX_RETRIES = 3      # Reduce retry count to avoid excessive retries
 
     def __init__(self, service):
         self.logger = logging.getLogger("Supervisor")
@@ -344,7 +276,7 @@ class WIFIConfigCharacteristic(Characteristic):
         
         # Record using notify mode (was indicate)
         self._use_indicate = False # Set to False for notify
-        self.logger.info("Using notify mode")
+        self.logger.info("Using notify mode with MTU=23 optimization")
 
     def WriteValue(self, value, options):
         #self.logger.info(f"Write Value: {value}")
@@ -380,7 +312,7 @@ class WIFIConfigCharacteristic(Characteristic):
                     ret = wifi_manager.configure(ssid, password)
                     self.logger.info(f"WiFi configuration result: {ret}")
                     if ret == 0:
-                        time.sleep(3)  # 等待WiFi连接
+                        time.sleep(3)  # Wait for WiFi connection
                         ip_address = get_wlan0_ip() or ""
                         self.logger.info(f"WiFi IP address: {ip_address}")
                         self.service.supervisor.update_wifi_info(ip_address, ssid)  
@@ -410,8 +342,8 @@ class WIFIConfigCharacteristic(Characteristic):
         """
         self.logger.debug(f"Sending indication with {len(value)} bytes")
         
-        # 使用PropertiesChanged发送indication
-        # BlueZ会根据特性的配置决定是使用notify还是indicate
+        # Send indication via PropertiesChanged
+        # BlueZ will handle sending this as a notification if the client subscribed
         try:
             self.PropertiesChanged(
                 GATT_CHRC_IFACE,
@@ -425,77 +357,41 @@ class WIFIConfigCharacteristic(Characteristic):
             raise
 
     def send_response_notification(self, result):
-        """Sends a response notification with retry and chunking logic."""
+        """Optimized fixed MTU=23 notification sending"""
         if not self._notifying:
-            self.logger.warning("Cannot send notification: notifications not enabled by client")
+            self.logger.warning("Cannot send notification: notifications not enabled")
             return False
-        
-        # 等待indication通道完全就绪
-        retry_count = 0
-        success = False
-        
-        # 将结果转换为字节数组用于notification
+
         value = [dbus.Byte(c) for c in result.encode('utf-8')]
         
-        # 大数据包分片处理，提高传输成功率
-        max_chunk_size = 100  # 限制每次发送大小
-        if len(value) > max_chunk_size:
-            self.logger.info(f"Large notification detected ({len(value)} bytes), splitting into chunks")
-            chunks = [value[i:i+max_chunk_size] for i in range(0, len(value), max_chunk_size)]
+        # Force fragmentation, each 18 bytes (optimized for MTU=23)
+        chunks = [value[i:i+self._MAX_CHUNK_SIZE] 
+                 for i in range(0, len(value), self._MAX_CHUNK_SIZE)]
+        
+        self.logger.info(f"Sending {len(chunks)} chunks of {self._MAX_CHUNK_SIZE} bytes (MTU=23)")
+        
+        for i, chunk in enumerate(chunks):
+            success = False
+            for retry in range(self._MAX_RETRIES):
+                try:
+                    with self._notification_lock:
+                        self._send_notification_value(chunk)
+                        success = True
+                        break
+                except Exception as e:
+                    self.logger.warning(f"Chunk {i+1} retry {retry+1} failed: {e}")
+                    time.sleep(0.02 * (retry + 1))
             
-            # 发送分片
-            for i, chunk in enumerate(chunks):
-                chunk_header = f"CHUNK:{i+1}/{len(chunks)}:"  # 添加分片头部
-                if i == 0:
-                    # 第一个分片包含分片信息
-                    header_bytes = [dbus.Byte(c) for c in chunk_header.encode('utf-8')]
-                    chunk_with_header = header_bytes + chunk
-                    success = self._send_single_notification_packet(chunk_with_header)
-                else:
-                    # 后续分片只发送数据
-                    success = self._send_single_notification_packet(chunk)
+            if not success:
+                self.logger.error(f"Failed to send chunk {i+1}")
+                return False
                 
-                if not success:
-                    self.logger.error(f"Failed to send chunk {i+1}/{len(chunks)}")
-                    return False
-                    
-                # 分片之间添加延迟
-                time.sleep(0.02)  # Reduced delay
-            
-            return True
-        else:
-            # 正常发送单个数据包
-            return self._send_single_notification_packet(value)
+            # Inter-chunk delay
+            if i < len(chunks) - 1:
+                time.sleep(self._CHUNK_DELAY)
         
-    def _send_single_notification_packet(self, value):
-        """Sends a single notification packet and handles retries."""
-        retry_count = 0
-        success = False
-        max_retries = 3  # indicate模式下可以使用更少的重试次数
-        retry_delay = 0.1  # Fixed retry interval
-    
-        while retry_count < max_retries and not success:
-            try:
-                with self._notification_lock:
-                    if retry_count > 0:
-                        self.logger.info(f"Retry #{retry_count} sending notification packet ({len(value)} bytes)")
-                        time.sleep(retry_delay) # Use fixed retry delay
-                    
-                    # 使用_send_notification_value方法发送数据
-                    self._send_notification_value(value)
-                    
-                    # 发送后添加小延迟
-                    time.sleep(0.2)
-                    success = True
-                    self.logger.info(f"Notification packet sent successfully ({len(value)} bytes)")
-            except Exception as e:
-                self.logger.error(f"Failed to send notification packet: {e}")
-                retry_count += 1
-        
-        if not success:
-            self.logger.error(f"Failed to send notification packet after {max_retries} retries")
-        
-        return success
+        return True
+
 
     def StartNotify(self):
         """
@@ -507,8 +403,8 @@ class WIFIConfigCharacteristic(Characteristic):
                 return
                 
             self._notifying = True
-            self._notification_ready = True  # Set ready immediately ## 测试: 暂时禁用
-            self.logger.info("Client subscribed to notifications. For testing, notification channel readiness NOT set.")
+            self._notification_ready = True  # Set ready immediately for embedded platform
+            self.logger.info("Client subscribed to notifications (MTU=23 optimization enabled)")
             # Send a test notification to confirm the channel is working
             # This helps some clients establish the notification flow correctly.
             # try:

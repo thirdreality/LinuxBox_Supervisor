@@ -763,17 +763,24 @@ class GpioHwController:
             time.sleep(0.2)
             subprocess.run(["gpioset", "0", "1=1"], check=True)
             
-            # self.logger.info("Reset Thread module GPIOA_1/GPIOA_3 ...")
-            # # Thread reset: DB_RSTN2/GPIOA_1
-            # # Thread boot: DB_BOOT2/GPIOA_3 
-            # subprocess.run(["gpioset", "0", "29=0"], check=True)
-            # time.sleep(0.2)
-            # subprocess.run(["gpioset", "0", "27=1"], check=True)
-            # time.sleep(0.2)
-            # subprocess.run(["gpioset", "0", "27=0"], check=True)
-            # time.sleep(0.2)
-            # subprocess.run(["gpioset", "0", "27=1"], check=True)
         except subprocess.CalledProcessError as e:
-            self.logger.error(f"Error executing gpioset command: {e}")
+            self.logger.error(f"Error executing Zigbee gpioset command: {e}")
         except Exception as e:
-            self.logger.error(f"Error initializing GPIO pins: {e}")
+            self.logger.error(f"Error initializing Zigbee GPIO pins: {e}")
+
+        self.logger.info("Reset Thread module GPIOA_1/GPIOA_3 ...")
+        # Thread reset: DB_RSTN2/GPIOA_1
+        # Thread boot: DB_BOOT2/GPIOA_3 
+        try:            
+            subprocess.run(["gpioset", "0", "29=0"], check=True)
+            time.sleep(0.2)
+            subprocess.run(["gpioset", "0", "27=1"], check=True)
+            time.sleep(0.2)
+            subprocess.run(["gpioset", "0", "27=0"], check=True)
+            time.sleep(0.2)
+            subprocess.run(["gpioset", "0", "27=1"], check=True)
+
+        except subprocess.CalledProcessError as e:
+            self.logger.error(f"Error executing Thread gpioset command: {e}")
+        except Exception as e:
+            self.logger.error(f"Error initializing Thread GPIO pins: {e}")            

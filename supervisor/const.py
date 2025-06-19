@@ -20,5 +20,18 @@ LINUXBOX_BUTTON_CHIP=0
 LINUXBOX_BUTTON_LINE=26
 
 DEVICE_MODEL_NAME="LinuxBox Dev Edition"
-DEVICE_BUILD_NUMBER="20250415-1234"
+DEVICE_BUILD_NUMBER="20250619-0000"
+
+# BLE GATT Server Configuration
+# 'auto' - 自动检测是否存在外部服务
+# 'external' - 强制使用外部C实现的btgatt-config-server
+# 'internal' - 强制使用内部Python实现的SupervisorGattServer
+BLE_GATT_SERVER_MODE = "auto"
+
+# External GATT server configuration
+EXTERNAL_GATT_SERVICE_NAME = "btgatt-config.service"
+EXTERNAL_GATT_BINARY_PATH = "/usr/local/bin/btgatt-config-server"
+
+# GATT server timeout configuration (minutes)
+GATT_SERVER_TIMEOUT_MINUTES = 5
 

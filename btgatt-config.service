@@ -6,7 +6,7 @@ Requires=bluetooth.service
 PartOf=bluetooth.service
 [Service]
 Type=simple
-ExecStartPre=/bin/systemctl restart bluetooth.service; /bin/sleep 1
+#ExecStartPre=/bin/systemctl restart bluetooth.service; /bin/sleep 1
 ExecStart=/usr/local/bin/btgatt-config-server
 Restart=on-failure
 RestartSec=5

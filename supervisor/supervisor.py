@@ -19,7 +19,8 @@ from .ota.ota_server import SupervisorOTAServer
 from .task import TaskManager
 from .utils import util
 
-from .ble.gattserver import SupervisorGattServer
+from .ble.gatt_server import SupervisorGattServer
+from .ble.gatt_manager import GattServerManager
 from .http_server import SupervisorHTTPServer  
 from .proxy import SupervisorProxy
 from .cli import SupervisorClient
@@ -65,10 +66,14 @@ class Supervisor:
 
         self.proxy = SupervisorProxy(self)
         self.http_server = None
-        self.gatt_server = None
+        
+        # Initialize SystemInfoUpdater before GATT manager to ensure device name is set
+        self.sysinfo_update = SystemInfoUpdater(self)
+        
+        self.gatt_manager = GattServerManager(self)
+        self.gatt_server = None  # 保持向后兼容性
 
         self.network_monitor = NetworkMonitor(self)
-        self.sysinfo_update = SystemInfoUpdater(self)
         self.ota_server = SupervisorOTAServer(self)
 
         # boot up time
@@ -296,13 +301,12 @@ class Supervisor:
             logger.info(f"Update wifi info: {ip_address}")
             self.wifi_status.ip_address = ip_address
             self.wifi_status.ssid = ssid
-            if self.gatt_server:
-                if ip_address == "":
-                    self.gatt_server.updateAdv("0.0.0.0")
-                else:
-                    self.gatt_server.updateAdv(ip_address)
-            else:
-                logger.info("gatt_server not initialized, skipping updateAdv operation")
+            
+            # 如果WiFi连接成功，通知GATT管理器
+            if ip_address and ip_address != "0.0.0.0" and ip_address != "":
+                self.gatt_manager.on_wifi_connected()
+                
+            logger.debug("WiFi info updated")
         return True
 
     def update_system_uptime(self):
@@ -336,64 +340,24 @@ class Supervisor:
             return False
 
     def _start_gatt_server(self):
-        if not self.gatt_server:
-            # Check if bluetooth service is running
-            def check_bluetooth_service():
-                try:
-                    import subprocess
-                    result = subprocess.run(['systemctl', 'is-active', 'bluetooth'], capture_output=True, text=True)
-                    return result.stdout.strip() == 'active'
-                except Exception as e:
-                    logger.error(f"Error checking bluetooth service: {e}")
-                    return False
-            
-            # Function to be run in a separate thread to monitor bluetooth service
-            @util.threaded
-            def bluetooth_monitor_thread():
-                max_retries = 30
-                retry_delay = 3  # seconds
-                
-                for attempt in range(max_retries):
-                    try:
-                        # Check if bluetooth service is active
-                        if not check_bluetooth_service():
-                            logger.warning(f"Bluetooth service not active yet, waiting {retry_delay} seconds (attempt {attempt+1}/{max_retries})")
-                            time.sleep(retry_delay)
-                            continue
-                        
-                        # Try to start the GATT server
-                        self.gatt_server = SupervisorGattServer(self)
-                        self.gatt_server.start()
-                        logger.info("GATT server started successfully")
-                        self.on_gatt_server_started()
-                        return
-                    except Exception as e:
-                        if "org.freedesktop.DBus.Error.ServiceUnknown" in str(e):
-                            logger.warning(f"DBus service not ready yet, retrying in {retry_delay} seconds (attempt {attempt+1}/{max_retries})")
-                            time.sleep(retry_delay)
-                        else:
-                            logger.error(f"Failed to start GATT server: {e} (Type: {type(e)}, Args: {e.args})")
-                            return
-                
-                logger.error(f"Failed to start GATT server after {max_retries} attempts")
-            
-            # Start the bluetooth monitor
-            bluetooth_monitor_thread()
-            logger.info("Started bluetooth service monitor thread for GATT server")
+        """初始化GATT管理器，但不自动启动服务"""
+        # GATT管理器已在__init__中初始化，这里只是确认状态
+        if self.gatt_manager:
+            logger.info("GATT manager initialized, ready for provisioning mode")
             return True
-        return True
+        return False
 
     def _stop_gatt_server(self):
-        if not self.gatt_server:
-            return True
-        try:
-            self.gatt_server.stop()
-            self.gatt_server = None
-            logger.info("GATT server stopped")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to stop GATT server: {e}")
-            return False
+        """停止GATT服务器"""
+        if self.gatt_manager:
+            try:
+                self.gatt_manager.cleanup()
+                logger.info("GATT manager stopped")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to stop GATT manager: {e}")
+                return False
+        return True
 
     def on_gatt_server_started(self):
         logger.info("GATT server is started, starting auto wifi provision...")
@@ -416,13 +380,20 @@ class Supervisor:
     
     @util.threaded
     def perform_wifi_provision(self, progress_callback=None, complete_callback=None):
+        """执行WiFi配网"""
         logging.info("Initiating wifi provision...")
         try:
+            # 启动GATT配网模式
+            if not self.gatt_manager.start_provisioning_mode():
+                raise Exception("Failed to start GATT provisioning mode")
+                
             if progress_callback:
-                progress_callback(50, "Starting WiFi provision...")
-            self.wifi_manager.start_wifi_provision()
+                progress_callback(50, "WiFi provision GATT server started...")
+                
+            # 这里可以添加其他配网逻辑
+            
             if complete_callback:
-                complete_callback(True, "WiFi provision completed")
+                complete_callback(True, "WiFi provision mode activated")
         except Exception as e:
             logging.error(f"WiFi provision failed: {e}")
             if complete_callback:
@@ -430,26 +401,19 @@ class Supervisor:
 
     @util.threaded
     def finish_wifi_provision(self):
-        logging.info("Initiating finish wifi provision...")
-        self.wifi_manager.stop_wifi_provision()
+        """结束WiFi配网"""
+        logging.info("Finishing wifi provision...")
+        self.gatt_manager.stop_provisioning_mode()
 
     def startAdv(self):
+        """启动BLE广告"""
         logging.info("Supervisor: Starting BLE Advertisement...")
-        if self.gatt_server:
-            self.gatt_server.startAdv()
-            return True
-        else:
-            logging.warning("Supervisor: GATT server not initialized, cannot start advertisement.")
-            return False
+        return self.gatt_manager.startAdv()
 
     def stopAdv(self):
+        """停止BLE广告"""
         logging.info("Supervisor: Stopping BLE Advertisement...")
-        if self.gatt_server:
-            self.gatt_server.stopAdv()
-            return True
-        else:
-            logging.warning("Supervisor: GATT server not initialized, cannot stop advertisement.")
-            return False
+        return self.gatt_manager.stopAdv()
 
     def _signal_handler(self, sig, frame):
         logging.info("Signal received, stopping...")
