@@ -1,0 +1,43 @@
+[Unit]
+Description=Bluetooth GATT Configuration Server
+Documentation=man:btgatt-server(1)
+After=bluetooth.service
+Requires=bluetooth.service
+PartOf=bluetooth.service
+[Service]
+Type=simple
+ExecStartPre=/bin/systemctl restart bluetooth.service; /bin/sleep 1
+ExecStart=/usr/local/bin/btgatt-config-server
+Restart=on-failure
+RestartSec=5
+User=root
+Group=root
+
+ExecStartPre=/bin/mkdir -p /var/log
+ExecStartPre=/bin/chmod 755 /var/log
+
+Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/root
+
+WorkingDirectory=/usr/local/bin
+
+NoNewPrivileges=false
+ProtectSystem=false
+ProtectHome=false
+ReadWritePaths=/var/log
+ReadWritePaths=/tmp
+ReadWritePaths=/var/tmp
+
+PrivateNetwork=false
+DeviceAllow=/dev/rfkill rw
+DeviceAllow=char-* rw
+DevicePolicy=closed
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=btgatt-config
+
+[Install]
+WantedBy=multi-user.target
+
+
