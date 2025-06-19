@@ -275,11 +275,28 @@ class SystemInfoUpdater:
             self.logger.info(f"Storage space - Total: {storage_info['total']}, Available: {storage_info['available']}")
             
             self.logger.info("System information update completed")
+            
+            # After system info update is complete, check if auto WiFi provision is needed
+            self._check_auto_wifi_provision_needed()
+            
         except Exception as e:
             self.logger.error(f"Error updating system information: {e}")
         
         # Task completed, thread will exit
     
+    def _check_auto_wifi_provision_needed(self):
+        """Check if auto WiFi provision is needed after system startup is complete"""
+        try:
+            if not self.supervisor:
+                return
+                
+            self.logger.info("System startup complete, checking if auto WiFi provision is needed...")
+            
+            # Trigger auto WiFi provision check
+            self.supervisor.on_system_ready_check_wifi_provision()
+            
+        except Exception as e:
+            self.logger.error(f"Error checking auto WiFi provision: {e}")
     
     def start(self):
         """Start thread to execute system information update task"""

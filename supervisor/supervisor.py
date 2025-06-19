@@ -66,7 +66,7 @@ class Supervisor:
 
         self.proxy = SupervisorProxy(self)
         self.http_server = None
-        
+
         # Initialize SystemInfoUpdater before GATT manager to ensure device name is set
         self.sysinfo_update = SystemInfoUpdater(self)
         
@@ -185,6 +185,14 @@ class Supervisor:
             except Exception as e:
                 logger.error(f"Setting restore fail: {e}")
                 return f"Setting restore fail: {e}"
+        elif cmd.lower() == "wifi_notify":
+            try:
+                self.finish_wifi_provision()
+                logger.info("WiFi provision mode exited by external notify")
+                return "WiFi provision mode exited"
+            except Exception as e:
+                logger.error(f"WiFi provision exit fail: {e}")
+                return f"WiFi provision exit fail: {e}"
 
     def start_zigbee_pairing(self):
         """Starts the Zigbee pairing process via the TaskManager."""
@@ -266,7 +274,7 @@ class Supervisor:
         return self.system_info.support_thread
 
     def isZigbeeSupported(self):
-        return self._support_zigbee
+        return self.system_info.support_zigbee
 
 
     def onNetworkFirstConnected(self):
@@ -295,18 +303,22 @@ class Supervisor:
     #         start_ha_service()
 
     def update_wifi_info(self, ip_address, ssid):
-        """更新WiFi信息缓存"""
-        # 只有在IP地址发生变化时才更新
-        if self.wifi_status.ip_address != ip_address:
+        """Update WiFi information cache"""
+        prev_ip = self.wifi_status.ip_address
+        ip_changed = prev_ip != ip_address
+
+        # Update WiFi status information
+        if ip_changed:
             logger.info(f"Update wifi info: {ip_address}")
             self.wifi_status.ip_address = ip_address
             self.wifi_status.ssid = ssid
-            
-            # 如果WiFi连接成功，通知GATT管理器
-            if ip_address and ip_address != "0.0.0.0" and ip_address != "":
-                self.gatt_manager.on_wifi_connected()
-                
             logger.debug("WiFi info updated")
+
+        # 只有从无IP到有IP的跃迁才触发
+        if (not prev_ip or prev_ip in ["", "0.0.0.0"]) and (ip_address and ip_address not in ["", "0.0.0.0"]):
+            logger.debug(f"WiFi connected with IP {ip_address}, notifying GATT manager")
+            self.gatt_manager.on_wifi_connected()
+
         return True
 
     def update_system_uptime(self):
@@ -359,8 +371,8 @@ class Supervisor:
                 return False
         return True
 
-    def on_gatt_server_started(self):
-        logger.info("GATT server is started, starting auto wifi provision...")
+    def on_system_ready_check_wifi_provision(self):
+        logger.info("System is ready, checking auto wifi provision...")
         self.task_manager.start_auto_wifi_provision()
 
     def perform_reboot(self):
@@ -404,16 +416,6 @@ class Supervisor:
         """结束WiFi配网"""
         logging.info("Finishing wifi provision...")
         self.gatt_manager.stop_provisioning_mode()
-
-    def startAdv(self):
-        """启动BLE广告"""
-        logging.info("Supervisor: Starting BLE Advertisement...")
-        return self.gatt_manager.startAdv()
-
-    def stopAdv(self):
-        """停止BLE广告"""
-        logging.info("Supervisor: Stopping BLE Advertisement...")
-        return self.gatt_manager.stopAdv()
 
     def _signal_handler(self, sig, frame):
         logging.info("Signal received, stopping...")

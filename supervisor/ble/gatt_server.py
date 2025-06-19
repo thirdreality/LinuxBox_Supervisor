@@ -96,36 +96,6 @@ class SupervisorGattServer:
         self.logger.info("GATT server timeout reached, stopping...")
         self.stop()
 
-    def startAdv(self):
-        """Starts the BLE advertisement."""
-        with self._adv_lock:
-            if self.adv:
-                self.logger.info("[BLE] Starting advertisement...")
-                try:
-                    self.adv.register() # This handles if already registered or data changed
-                    self._adv_registered_externally = True
-                    self.logger.info("[BLE] Advertisement registration process initiated.")
-                except Exception as e:
-                    self.logger.error(f"[BLE] Error starting advertisement: {e}")
-            else:
-                self.logger.warning("[BLE] Advertisement object not initialized, cannot start.")
-
-    def stopAdv(self):
-        """Stops the BLE advertisement."""
-        with self._adv_lock:
-            if self.adv and self.adv.is_registered:
-                self.logger.info("[BLE] Stopping advertisement...")
-                try:
-                    self.adv.unregister()
-                    self._adv_registered_externally = False
-                    self.logger.info("[BLE] Advertisement unregistration process initiated.")
-                except Exception as e:
-                    self.logger.error(f"[BLE] Error stopping advertisement: {e}")
-            elif self.adv and not self.adv.is_registered:
-                self.logger.info("[BLE] Advertisement already stopped or not registered.")
-            else:
-                self.logger.warning("[BLE] Advertisement object not initialized, cannot stop.")
-
     def start(self):
         if self.running:
             return
@@ -153,8 +123,9 @@ class SupervisorGattServer:
             # Small delay to ensure application is registered before advertisement
             time.sleep(0.5)
             
-            self.logger.info("[BLE] Advertisement configured. Will be started based on network state.")
-            # self.adv.register() # Advertising will be started by NetworkMonitor
+            # 启动BLE广播
+            self.adv.register()
+            self.logger.info("[BLE] Advertisement registered on server start.")
             
             # Start the main loop in a separate thread
             self.mainloop_thread = threading.Thread(target=self._run_mainloop)

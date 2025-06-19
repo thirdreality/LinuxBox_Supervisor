@@ -132,99 +132,6 @@ class WifiManager:
             self.provisioning_timer = None
         self.logger.info("Cleaned up WifiManager resources.")
 
-
-    def start_wifi_provision(self):
-        """Starts the Wi-Fi provisioning mode."""
-        if self.provisioning_active:
-            self.logger.info("Wi-Fi provisioning is already active.")
-            return True
-
-        self.logger.info("Starting Wi-Fi provisioning mode...")
-        if self.supervisor and hasattr(self.supervisor, 'led'):
-            self.supervisor.led.set_led_state(LedState.SYS_WIFI_CONFIG_PENDING)
-        else:
-            self.logger.warning("Supervisor instance or LED controller not available for SYS_WIFI_CONFIG_PENDING.")
-        
-        self.provisioning_active = True
-
-        ha_service_name = "home-assistant.service"
-        if util.is_service_running(ha_service_name):
-            self.logger.info(f"Service '{ha_service_name}' is running, stopping it.")
-            if not util.start_service(ha_service_name, False):
-                self.logger.warning(f"Failed to stop '{ha_service_name}'.")
-        else:
-            self.logger.info(f"Service '{ha_service_name}' is not running.")
-
-        if self.supervisor:
-            self.supervisor.startAdv()
-        else:
-            self.logger.warning("Supervisor instance not available, cannot start BLE advertising.")
-
-        if self.provisioning_timer:
-            self.provisioning_timer.cancel()
-        self.provisioning_timer = threading.Timer(self.PROVISION_TIMEOUT_SECONDS, self._provision_timeout_callback)
-        self.provisioning_timer.daemon = True
-        self.provisioning_timer.start()
-
-        self.logger.info(f"Wi-Fi provisioning mode started. Timeout in {self.PROVISION_TIMEOUT_SECONDS} seconds.")
-        return True
-
-    def _provision_timeout_callback(self):
-        self.logger.warning("Wi-Fi provisioning timed out.")
-        self.stop_wifi_provision(timed_out=True)
-        # Potentially signal timeout to supervisor/caller if needed
-
-
-    def stop_wifi_provision(self, timed_out=False, called_after_success=False):
-        self.logger.warning("Wi-Fi provisioning stopping...")
-        """Stops the Wi-Fi provisioning mode."""
-        if not self.provisioning_active:
-            self.logger.info("Wi-Fi provisioning is not active, nothing to stop.")
-            return
-
-        self.logger.info(f"Stopping Wi-Fi provisioning mode... (Timed out: {timed_out}, Called after success: {called_after_success})")
-
-        if self.provisioning_timer:
-            self.provisioning_timer.cancel()
-            self.provisioning_timer = None
-        
-        self.provisioning_active = False
-
-        if self.supervisor:
-            ip_address = self.get_wlan0_ip()
-            if ip_address:
-                self.logger.info(f"WLAN0 has IP address {ip_address}. Stopping BLE advertising.")
-                self.supervisor.stopAdv()
-            else:
-                self.logger.info("WLAN0 has no IP address. BLE advertising will continue.")
-        else:
-            self.logger.warning("Supervisor instance not available, cannot control BLE advertising.")
-
-        ha_service_name = "home-assistant.service"
-        # If home-assistant.service is enabled, start it.
-        _, status = self.execute_command(f"systemctl is-enabled {ha_service_name}")
-        if status == 0:
-            self.logger.info(f"Service '{ha_service_name}' is enabled, starting it.")
-            if not util.start_service(ha_service_name, True):
-                self.logger.warning(f"Failed to start '{ha_service_name}' in background.")
-        else:
-            # Service is not enabled, so we don't start it.
-            self.logger.info(f"Service '{ha_service_name}' is not enabled, will not be started.")
-
-        if timed_out:
-            if self.supervisor and hasattr(self.supervisor, 'led'):
-                self.supervisor.led.set_led_state(LedState.SYS_EVENT_OFF)
-            else:
-                self.logger.warning("Supervisor instance or LED controller not available for USER_EVENT_OFF on timeout.")
-        elif not called_after_success: # Explicit stop, not after success and not a timeout
-            if self.supervisor and hasattr(self.supervisor, 'led'):
-                 self.supervisor.led.set_led_state(LedState.SYS_EVENT_OFF)
-            else:
-                self.logger.warning("Supervisor instance or LED controller not available for USER_EVENT_OFF.")
-        # If called_after_success is True, LED was already set to SYS_WIFI_CONFIG_SUCCESS by configure(), so do nothing to LED here.
-        
-        self.logger.info(".")
-
     def get_wifi_provision_status(self):
         """Returns the current Wi-Fi provisioning status."""
         return self.provisioning_active
@@ -276,7 +183,6 @@ class WifiManager:
                 self.delete_other_connections(ssid)
                 if self.supervisor and hasattr(self.supervisor, 'led'):
                     self.supervisor.led.set_led_state(LedState.SYS_WIFI_CONFIG_SUCCESS)
-                self.stop_wifi_provision(called_after_success=True)
                 return 0
             time.sleep(1)
         
