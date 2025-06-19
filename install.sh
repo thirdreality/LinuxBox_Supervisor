@@ -58,6 +58,14 @@ log_info "To install dependencies manually, run: pip3 install -r requirements.tx
 
 # Step 3: Remove old installation if exists
 log_step "Step 3: Cleaning up previous installation..."
+log_info "Checking if supervisor.service is running..."
+if systemctl is-active --quiet supervisor.service; then
+    log_info "supervisor.service is running, stopping it now..."
+    systemctl stop supervisor.service
+    log_info "supervisor.service stopped"
+else
+    log_info "supervisor.service is not running"
+fi
 SUPERVISOR_LIB_PATH="/usr/local/lib/python3.11/dist-packages/supervisor"
 if [ -d "$SUPERVISOR_LIB_PATH" ]; then
     log_info "Removing existing supervisor installation at $SUPERVISOR_LIB_PATH"

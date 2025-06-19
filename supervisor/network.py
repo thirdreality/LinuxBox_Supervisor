@@ -211,58 +211,38 @@ class NetworkMonitor:
                     self.connected = True
                     self.logger.info(f"Network connection re-established: {ssid} ({ip_address})")
                     self.supervisor.onNetworkConnected()
-                self.logger.info(f"Network connected: SSID='{ssid}', IP='{ip_address}'")
+                #self.logger.info(f"Network connected: SSID='{ssid}', IP='{ip_address}'")
     
     def _schedule_disconnect_check(self):
         """安排断开连接检查"""
         with self._lock:
-            # 取消之前的定时器（如果有）
             if self.check_timer_id is not None:
                 GObject.source_remove(self.check_timer_id)
-            
-            # 设置新的定时器，5秒后检查断开状态
             self.check_timer_id = GObject.timeout_add(5000, self._check_disconnect_status)
-            self.logger.debug("Scheduled disconnect check in 5 seconds")
     
     def _check_disconnect_status(self):
         """检查断开连接状态"""
         with self._lock:
             self.check_timer_id = None
-            #self.logger.debug("Checking network disconnect status")
-            
             if not is_network_connected():
                 self.disconnect_count += 1
-                #self.logger.debug(f"Network disconnected, count: {self.disconnect_count}")
-                
                 if self.supervisor and hasattr(self.supervisor, 'wifi_status'):
                     self.supervisor.wifi_status.connected = False
-                
                 if self.disconnect_count > 5 and self.connected:
                     self.connected = False
-                    #self.logger.info("Network disconnected for too long, clearing cache")
-                    
                     if self.supervisor:
                         self.supervisor.update_wifi_info("", "")
                         self.supervisor.onNetworkDisconnect()
-                
-                # 更新LED状态
                 if self.supervisor:
                     if has_active_connection():
                         self.supervisor.set_led_state(LedState.SYS_OFFLINE)
-                        #self.logger.debug("Set LED state to NETWORK_ERROR")
                     else:
                         self.supervisor.set_led_state(LedState.SYS_OFFLINE)
-                        #self.logger.debug("Set LED state to NETWORK_LOST")
-                
-                # 继续检查，每秒一次
-                #self.check_timer_id = GObject.timeout_add(1000, self._check_disconnect_status)
-                self.logger.debug("Scheduled next disconnect check in 1 second")
-                return False  # 不再调用当前回调
+                return False
             else:
-                # 网络已恢复连接
                 self.logger.info("Network connection restored.")
                 self._handle_connection_established()
-                return False  # 不再调用当前回调
+                return False
     
     def _update_connection_info(self):
         """更新连接信息"""
@@ -270,7 +250,6 @@ class NetworkMonitor:
             ip_address = get_wlan0_ip()
             ssid = get_active_connection_name()
             self.supervisor.update_wifi_info(ip_address, ssid)
-            self.logger.debug(f"Updated connection info: {ssid} ({ip_address})")
     
     def _update_led_state(self, device_state):
         """根据设备状态更新LED状态"""
@@ -339,35 +318,20 @@ class NetworkMonitor:
     def _periodic_check(self):
         """Periodic network status check (as backup mechanism)"""
         try:
-            self.logger.debug("Periodic network check started")
-            
-            # Check if wlan0 interface exists
             wlan0_exists = is_interface_existing("wlan0")
-            self.logger.debug(f"wlan0 interface exists: {wlan0_exists}")
-            
             if not wlan0_exists:
                 if self.supervisor:
                     self.supervisor.set_led_state(LedState.STARTUP)
                 return True  # Continue periodic checks
-            
-            # Get MAC address if not already cached
             if self.mac_address is None:
                 self.mac_address = get_wlan0_mac()
                 if self.supervisor and hasattr(self.supervisor, 'wifi_status'):
                     self.supervisor.wifi_status.mac_address = self.mac_address
-                self.logger.debug(f"Cached MAC address: {self.mac_address}")
-            
-            # Check network connection status
             is_connected = is_network_connected()
             current_ip = get_wlan0_ip()
             current_ssid = get_active_connection_name()
-            
-            self.logger.debug(f"Network status check - Connected: {is_connected}, IP: {current_ip}, SSID: {current_ssid}")
-            
             if is_connected:
-                # Force update connection info to ensure supervisor gets the latest status
                 if self.supervisor:
-                    self.logger.debug(f"Network connected, updating supervisor with IP: {current_ip}, SSID: {current_ssid}")
                     self.supervisor.update_wifi_info(current_ip, current_ssid)
                 self._handle_connection_established()
             else:
@@ -375,7 +339,6 @@ class NetworkMonitor:
         except Exception as e:
             self.logger.error(f"Error in periodic network check: {e}")
             self.logger.error(traceback.format_exc())
-        
         return True  # Continue periodic checks
     
     def start(self):

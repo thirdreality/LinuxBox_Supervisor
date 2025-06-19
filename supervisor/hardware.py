@@ -295,22 +295,11 @@ class GpioLed:
             elif self.general_operational_priority_state is not None: # Tier 4
                 new_current_led_state = self.general_operational_priority_state
             
-            self.logger.debug(f"[GpioLed set_led_state] Determined new_current_led_state: {new_current_led_state}")
-            
             # Check if the actual current_led_state has changed
             if self.current_led_state != new_current_led_state:
                 state_changed = True
             
-            self.logger.debug(f"[GpioLed set_led_state] Old current_led_state: {old_current_led_state}, New effective_led_state: {new_current_led_state}, state_changed_flag: {state_changed}")
-
-            # Determine if the originally requested 'state' matches the final state of any active priority tier.
-            # This is for re-triggering the display pattern even if the overall current_led_state doesn't change.
-            # retriggered_priority_match = False
-            # if state == self.user_event_priority_state and state is not None: retriggered_priority_match = True
-            # elif state == self.system_critical_priority_state and state is not None: retriggered_priority_match = True
-            # elif state == self.system_working_priority_state and state is not None: retriggered_priority_match = True
-            # elif state == self.general_operational_priority_state and state is not None: # This implies state == new_current_led_state if new_current_led_state is from Tier 4
-            #      retriggered_priority_match = True
+            #self.logger.debug(f"[GpioLed set_led_state] Old current_led_state: {old_current_led_state}, New effective_led_state: {new_current_led_state}, state_changed_flag: {state_changed}")
 
             if state_changed :         
                 self.current_led_state = new_current_led_state # Update to the actual state
@@ -352,13 +341,8 @@ class GpioLed:
                 
                 if calculated_reset_delay is not None:
                     self.trigger_led_control(reset_delay=calculated_reset_delay)
-                    #self.logger.debug(f"[GpioLed set_led_state] Timer delay set to {calculated_reset_delay} for state {self.current_led_state}.")
                 else:
-                    #self.logger.debug(f"[GpioLed set_led_state] No specific timer delay set for state {self.current_led_state} via set_led_state match block.")
-                    #self.logger.debug(f"[GpioLed set_led_state] About to set led_control_event for {self.current_led_state}.")
                     self.led_control_event.set() # Notify the LED control task
-                #self.logger.debug(f"[GpioLed set_led_state] led_control_event set.")
-            #self.logger.debug(f"[GpioLed set_led_state] END - Releasing state_lock")
 
     def get_led_state(self):
         """Get the current LED state"""
@@ -404,8 +388,8 @@ class GpioLed:
                 self.step_counter += 1 # Increment step counter for next cycle
                 
                 # Log only when explicitly triggered (not by timer)
-                if triggered:
-                    self.logger.debug("LED control triggered by timer event")
+                #if triggered:
+                #    self.logger.debug("LED control triggered by timer event")
     
     def process_led_state(self, state):
         """Process the LED state and set appropriate color"""   
