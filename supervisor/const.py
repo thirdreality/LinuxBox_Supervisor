@@ -23,9 +23,9 @@ DEVICE_MODEL_NAME="LinuxBox Dev Edition"
 DEVICE_BUILD_NUMBER="20250619-0000"
 
 # BLE GATT Server Configuration
-# 'auto' - 自动检测是否存在外部服务
-# 'external' - 强制使用外部C实现的btgatt-config-server
-# 'internal' - 强制使用内部Python实现的SupervisorGattServer
+# 'auto' - Automatically detect whether there is an external service
+# 'external' - Force use of external C implemented btgatt-config-server
+# 'internal' - Force use of internal Python implemented SupervisorGattServer
 BLE_GATT_SERVER_MODE = "auto"
 
 # External GATT server configuration

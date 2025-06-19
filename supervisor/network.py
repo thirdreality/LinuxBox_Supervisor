@@ -25,7 +25,7 @@ from .utils.wifi_utils import (
     get_active_connection_name
 )
 
-# NetworkManager D-Bus接口定义
+# NetworkManager D-Bus interface definition
 NM_DBUS_SERVICE = "org.freedesktop.NetworkManager"
 NM_DBUS_PATH = "/org/freedesktop/NetworkManager"
 NM_DBUS_INTERFACE = "org.freedesktop.NetworkManager"
@@ -33,7 +33,7 @@ NM_DBUS_INTERFACE_DEVICE = "org.freedesktop.NetworkManager.Device"
 NM_DBUS_INTERFACE_DEVICE_WIRELESS = "org.freedesktop.NetworkManager.Device.Wireless"
 NM_DBUS_INTERFACE_CONNECTION_ACTIVE = "org.freedesktop.NetworkManager.Connection.Active"
 
-# NetworkManager设备状态
+# NetworkManager device state
 NM_DEVICE_STATE_UNKNOWN = 0
 NM_DEVICE_STATE_UNMANAGED = 10
 NM_DEVICE_STATE_UNAVAILABLE = 20
@@ -49,7 +49,7 @@ NM_DEVICE_STATE_DEACTIVATING = 110
 NM_DEVICE_STATE_FAILED = 120
 
 class NetworkMonitor:
-    """基于事件的网络监控器，使用NetworkManager D-Bus接口监听网络状态变化"""
+    """Event-based network monitor, using NetworkManager D-Bus interface to listen for network state changes"""
     
     def __init__(self, supervisor=None):
         self.supervisor = supervisor
@@ -67,10 +67,10 @@ class NetworkMonitor:
         self.connected = False
         self.disconnect_count = 0
         self.check_timer_id = None
-        self._lock = threading.RLock()  # 保护状态更新
+        self._lock = threading.RLock()  # Protect state update
     
     def _init_dbus(self):
-        """初始化D-Bus连接和NetworkManager代理"""
+        """Initialize D-Bus connection and NetworkManager proxy"""
         try:
             self.logger.debug("Initializing NetworkManager D-Bus connection")
             
@@ -114,9 +114,9 @@ class NetworkMonitor:
             return False
     
     def _setup_signal_handlers(self):
-        """设置NetworkManager信号处理器"""
+        """Set NetworkManager signal handlers"""
         try:
-            # 监听设备状态变化
+            # Listen for device state changes
             if self.wlan0_proxy:
                 self.bus.add_signal_receiver(
                     self._handle_device_state_changed,
@@ -126,7 +126,7 @@ class NetworkMonitor:
                 )
                 self.logger.info(f"Registered device state change handler for {self.wlan0_device_path}")
             
-            # 监听整体网络状态变化
+            # Listen for overall network state changes
             self.bus.add_signal_receiver(
                 self._handle_nm_state_changed,
                 dbus_interface=NM_DBUS_INTERFACE,
@@ -134,7 +134,7 @@ class NetworkMonitor:
             )
             self.logger.info("Registered NetworkManager state change handler")
             
-            # 监听活动连接属性变化
+            # Listen for active connection property changes
             self.bus.add_signal_receiver(
                 self._handle_properties_changed,
                 dbus_interface="org.freedesktop.DBus.Properties",
@@ -149,18 +149,18 @@ class NetworkMonitor:
             self.logger.error(traceback.format_exc())
     
     def _handle_device_state_changed(self, new_state, old_state, reason):
-        """处理设备状态变化信号"""
+        """Handle device state change signal"""
         with self._lock:
             self.logger.info(f"Network device state changed: {old_state} -> {new_state} (reason: {reason})")
             
-            # 获取MAC地址（如果尚未获取）
+            # Get MAC address (if not already obtained)
             if self.mac_address is None and is_interface_existing("wlan0"):
                 self.mac_address = get_wlan0_mac()
                 if self.supervisor and hasattr(self.supervisor, 'wifi_status'):
                     self.supervisor.wifi_status.mac_address = self.mac_address
                 self.logger.info(f"Cached MAC address: {self.mac_address}")
             
-            # 处理连接状态
+            # Handle connection status
             if new_state == NM_DEVICE_STATE_ACTIVATED:
                 self._handle_connection_established()
             elif old_state == NM_DEVICE_STATE_ACTIVATED and new_state != NM_DEVICE_STATE_ACTIVATED:
@@ -171,23 +171,23 @@ class NetworkMonitor:
                     self.supervisor.update_wifi_info("", "")
                     self.supervisor.onNetworkDisconnect()
             
-            # 更新LED状态
+            # Update LED state
             self._update_led_state(new_state)
     
     def _handle_nm_state_changed(self, state):
-        """处理NetworkManager整体状态变化"""
+        """Handle NetworkManager overall state changes"""
         self.logger.info(f"NetworkManager state changed to: {state}")
-        # 可以根据需要处理全局网络状态变化
+        # Can handle global network state changes as needed
     
     def _handle_properties_changed(self, interface_name, changed_properties, invalidated_properties):
-        """处理活动连接属性变化"""
+        """Handle active connection property changes"""
         if "Ip4Config" in changed_properties:
-            # IP配置已更改，可能需要更新IP地址
+            # IP configuration has changed, may need to update IP address
             self.logger.debug("PropertiesChanged: Ip4Config changed.")
             self._update_connection_info()
     
     def _handle_connection_established(self):
-        """处理网络连接建立"""
+        """Handle network connection establishment"""
         with self._lock:
             if self.supervisor:
                 self.supervisor.set_led_state(LedState.SYS_NORMAL_OPERATION)
@@ -197,7 +197,7 @@ class NetworkMonitor:
                 
                 self.disconnect_count = 0
                 
-                # 更新连接信息
+                # Update connection info
                 ip_address = get_wlan0_ip()
                 ssid = get_active_connection_name()
                 self.supervisor.update_wifi_info(ip_address, ssid)
@@ -214,14 +214,14 @@ class NetworkMonitor:
                 #self.logger.info(f"Network connected: SSID='{ssid}', IP='{ip_address}'")
     
     def _schedule_disconnect_check(self):
-        """安排断开连接检查"""
+        """Schedule disconnect check"""
         with self._lock:
             if self.check_timer_id is not None:
                 GObject.source_remove(self.check_timer_id)
             self.check_timer_id = GObject.timeout_add(5000, self._check_disconnect_status)
     
     def _check_disconnect_status(self):
-        """检查断开连接状态"""
+        """Check disconnect status"""
         with self._lock:
             self.check_timer_id = None
             if not is_network_connected():
@@ -245,14 +245,14 @@ class NetworkMonitor:
                 return False
     
     def _update_connection_info(self):
-        """更新连接信息"""
+        """Update connection info"""
         if self.supervisor and is_network_connected():
             ip_address = get_wlan0_ip()
             ssid = get_active_connection_name()
             self.supervisor.update_wifi_info(ip_address, ssid)
     
     def _update_led_state(self, device_state):
-        """根据设备状态更新LED状态"""
+        """Update LED state based on device state"""
         if not self.supervisor:
             return
             
@@ -261,7 +261,7 @@ class NetworkMonitor:
             self.supervisor.set_led_state(LedState.SYS_NORMAL_OPERATION)
         elif device_state in [NM_DEVICE_STATE_PREPARE, NM_DEVICE_STATE_CONFIG, NM_DEVICE_STATE_NEED_AUTH, 
                              NM_DEVICE_STATE_IP_CONFIG, NM_DEVICE_STATE_IP_CHECK, NM_DEVICE_STATE_SECONDARIES]:
-            # 连接过程中 (During connection process)
+            # During connection process
             self.supervisor.set_led_state(LedState.SYS_OFFLINE)
         elif device_state == NM_DEVICE_STATE_DISCONNECTED:
             self.supervisor.set_led_state(LedState.SYS_OFFLINE)
@@ -271,7 +271,7 @@ class NetworkMonitor:
             self.supervisor.set_led_state(LedState.SYS_OFFLINE)
     
     def _run_mainloop(self):
-        """在单独的线程中运行GLib主循环"""
+        """Run GLib main loop in separate thread"""
         try:
             self.logger.info("Starting NetworkMonitor mainloop")
             self.mainloop.run()
@@ -281,27 +281,27 @@ class NetworkMonitor:
             self.logger.error(traceback.format_exc())
     
     def _initial_check(self):
-        """执行一次性的初始网络检查"""
+        """Perform one-time initial network check"""
         try:
             self.logger.info("Performing initial network check")
             
-            # 检查wlan0接口是否存在
+            # Check if wlan0 interface exists
             wlan0_exists = is_interface_existing("wlan0")
             self.logger.info(f"wlan0 interface exists: {wlan0_exists}")
             
             if not wlan0_exists:
                 if self.supervisor:
                     self.supervisor.set_led_state(LedState.STARTUP)
-                return False  # 不再调用此回调
+                return False  # No longer call this callback
             
-            # 获取MAC地址
+            # Get MAC address
             if self.mac_address is None:
                 self.mac_address = get_wlan0_mac()
                 if self.supervisor and hasattr(self.supervisor, 'wifi_status'):
                     self.supervisor.wifi_status.mac_address = self.mac_address
                 self.logger.info(f"Cached MAC address: {self.mac_address}")
             
-            # 检查网络连接状态
+            # Check network connection status
             is_connected = is_network_connected()
             self.logger.info(f"Initial network connection status: {is_connected}")
             
@@ -313,7 +313,7 @@ class NetworkMonitor:
             self.logger.error(f"Error in initial network check: {e}")
             self.logger.error(traceback.format_exc())
         
-        return False  # 一次性检查，不再调用
+        return False  # One-time check, no longer call this callback
     
     def _periodic_check(self):
         """Periodic network status check (as backup mechanism)"""
@@ -371,7 +371,7 @@ class NetworkMonitor:
             return False
     
     def stop(self):
-        """停止网络监控"""
+        """Stop network monitoring"""
         try:
             if self.mainloop and self.mainloop.is_running():
                 self.mainloop.quit()

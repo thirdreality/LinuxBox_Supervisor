@@ -123,7 +123,7 @@ class SupervisorGattServer:
             # Small delay to ensure application is registered before advertisement
             time.sleep(0.5)
             
-            # 启动BLE广播
+            # Start BLE advertisement
             self.adv.register()
             self.logger.info("[BLE] Advertisement registered on server start.")
             

@@ -1,7 +1,7 @@
 # maintainer: guoping.liu@3reality.com
 """
-WiFi配网控制工具
-用于外部控制WiFi配网模式的启动和停止
+WiFi provisioning control tool
+Used to start and stop WiFi provisioning mode
 """
 
 import sys
@@ -10,7 +10,7 @@ import logging
 import signal
 import time
 
-# 添加上级目录到path以便导入supervisor模块
+# Add the parent directory to the path to import the supervisor module
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from supervisor.const import BLE_GATT_SERVER_MODE, EXTERNAL_GATT_SERVICE_NAME
@@ -18,7 +18,7 @@ from supervisor.ble.gatt_manager import GattServerManager
 
 
 class WiFiProvisionController:
-    """WiFi配网控制器"""
+    """WiFi provisioning controller"""
     
     def __init__(self):
         self.logger = self._setup_logging()
@@ -26,7 +26,7 @@ class WiFiProvisionController:
         self.running = False
     
     def _setup_logging(self):
-        """设置日志"""
+        """Set up logging"""
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -34,9 +34,9 @@ class WiFiProvisionController:
         return logging.getLogger("WiFiProvisionController")
     
     def start_provision_mode(self):
-        """启动配网模式"""
+        """Start provisioning mode"""
         try:
-            # 创建一个简化的supervisor对象用于测试
+            # Create a simplified supervisor object for testing
             class MockSupervisor:
                 def __init__(self):
                     self.wifi_status = type('obj', (object,), {'ip_address': '', 'ssid': ''})()
@@ -49,28 +49,28 @@ class WiFiProvisionController:
             mock_supervisor = MockSupervisor()
             self.gatt_manager = GattServerManager(mock_supervisor)
             
-            self.logger.info("Starting WiFi provision mode...")
+            self.logger.info("Starting WiFi provisioning mode...")
             if self.gatt_manager.start_provisioning_mode():
-                self.logger.info(f"WiFi provision mode started successfully (mode: {self.gatt_manager.mode})")
+                self.logger.info(f"WiFi provisioning mode started successfully (mode: {self.gatt_manager.mode})")
                 self.running = True
                 return True
             else:
-                self.logger.error("Failed to start WiFi provision mode")
+                self.logger.error("Failed to start WiFi provisioning mode")
                 return False
         except Exception as e:
-            self.logger.error(f"Error starting provision mode: {e}")
+            self.logger.error(f"Error starting provisioning mode: {e}")
             return False
     
     def stop_provision_mode(self):
-        """停止配网模式"""
+        """Stop provisioning mode"""
         if self.gatt_manager:
-            self.logger.info("Stopping WiFi provision mode...")
+            self.logger.info("Stopping WiFi provisioning mode...")
             self.gatt_manager.stop_provisioning_mode()
             self.running = False
-            self.logger.info("WiFi provision mode stopped")
+            self.logger.info("WiFi provisioning mode stopped")
     
     def run_interactive(self):
-        """交互式运行"""
+        """Interactive mode"""
         self.logger.info("WiFi Provision Controller - Interactive Mode")
         self.logger.info("Commands: start, stop, status, quit")
         
@@ -116,7 +116,7 @@ class WiFiProvisionController:
 
 
 def main():
-    """主函数"""
+    """Main function"""
     controller = WiFiProvisionController()
     
     if len(sys.argv) > 1:
@@ -125,9 +125,9 @@ def main():
         if command == "start":
             success = controller.start_provision_mode()
             if success:
-                print("WiFi provision mode started. Press Ctrl+C to stop.")
+                print("WiFi provisioning mode started. Press Ctrl+C to stop.")
                 try:
-                    # 保持运行直到用户中断
+                    # Keep running until user interrupts
                     while controller.running:
                         time.sleep(1)
                 except KeyboardInterrupt:
@@ -141,7 +141,7 @@ def main():
             sys.exit(0)
             
         elif command == "status":
-            # 检查外部服务状态
+            # Check external service status
             import subprocess
             try:
                 result = subprocess.run(
@@ -161,7 +161,7 @@ def main():
             print("Usage: python wifi_provision_control.py [start|stop|status]")
             sys.exit(1)
     else:
-        # 交互式模式
+        # Interactive mode
         controller.run_interactive()
 
 

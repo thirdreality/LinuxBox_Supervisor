@@ -18,9 +18,9 @@ LE_ADVERTISEMENT_IFACE = "org.bluez.LEAdvertisement1"
 class Advertisement(dbus.service.Object):
     PATH_BASE = "/org/bluez/t3rsupervisor/advertisement"
     
-    # 广告刷新配置
+    # Advertisement refresh configuration
     MAX_RETRY_COUNT = 3
-    RETRY_DELAY = 2.0  # 秒
+    RETRY_DELAY = 2.0  # seconds
 
     def __init__(self, index, advertising_type):
         self.logger = logging.getLogger("Supervisor")
@@ -36,9 +36,9 @@ class Advertisement(dbus.service.Object):
         self.is_registered = False
         self.is_registering = False
         
-        # 添加线程安全锁
+        # Add thread safety lock
         self._lock = threading.RLock()
-        self._data_changed = False  # 标记数据是否已更改
+        self._data_changed = False  # Mark whether data has changed
         
         dbus.service.Object.__init__(self, self.bus, self.path)
 
@@ -131,7 +131,7 @@ class Advertisement(dbus.service.Object):
         with self._lock:
             self.is_registered = True
             self.is_registering = False
-            self._data_changed = False  # 注册成功后重置数据变更标志
+            self._data_changed = False  # Register success resets data change flag
         self.logger.info("GATT advertisement registered successfully")
 
     def register_ad_error_callback(self, error):
@@ -141,9 +141,9 @@ class Advertisement(dbus.service.Object):
         self.logger.error(f"Failed to register GATT advertisement: {error}")
 
     def register(self):
-        """注册广告，如果已注册则跳过"""
+        """Register advertisement, skip if already registered"""
         with self._lock:
-            # 如果正在注册或已注册且数据未变更，则跳过
+            # Skip if already registering or already registered and data unchanged
             if self.is_registering:
                 self.logger.info(f"Advertisement {self.get_path()} is already being registered, skipping")
                 return
@@ -152,20 +152,20 @@ class Advertisement(dbus.service.Object):
                 self.logger.debug(f"Advertisement {self.get_path()} is already registered and data unchanged, skipping")
                 return
                 
-            # 如果已注册但数据已变更，先注销再重新注册
+            # If already registered but data changed, unregister then re-register
             if self.is_registered and self._data_changed:
                 self.logger.info(f"Advertisement data changed, re-registering {self.get_path()}")
-                # 先解锁，避免死锁
+                # Unlock first to avoid deadlock
                 self._lock.release()
                 try:
                     self.unregister()
                 finally:
-                    # 重新获取锁
+                    # Re-acquire lock
                     self._lock.acquire()
             
             self.is_registering = True
             
-        # 在锁外执行DBus调用，避免潜在的死锁
+        # Execute DBus call outside lock to avoid potential deadlock
         try:
             bus = BleTools.get_bus()
             adapter = BleTools.find_adapter(bus)
@@ -177,7 +177,7 @@ class Advertisement(dbus.service.Object):
                                         error_handler=self.register_ad_error_callback)
             self.logger.info(f"Advertisement registration request sent for {self.get_path()}")
         except Exception as e:
-            # 发生异常时重置状态
+            # Reset state on exception
             with self._lock:
                 self.is_registering = False
             self.logger.error(f"Error registering advertisement: {e}")
@@ -185,14 +185,14 @@ class Advertisement(dbus.service.Object):
             self.logger.error(traceback.format_exc())
 
     def unregister(self):
-        """注销广告，并添加重试机制"""
+        """Unregister advertisement and add retry mechanism"""
         with self._lock:
-            # 如果广告未注册，跳过注销
+            # Skip unregister if advertisement not registered
             if not self.is_registered:
                 self.logger.info(f"Advertisement {self.get_path()} is not registered, skipping unregister")
                 return
         
-        # 在锁外执行DBus调用，避免潜在的死锁
+        # Execute DBus call outside lock to avoid potential deadlock
         retry_count = 0
         while retry_count < self.MAX_RETRY_COUNT:
             try:
@@ -201,10 +201,10 @@ class Advertisement(dbus.service.Object):
                 ad_manager = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, adapter),
                                         LE_ADVERTISING_MANAGER_IFACE)
                 
-                # 注销广告
+                # Unregister advertisement
                 ad_manager.UnregisterAdvertisement(self.get_path())
                 
-                # 注销成功，更新状态
+                # Unregister success, update state
                 with self._lock:
                     self.is_registered = False
                     
@@ -214,7 +214,7 @@ class Advertisement(dbus.service.Object):
                 retry_count += 1
                 if retry_count >= self.MAX_RETRY_COUNT:
                     self.logger.error(f"Failed to unregister advertisement after {self.MAX_RETRY_COUNT} attempts: {e}")
-                    # 如果多次注销失败，强制设置为未注册状态
+                    # If multiple unregister failures, force set to unregistered state
                     with self._lock:
                         self.is_registered = False
                     return
@@ -225,7 +225,7 @@ class Advertisement(dbus.service.Object):
                 self.logger.error(f"Unexpected error unregistering advertisement: {e}")
                 import traceback
                 self.logger.error(traceback.format_exc())
-                # 如果发生意外异常，重置状态
+                # If unexpected exception occurs, reset state
                 with self._lock:
                     self.is_registered = False
                 return
