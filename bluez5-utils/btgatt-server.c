@@ -371,8 +371,10 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
     
     // Device 'wlan0' successfully activated with '26229f20-a62f-4192-9858-70e241bd141d'.
     // Error: Connection activation failed: Secrets were required, but not provided.
+    // Error: No network with SSID 'TPLINK-20202' found.
     char cmd_output[512] = {0};
     bool cmd_success = false;
+    bool need_scan_retry = false;
     
     if (fgets(cmd_output, sizeof(cmd_output), cmd_fp)) {
         printf("[WIFI] nmcli output: %s", cmd_output);
@@ -383,6 +385,11 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
             printf("[WIFI] nmcli command executed successfully\n");
         } else {
             printf("[WIFI] nmcli command failed\n");
+            // Check if error is "No network with SSID ... found"
+            if (strstr(cmd_output, "No network with SSID") != NULL) {
+                need_scan_retry = true;
+                printf("[WIFI] Network not found in cache, will try scanning\n");
+            }
         }
     } else {
         printf("[WIFI] No output from nmcli command\n");
@@ -391,7 +398,60 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
     int cmd_exit_status = pclose(cmd_fp);
     printf("[WIFI] nmcli exit status: %d\n", cmd_exit_status);
     
-    // If command failed, return error immediately without checking IP
+    // If command failed but it's a "network not found" error, try scanning and reconnecting
+    if (!cmd_success && need_scan_retry) {
+        printf("[WIFI] Scanning for WiFi networks before retry...\n");
+        
+        // Perform WiFi scan
+        char scan_cmd[] = "nmcli dev wifi list ifname wlan0";
+        FILE *scan_fp = popen(scan_cmd, "r");
+        if (scan_fp) {
+            char scan_line[256];
+            printf("[WIFI] Scan results:\n");
+            while (fgets(scan_line, sizeof(scan_line), scan_fp)) {
+                printf("[WIFI] %s", scan_line);
+            }
+            pclose(scan_fp);
+        } else {
+            printf("[WIFI] Failed to perform WiFi scan\n");
+        }
+        
+        // Wait a moment for scan to complete
+        sleep(1);
+        
+        // Retry the connection command
+        printf("[WIFI] Retrying connection after scan...\n");
+        cmd_fp = popen(connect_cmd, "r");
+        if (!cmd_fp) {
+            printf("[WIFI] Failed to execute retry nmcli command\n");
+            snprintf(response, response_len, 
+                    "{\"error\":\"Command failed\"}");
+            cJSON_Delete(root);
+            return -1;
+        }
+        
+        // Check retry result
+        cmd_success = false;
+        memset(cmd_output, 0, sizeof(cmd_output));
+        
+        if (fgets(cmd_output, sizeof(cmd_output), cmd_fp)) {
+            printf("[WIFI] nmcli retry output: %s", cmd_output);
+            
+            if (strstr(cmd_output, "successfully activated") != NULL) {
+                cmd_success = true;
+                printf("[WIFI] nmcli retry command executed successfully\n");
+            } else {
+                printf("[WIFI] nmcli retry command failed\n");
+            }
+        } else {
+            printf("[WIFI] No output from nmcli retry command\n");
+        }
+        
+        cmd_exit_status = pclose(cmd_fp);
+        printf("[WIFI] nmcli retry exit status: %d\n", cmd_exit_status);
+    }
+    
+    // If command failed after retry (or no retry was needed), return error
     if (!cmd_success || cmd_exit_status != 0) {
         printf("[WIFI] nmcli command failed, not checking IP address\n");
         snprintf(response, response_len, 
