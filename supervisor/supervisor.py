@@ -71,10 +71,10 @@ class Supervisor:
         self.sysinfo_update = SystemInfoUpdater(self)
         
         self.gatt_manager = GattServerManager(self)
-        self.gatt_server = None  # 保持向后兼容性
+        # self.gatt_server = None  # No longer needed
 
         self.network_monitor = NetworkMonitor(self)
-        self.ota_server = SupervisorOTAServer(self)
+        # self.ota_server = SupervisorOTAServer(self)
 
         # boot up time
         self.start_time = time.time()
@@ -96,53 +96,53 @@ class Supervisor:
         if cmd_lower == "zha":
             try:
                 self.task_manager.start_zigbee_switch_zha_mode()
-                logger.info("Zigbee设备开始配对")
-                return "Zigbee设备开始配对"
+                logger.info("Zigbee device started pairing")
+                return "Zigbee device started pairing"
             except Exception as e:
-                logger.error(f"Zigbee配对启动失败: {e}")
-                return f"Zigbee配对启动失败: {e}"
+                logger.error(f"Zigbee pairing start failed: {e}")
+                return f"Zigbee pairing start failed: {e}"
         elif cmd_lower == "z2m":
             try:
                 self.task_manager.start_zigbee_switch_z2m_mode()
-                logger.info("Zigbee设备开始配对")
-                return "Zigbee设备开始配对"
+                logger.info("Zigbee device started pairing")
+                return "Zigbee device started pairing"
             except Exception as e:
-                logger.error(f"Zigbee配对启动失败: {e}")
-                return f"Zigbee配对启动失败: {e}"
+                logger.error(f"Zigbee pairing start failed: {e}")
+                return f"Zigbee pairing start failed: {e}"
         elif cmd_lower == "info":
             # 查询zigbee信息
-            zigbee_util.get_ha_zigbee_mode()
+            return get_ha_zigbee_mode()
         elif cmd_lower == "scan":
             try:
                 self.task_manager.start_zigbee_pairing(led_controller=self.led)
-                logger.info("Zigbee设备开始配对")
-                return "Zigbee设备开始配对"
+                logger.info("Zigbee device started pairing")
+                return "Zigbee device started pairing"
             except Exception as e:
-                logger.error(f"Zigbee配对启动失败: {e}")
-                return f"Zigbee配对启动失败: {e}"
+                logger.error(f"Zigbee pairing start failed: {e}")
+                return f"Zigbee pairing start failed: {e}"
         elif cmd_lower == "update":
             try:
-                self.task_manager.start_zigbee_ota()
-                logger.info("Zigbee设备开始配对")
-                return "Zigbee设备开始配对"
+                #self.task_manager.start_zigbee_ota()
+                logger.info("Zigbee device started pairing")
+                return "Zigbee device started pairing"
             except Exception as e:
-                logger.error(f"Zigbee配对启动失败: {e}")
-                return f"Zigbee配对启动失败: {e}"
+                logger.error(f"Zigbee pairing start failed: {e}")
+                return f"Zigbee pairing start failed: {e}"
         else:
-            logger.warning(f"未知的Zigbee命令: {cmd}")
-            return f"未知的Zigbee命令: {cmd}"
+            logger.warning(f"Unknown Zigbee command: {cmd}")
+            return f"Unknown Zigbee command: {cmd}"
 
             
     def set_thread_command(self, cmd):
         logger.info(f"thread Command: param={cmd}")
         
         if cmd.lower() == "enabled":
-            # 用作不同模块之间状态同步
+            # Used for state synchronization between different modules
             logger.info("Set Enabled Thread state")
             self.system_info.support_thread = True
             return "Thread support enabled"
         elif cmd.lower() == "disabled":
-            # 用作不同模块之间状态同步
+            # Used for state synchronization between different modules
             logger.info("Set Disabled Thread state")
             self.system_info.support_thread = False
             return "Thread support disabled"
@@ -155,7 +155,7 @@ class Supervisor:
                 logger.error(f"Thread support enable fail: {e}")
                 return f"Thread support enable fail: {e}" 
         elif cmd.lower() == "disable":
-            # 关闭Thread支持
+            # Disable Thread support
             try:
                 self.task_manager.start_thread_mode_disable()
                 logger.info("Thread support disabled")
@@ -168,7 +168,7 @@ class Supervisor:
     def set_setting_command(self, cmd):
         logger.info(f"setting Command: param={cmd}")
         
-        # 如果命令是enable，则启用Thread支持
+        # If the command is enable, enable Thread support
         if cmd.lower() == "backup":
             try:
                 self.task_manager.start_setting_backup()
@@ -187,7 +187,7 @@ class Supervisor:
                 return f"Setting restore fail: {e}"
         elif cmd.lower() == "wifi_notify":
             try:
-                self.finish_wifi_provision()
+                threading.Timer(1, self.finish_wifi_provision).start()
                 logger.info("WiFi provision mode exited by external notify")
                 return "WiFi provision mode exited"
             except Exception as e:
@@ -286,22 +286,6 @@ class Supervisor:
     def onNetworkConnected(self):
         logger.info("checking Network onNetworkConnected() ...")
 
-    # def check_ha_resume(self):
-    #     # Check if we need to resume home-assistant
-    #     if self.ha_resume_need:
-    #         logger.info("Resuming home-assistant service...")
-    #         # Start home-assistant in a separate thread
-    #         @util.threaded
-    #         def start_ha_service():
-    #             logger.info("Starting home-assistant service...")
-    #             util.execute_system_command(["systemctl", "start", "home-assistant"])
-    #             logger.info("home-assistant service started")
-    #             # Reset the flag
-    #             self.ha_resume_need = False
-            
-    #         # Start the thread
-    #         start_ha_service()
-
     def update_wifi_info(self, ip_address, ssid):
         """Update WiFi information cache"""
         prev_ip = self.wifi_status.ip_address
@@ -322,12 +306,12 @@ class Supervisor:
         return True
 
     def update_system_uptime(self):
-        """更新系统运行时间"""
+        """Update system uptime"""
         if 'uptime' in self.system_info:
             self.system_info['uptime'] = int(time.time() - self.start_time)
 
     def _start_http_server(self):
-        """启动HTTP服务器"""
+        """Start HTTP server"""
         if not self.http_server:
             try:
                 self.http_server = SupervisorHTTPServer(self, port=8086)
@@ -352,15 +336,15 @@ class Supervisor:
             return False
 
     def _start_gatt_server(self):
-        """初始化GATT管理器，但不自动启动服务"""
-        # GATT管理器已在__init__中初始化，这里只是确认状态
+        """Initialize GATT manager, but do not automatically start the service"""
+        # GATT manager is already initialized in __init__, here just to confirm the state
         if self.gatt_manager:
             logger.info("GATT manager initialized, ready for provisioning mode")
             return True
         return False
 
     def _stop_gatt_server(self):
-        """停止GATT服务器"""
+        """Stop GATT server"""
         if self.gatt_manager:
             try:
                 self.gatt_manager.cleanup()
@@ -387,22 +371,22 @@ class Supervisor:
 
     def perform_power_off(self):
         logging.info("Performing power off...")
-        # 这里可以启动一个脚本
+        # Here you can start a script
         util.perform_power_off()
     
     @util.threaded
     def perform_wifi_provision(self, progress_callback=None, complete_callback=None):
-        """执行WiFi配网"""
+        """Execute WiFi provisioning"""
         logging.info("Initiating wifi provision...")
         try:
-            # 启动GATT配网模式
+            # Start GATT provisioning mode
             if not self.gatt_manager.start_provisioning_mode():
                 raise Exception("Failed to start GATT provisioning mode")
                 
             if progress_callback:
                 progress_callback(50, "WiFi provision GATT server started...")
                 
-            # 这里可以添加其他配网逻辑
+            # Here you can add other provisioning logic
             
             if complete_callback:
                 complete_callback(True, "WiFi provision mode activated")
@@ -413,7 +397,7 @@ class Supervisor:
 
     @util.threaded
     def finish_wifi_provision(self):
-        """结束WiFi配网"""
+        """Finish WiFi provisioning"""
         logging.info("Finishing wifi provision...")
         self.gatt_manager.stop_provisioning_mode()
 
@@ -423,15 +407,15 @@ class Supervisor:
         sys.exit(0)
 
     def cleanup(self):
-        """清理资源"""
+        """Clean up resources"""
         logger.info("Cleaning up resources...")
         self.running.clear()
 
-        # 停止HTTP服务器
+        # Stop HTTP server
         self._stop_http_server()
-        # 停止GATT服务器
+        # Stop GATT server
         self._stop_gatt_server()
-        # 停止WiFi管理器
+        # Stop WiFi manager
         if hasattr(self, 'wifi_manager') and self.wifi_manager:
             self.wifi_manager.cleanup()
 
@@ -441,7 +425,7 @@ class Supervisor:
         self.task_manager.cleanup()
 
         try:
-            self.led.off()  # 确保LED关闭
+            self.led.off()  # Ensure LED is off
         except:
             pass
 
@@ -462,7 +446,7 @@ class Supervisor:
         self.task_manager.start_zigbee_switch_z2m_mode()
 
     def run(self):
-        """主运行函数"""
+        """Main run function"""
         logger.info("Starting supervisor...")
 
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -510,7 +494,7 @@ def main():
             print("Support colors: [mqtt_paring|mqtt_pared|mqtt_error|mqtt_normal|reboot|power_off|normal|network_error|network_lost|startu]")
             sys.exit(1)
         try:
-            # 支持简化颜色名到USER_EVENT映射
+            # Support simplified color name to USER_EVENT mapping
             user_event_map = {
                 'red': LedState.USER_EVENT_RED,
                 'blue': LedState.USER_EVENT_BLUE,

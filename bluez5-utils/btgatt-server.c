@@ -13,7 +13,9 @@
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *  GNU General Public License for more details.
- *
+ * 
+ *  # 2025-06-19: Update for wifi config
+ *  # maintainer: guoping.liu@3reality.com
  */
 
 #ifdef HAVE_CONFIG_H
@@ -36,6 +38,7 @@
 #include <sys/wait.h>
 #include <sys/select.h>
 #include <sys/signal.h>
+#include <sys/types.h>
 
 #include "lib/bluetooth.h"
 #include "lib/hci.h"
@@ -88,11 +91,14 @@ static pthread_mutex_t notification_lock = PTHREAD_MUTEX_INITIALIZER;
 // Forward declarations
 static void str2uuid(const char *str, uint8_t *value, uint8_t type);
 static struct server *server_create(int fd);
-static void send_led_command(const char *command);
+
 static void start_advertising(void);
 static void stop_advertising(void);
 static void reset_no_client_timeout(void);
 static void no_client_timeout_cb(int timeout_id, void *user_data);
+static const char* get_device_name(void);
+static int get_wifi_mac(char* mac_buf);
+static void send_socket_command(const char *command);
 
 // Keep the original 128-bit definitions for fallback
 #define LINUXBOX_SERVICE_UUID_STR "6e400000-0000-4e98-8024-bc5b71e0893e"
@@ -138,9 +144,12 @@ void ble_init(void);
 
 // LED control macros
 #define SUPERVISOR_PATH "/usr/local/bin/supervisor"
+#define LED_SYS_WIFI_CONFIG_PENDING "led sys_wifi_config_pending"
 #define LED_SYS_WIFI_CONFIGURING "led sys_wifi_configuring"
 #define LED_SYS_WIFI_SUCCESS "led sys_wifi_config_success" 
 #define LED_SYS_EVENT_OFF "led sys_event_off"
+
+#define SETTING_WIFI_NOTIFY "setting wifi_notify"
 
 // Global state management variables
 static bool client_connected = false;
@@ -156,23 +165,22 @@ static unsigned int no_client_timeout_id = 0;
 #define TEST_ATT_LOG 0  // Set to 1 to enable att log, 0 to disable
 #define TEST_MAX_WIFI_SUCCESS_COUNT 1
 
-// LED控制函数
-static void send_led_command(const char *command)
+static void send_socket_command(const char *command)
 {
     char full_cmd[256];
     
     // Check if supervisor file exists
     if (access(SUPERVISOR_PATH, F_OK) != 0) {
-        printf("[LED] Warning: %s not found, skipping LED command\n", SUPERVISOR_PATH);
+        printf("[PROXY] Warning: %s not found, skipping LED command\n", SUPERVISOR_PATH);
         return;
     }
     
     snprintf(full_cmd, sizeof(full_cmd), "%s %s", SUPERVISOR_PATH, command);
-    printf("[LED] Executing: %s\n", full_cmd);
+    printf("[PROXY] Executing: %s\n", full_cmd);
     
     int result = system(full_cmd);
     if (result != 0) {
-        printf("[LED] Warning: LED command failed.\n");
+        printf("[PROXY] Warning: socket command failed: %d.\n", result);
     }
 }
 
@@ -280,13 +288,13 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
     printf("[DEBUG] Processing JSON: %s\n", json_str);
     
     // 发送WiFi配置中LED指令
-    send_led_command(LED_SYS_WIFI_CONFIGURING);
+    send_socket_command(LED_SYS_WIFI_CONFIGURING);
     
     cJSON *root = cJSON_Parse(json_str);
     if (!root) {
         printf("[DEBUG] Failed to parse JSON\n");
         snprintf(response, response_len, 
-                "{\"connected\":false,\"ip_address\":\"\"}");
+                "{\"error\":\"Invalid format\"}");
         return -1;
     }
 
@@ -295,7 +303,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
         printf("[DEBUG] Missing or invalid SSID\n");
         cJSON_Delete(root);
         snprintf(response, response_len, 
-                "{\"connected\":false,\"ip_address\":\"\"}");
+                "{\"error\":\"Invalid SSID\"}");
         return -1;
     }
 
@@ -321,7 +329,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
             wifi_success_count++;
             
             // 发送成功LED指令
-            send_led_command(LED_SYS_WIFI_SUCCESS);
+            send_socket_command(LED_SYS_WIFI_SUCCESS);
             
             snprintf(response, response_len, 
                     "{\"connected\":true,\"ip_address\":\"%s\"}", 
@@ -356,27 +364,52 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
     if (!cmd_fp) {
         printf("[WIFI] Failed to execute nmcli command\n");
         snprintf(response, response_len, 
-                "{\"connected\":false,\"ip_address\":\"\",\"error\":\"Failed to execute connect command\"}");
+                "{\"error\":\"Command failed\"}");
         cJSON_Delete(root);
         return -1;
     }
     
+    // Device 'wlan0' successfully activated with '26229f20-a62f-4192-9858-70e241bd141d'.
+    // Error: Connection activation failed: Secrets were required, but not provided.
     char cmd_output[512] = {0};
+    bool cmd_success = false;
+    
     if (fgets(cmd_output, sizeof(cmd_output), cmd_fp)) {
         printf("[WIFI] nmcli output: %s", cmd_output);
+        
+        // Simple check: if output contains "successfully activated", command succeeded
+        if (strstr(cmd_output, "successfully activated") != NULL) {
+            cmd_success = true;
+            printf("[WIFI] nmcli command executed successfully\n");
+        } else {
+            printf("[WIFI] nmcli command failed\n");
+        }
+    } else {
+        printf("[WIFI] No output from nmcli command\n");
     }
-    pclose(cmd_fp);
+    
+    int cmd_exit_status = pclose(cmd_fp);
+    printf("[WIFI] nmcli exit status: %d\n", cmd_exit_status);
+    
+    // If command failed, return error immediately without checking IP
+    if (!cmd_success || cmd_exit_status != 0) {
+        printf("[WIFI] nmcli command failed, not checking IP address\n");
+        snprintf(response, response_len, 
+                "{\"error\":\"Connection failed\"}");
+        cJSON_Delete(root);
+        return -1;
+    }
     
     // 3. 在1秒内检查IP地址 (极大减少阻塞时间防止BLE超时)
-    printf("[WIFI] Waiting up to 1 second for IP address...\n");
+    printf("[WIFI] nmcli command successful, waiting up to 1 second for IP address...\n");
     for (int i = 0; i < 1; i++) {
         sleep(1);
         
         // 检查BLE连接状态，如果已断开则立即退出
         if (!client_connected) {
             printf("[WIFI] BLE client disconnected during WiFi config, aborting\n");
-                          snprintf(response, response_len, 
-                    "{\"connected\":false,\"ip_address\":\"\"}");
+            snprintf(response, response_len, 
+                    "{\"error\":\"BLE disconnected\"}");
             cJSON_Delete(root);
             return -1;
         }
@@ -387,7 +420,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
             wifi_success_count++;
             
             // 发送成功LED指令
-            send_led_command(LED_SYS_WIFI_SUCCESS);
+            send_socket_command(LED_SYS_WIFI_SUCCESS);
             
             // 4. 清理旧的连接
             cleanup_old_connections(ssid);
@@ -411,7 +444,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
     printf("[WIFI] WiFi connection failed - no valid IP address after 1 second\n");
     
     // 发送配置中LED指令（表示等待重试）
-    send_led_command(LED_SYS_WIFI_CONFIGURING);
+    send_socket_command(LED_SYS_WIFI_CONFIG_PENDING);
     
     // 检查nmcli连接状态
     char status_cmd[256];
@@ -430,7 +463,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
     }
     
     snprintf(response, response_len, 
-            "{\"connected\":false,\"ip_address\":\"\"}");
+            "{\"error\":\"Timeout\"}");
     
     cJSON_Delete(root);
     return -1;
@@ -492,7 +525,7 @@ static void att_disconnect_cb(int err, void *user_data)
     if (wifi_success_count > TEST_MAX_WIFI_SUCCESS_COUNT) {
         printf("[EXIT] WiFi configured %d times, exiting after disconnect\n", 
                wifi_success_count);
-        send_led_command(LED_SYS_EVENT_OFF);
+        send_socket_command(LED_SYS_EVENT_OFF);
         should_exit = true;
         mainloop_quit();
         return;
@@ -1017,10 +1050,10 @@ static void gap_device_name_read_cb(struct gatt_db_attribute *attrib,
                 uint8_t opcode, struct bt_att *att,
                 void *user_data)
 {
-    const char *name = "3RHUB-8C1D96B9FEEC";
+    const char *name = get_device_name();
     uint16_t len = strlen(name);
 
-    printf("[DEBUG] GAP device name read\n");
+    printf("[DEBUG] GAP device name read: %s\n", name);
 
     if (offset > len) {
         gatt_db_attribute_read_result(attrib, id, BT_ATT_ERROR_INVALID_OFFSET, NULL, 0);
@@ -1365,7 +1398,7 @@ static int l2cap_le_att_listen_and_accept(bdaddr_t *src, int sec,
 		time_t current_time = time(NULL);
 		if (current_time - start_time >= NO_CLIENT_TIMEOUT_SECONDS) {
 			printf("[SELECT] No client connected for %d seconds, exiting...\n", NO_CLIENT_TIMEOUT_SECONDS);
-			send_led_command(LED_SYS_EVENT_OFF);
+			send_socket_command(LED_SYS_EVENT_OFF);
 			should_exit = true;
 			goto fail;
 		}
@@ -1459,7 +1492,7 @@ static void signal_cb(int signum, void *user_data)
     case SIGINT:
     case SIGTERM:
         printf("\n[SIGNAL] Received termination signal (%d)\n", signum);
-        send_led_command(LED_SYS_EVENT_OFF);
+        send_socket_command(LED_SYS_EVENT_OFF);
         should_exit = true;
         mainloop_quit();
         break;
@@ -1511,6 +1544,86 @@ done:
 	}
 }
 
+
+// Device name generation - unified approach
+static char device_name_cache[32] = {0};
+static bool device_name_initialized = false;
+
+static const char* get_device_name(void)
+{
+    if (device_name_initialized) {
+        return device_name_cache;
+    }
+    
+    char mac_str[18];
+    bool mac_obtained = false;
+    
+    printf("[DEVICE_NAME] Generating device name...\n");
+    
+    // Try to get MAC address with retry logic
+    if (get_wifi_mac(mac_str) == 0 && strlen(mac_str) > 0) {
+        // Convert MAC address to uppercase
+        for (int i = 0; mac_str[i]; i++) {
+            mac_str[i] = toupper(mac_str[i]);
+        }
+        
+        // Use only last 8 characters of MAC address, consistent with Python logic
+        size_t mac_len = strlen(mac_str);
+        if (mac_len >= 8) {
+            snprintf(device_name_cache, sizeof(device_name_cache), 
+                    "3RHUB-%s", mac_str + mac_len - 8);
+        } else {
+            snprintf(device_name_cache, sizeof(device_name_cache), 
+                    "3RHUB-%s", mac_str);
+        }
+        mac_obtained = true;
+        printf("[DEVICE_NAME] Generated from MAC: %s\n", device_name_cache);
+    } else {
+        // Fallback strategies
+        printf("[DEVICE_NAME] MAC address not available, using fallback methods...\n");
+        
+        // Option 1: Try to get last 6 characters of machine-id
+        FILE *f = fopen("/etc/machine-id", "r");
+        if (f != NULL) {
+            char machine_id[64] = {0};
+            if (fgets(machine_id, sizeof(machine_id), f) != NULL) {
+                size_t len = strlen(machine_id);
+                if (len >= 6) {
+                    // Remove newline and take last 6 characters
+                    if (machine_id[len-1] == '\n') {
+                        machine_id[len-1] = '\0';
+                        len--;
+                    }
+                    if (len >= 6) {
+                        snprintf(device_name_cache, sizeof(device_name_cache), 
+                                "3RHUB-%s", machine_id + len - 6);
+                        mac_obtained = true;
+                        printf("[DEVICE_NAME] Generated from machine-id: %s\n", device_name_cache);
+                    }
+                }
+            }
+            fclose(f);
+        }
+        
+        // Option 2: Use timestamp-based suffix if machine-id failed
+        if (!mac_obtained) {
+            time_t now = time(NULL);
+            snprintf(device_name_cache, sizeof(device_name_cache), 
+                    "3RHUB-%04lX", (unsigned long)(now & 0xFFFF));
+            printf("[DEVICE_NAME] Generated from timestamp: %s\n", device_name_cache);
+        }
+    }
+
+    // Final validation and fallback
+    if (strlen(device_name_cache) == 0) {
+        strcpy(device_name_cache, "3RHUB-DEFAULT");
+        printf("[DEVICE_NAME] Emergency fallback: %s\n", device_name_cache);
+    }
+    
+    device_name_initialized = true;
+    printf("[DEVICE_NAME] Final device name: %s\n", device_name_cache);
+    return device_name_cache;
+}
 
 static int get_wifi_mac(char* mac_buf)
 {
@@ -1620,78 +1733,24 @@ static void set_adv_enable(int enable)
 static void set_adv_response(void)
 {
     struct bt_hci_cmd_le_set_scan_rsp_data param;
-    char local_name[32];
-    char mac_str[18];
-    bool mac_obtained = false;
-
-    // Try to get MAC address with retry logic
-    printf("[ADV] Attempting to get WiFi MAC address for local name...\n");
-    if (get_wifi_mac(mac_str) == 0 && strlen(mac_str) > 0) {
-        // Convert MAC address to uppercase
-        for (int i = 0; mac_str[i]; i++) {
-            mac_str[i] = toupper(mac_str[i]);
-        }
-        snprintf(local_name, sizeof(local_name), "3RHUB-%s", mac_str);
-        mac_obtained = true;
-        printf("[ADV] Local name with MAC: %s\n", local_name);
-    } else {
-        // Fallback strategies
-        printf("[ADV] MAC address not available, using fallback methods...\n");
-        
-        // Try to get a unique identifier from system
-        // Option 1: Try to get last 6 characters of machine-id
-        FILE *f = fopen("/etc/machine-id", "r");
-        if (f != NULL) {
-            char machine_id[64] = {0};
-            if (fgets(machine_id, sizeof(machine_id), f) != NULL) {
-                size_t len = strlen(machine_id);
-                if (len >= 6) {
-                    // Remove newline and take last 6 characters
-                    if (machine_id[len-1] == '\n') {
-                        machine_id[len-1] = '\0';
-                        len--;
-                    }
-                    if (len >= 6) {
-                        snprintf(local_name, sizeof(local_name), "3RHUB-%s", 
-                                machine_id + len - 6);
-                        printf("[ADV] Local name with machine-id: %s\n", local_name);
-                        mac_obtained = true;
-                    }
-                }
-            }
-            fclose(f);
-        }
-        
-        // Option 2: Use timestamp-based suffix if machine-id failed
-        if (!mac_obtained) {
-            time_t now = time(NULL);
-            snprintf(local_name, sizeof(local_name), "3RHUB-%04lX", 
-                    (unsigned long)(now & 0xFFFF));
-            printf("[ADV] Local name with timestamp: %s\n", local_name);
-        }
-    }
-
-    // Validate local name is not empty
-    if (strlen(local_name) == 0) {
-        strcpy(local_name, "3RHUB-DEFAULT");
-        printf("[ADV] Emergency fallback name: %s\n", local_name);
-    }
+    const char *device_name = get_device_name();
+    
+    printf("[ADV] Using unified device name: %s\n", device_name);
 
     memset(&param, 0, sizeof(param));
     param.len = 0;
 
-    // Validate local name length for BLE advertising
-    size_t name_len = strlen(local_name);
+    // Validate device name length for BLE advertising
+    size_t name_len = strlen(device_name);
     if (name_len > 29) { // BLE scan response has ~31 byte limit, need 2 bytes for length+type
-        local_name[29] = '\0';
         name_len = 29;
-        printf("[ADV] Local name truncated to: %s\n", local_name);
+        printf("[ADV] Device name truncated to %zu characters\n", name_len);
     }
 
     // Add local name
     param.data[param.len++] = name_len + 1;  // Length including type
     param.data[param.len++] = 0x09;          // Complete Local Name
-    memcpy(&param.data[param.len], local_name, name_len);
+    memcpy(&param.data[param.len], device_name, name_len);
     param.len += name_len;
 
     printf("[ADV] Scan response data length: %d bytes\n", param.len);
@@ -1700,7 +1759,7 @@ static void set_adv_response(void)
         printf("%02X ", param.data[i]);
     }
     printf("\n");
-    printf("[ADV] Final local name: %s (length: %zu)\n", local_name, name_len);
+    printf("[ADV] Final device name: %.*s (length: %zu)\n", (int)name_len, device_name, name_len);
 
     send_cmd(BT_HCI_CMD_LE_SET_SCAN_RSP_DATA, &param, sizeof(param));
 }
@@ -1826,7 +1885,7 @@ static void no_client_timeout_cb(int timeout_id, void *user_data)
            NO_CLIENT_TIMEOUT_SECONDS);
     
     // Send LED off command
-    send_led_command(LED_SYS_EVENT_OFF);
+    send_socket_command(LED_SYS_EVENT_OFF);
     
     should_exit = true;
     mainloop_quit();
@@ -1860,10 +1919,10 @@ int main(int argc, char *argv[])
 	uint8_t src_type = BDADDR_LE_PUBLIC;
 
 	printf("[MAIN] === GATT WiFi Configuration Server Starting ===\n");
-	printf("[MAIN] Version: Enhanced with LED control and timeout management\n");
+	printf("[MAIN] Version: v1.0.1\n");
 	printf("[MAIN] Service UUID: %s\n", LINUXBOX_SERVICE_UUID_STR);
-	printf("[MAIN]Characteristic UUID: %s\n", WIFI_CONFIG_CHAR_UUID_STR);
-	printf("[MAIN]======================================== ===\n");
+	printf("[MAIN] Characteristic UUID: %s\n", WIFI_CONFIG_CHAR_UUID_STR);
+	printf("[MAIN] ======================================== ===\n");
 
 	// Set signal handlers using sigaction to ensure proper interruption
 	struct sigaction sa;
@@ -1901,7 +1960,7 @@ int main(int argc, char *argv[])
 	printf("[SIGNAL] Signals blocked except during pselect calls\n");
 
 	// Send LED command on startup
-	send_led_command(LED_SYS_WIFI_CONFIGURING);
+	send_socket_command(LED_SYS_WIFI_CONFIG_PENDING);
 
 	// Enable verbose mode for better debugging
 	verbose = true;
@@ -1930,7 +1989,11 @@ int main(int argc, char *argv[])
 		fd = l2cap_le_att_listen_and_accept(&src_addr, sec, src_type);
 		if (fd < 0) {
 			fprintf(stderr, "Failed to accept L2CAP ATT connection\n");
-			send_led_command(LED_SYS_EVENT_OFF);
+			send_socket_command(LED_SYS_EVENT_OFF);
+
+            printf("[DEBUG] SETTING_WIFI_NOTIFY[1]...\n");
+			send_socket_command(SETTING_WIFI_NOTIFY);
+			usleep(500000);
 			return EXIT_FAILURE;
 		}
 
@@ -1947,7 +2010,10 @@ int main(int argc, char *argv[])
 		server = server_create(fd);
 		if (!server) {
 			close(fd);
-			send_led_command(LED_SYS_EVENT_OFF);
+			send_socket_command(LED_SYS_EVENT_OFF);
+            printf("[DEBUG] SETTING_WIFI_NOTIFY[2]...\n");
+			send_socket_command(SETTING_WIFI_NOTIFY);
+			usleep(500000);
 			return EXIT_FAILURE;
 		}
 
@@ -1955,7 +2021,7 @@ int main(int argc, char *argv[])
 		reset_no_client_timeout();
 
 		printf("[ADV] === GATT Server Ready - Waiting for Android App ===\n");
-		printf("[ADV] Device name: 3RHUB-8C1D96B9FEEC\n");
+		printf("[ADV] Device name: %s\n", get_device_name());
 		printf("[ADV] Ready to receive WiFi configuration from Android app\n");
 		printf("[ADV] No client timeout: %d seconds\n", NO_CLIENT_TIMEOUT_SECONDS);
 		printf("[ADV] ============================================= ===\n");
@@ -2006,8 +2072,11 @@ int main(int argc, char *argv[])
 	
 	// Send LED off command on exit
 	if (!should_exit) {  // Avoid duplicate sending
-		send_led_command(LED_SYS_EVENT_OFF);
+		send_socket_command(LED_SYS_EVENT_OFF);
 	}
 
+    printf("[DEBUG] SETTING_WIFI_NOTIFY[3]...\n");
+	send_socket_command(SETTING_WIFI_NOTIFY);
+	usleep(800000);
 	return EXIT_SUCCESS;
 }
