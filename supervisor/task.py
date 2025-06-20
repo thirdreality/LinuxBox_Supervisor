@@ -114,8 +114,8 @@ class TaskManager:
     def start_setting_backup(self):
         return self._start_task("setting", "backup", setting_util.run_setting_backup)
 
-    def start_setting_restore(self):
-        return self._start_task("setting", "restore", setting_util.run_setting_restore)
+    def start_setting_restore(self, backup_file=None):
+        return self._start_task("setting", "restore", setting_util.run_setting_restore, backup_file=backup_file)
 
     def start_thread_mode_enable(self):
         return self._start_task("thread", "enable", thread_util.run_thread_enable)

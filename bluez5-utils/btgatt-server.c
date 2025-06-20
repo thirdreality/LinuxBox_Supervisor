@@ -1477,6 +1477,38 @@ static void signal_handler(int signum)
         {
             const char sigterm_msg[] = "[SIGNAL] SIGTERM received!\n";
             write(STDOUT_FILENO, sigterm_msg, sizeof(sigterm_msg) - 1);
+            
+            // Immediately stop advertising when SIGTERM is received
+            if (advertising) {
+                const char adv_msg[] = "[SIGNAL] Stopping advertising due to SIGTERM\n";
+                write(STDOUT_FILENO, adv_msg, sizeof(adv_msg) - 1);
+                
+                // Use direct HCI commands to stop advertising (signal-safe)
+                struct bt_hci_cmd_le_set_adv_enable param;
+                param.enable = 0;
+                
+                // Note: This is a simplified approach - in production, you might want
+                // to use a more robust method like writing to a pipe or using atexit()
+                int hdev = hci_get_route(NULL);
+                if (hdev >= 0) {
+                    int dd = hci_open_dev(hdev);
+                    if (dd >= 0) {
+                        struct hci_request rq;
+                        uint8_t status;
+                        memset(&rq, 0, sizeof(rq));
+                        rq.ogf = OGF_LE_CTL;
+                        rq.ocf = BT_HCI_CMD_LE_SET_ADV_ENABLE;
+                        rq.cparam = &param;
+                        rq.clen = sizeof(param);
+                        rq.rparam = &status;
+                        rq.rlen = 1;
+                        hci_send_req(dd, &rq, 1000);
+                        hci_close_dev(dd);
+                    }
+                }
+                advertising = false;
+            }
+            
             should_exit = true;
             mainloop_quit();
             break;
@@ -1507,15 +1539,17 @@ static void send_cmd(int cmd, void *params, int params_len)
 	uint8_t status;
 	int dd, ret, hdev;
 
-	if (hdev < 0)
-		hdev = hci_get_route(NULL);
+	hdev = hci_get_route(NULL);
+	if (hdev < 0) {
+		perror("Could not get HCI device");
+		exit(1);
+	}
 
 	dd = hci_open_dev(hdev);
 	if (dd < 0) {
 		perror("Could not open device");
 		exit(1);
 	}
-
 
 	memset(&rq, 0, sizeof(rq));
 	rq.ogf = OGF_LE_CTL;
@@ -1846,23 +1880,42 @@ static void start_advertising(void)
 {
     if (!advertising) {
         printf("[ADV] Starting advertising...\n");
+        fflush(stdout);
         
         // First ensure advertising is disabled
+        printf("[ADV] Disabling advertising first...\n");
+        fflush(stdout);
         set_adv_enable(0);
         usleep(100000); // Wait 100ms
         
         // Reset advertising parameters
+        printf("[ADV] Setting advertising parameters...\n");
+        fflush(stdout);
         set_adv_parameters();
+        
+        printf("[ADV] Setting advertising data...\n");
+        fflush(stdout);
         set_adv_data();
+        
+        printf("[ADV] Setting scan response data...\n");
+        fflush(stdout);
         set_adv_response();
         
         // Enable advertising
+        printf("[ADV] Enabling advertising...\n");
+        fflush(stdout);
         set_adv_enable(1);
+        
+        // Wait a moment for advertising to start
+        usleep(50000); // 50ms
         
         advertising = true;
         printf("[ADV] Advertising restarted successfully\n");
+        printf("[ADV] Device should now be visible as: %s\n", get_device_name());
+        fflush(stdout);
     } else {
         printf("[ADV] Advertising already running\n");
+        fflush(stdout);
     }
 }
 
@@ -1870,11 +1923,29 @@ static void stop_advertising(void)
 {
     if (advertising) {
         printf("[ADV] Stopping advertising...\n");
+        fflush(stdout);
         set_adv_enable(0);
+        usleep(50000); // 50ms
+        set_adv_enable(0); // double check
+
+        // Clear advertising data
+        struct bt_hci_cmd_le_set_adv_data adv_clear;
+        memset(&adv_clear, 0, sizeof(adv_clear));
+        adv_clear.len = 0;
+        send_cmd(BT_HCI_CMD_LE_SET_ADV_DATA, &adv_clear, sizeof(adv_clear));
+
+        // Clear scan response data
+        struct bt_hci_cmd_le_set_scan_rsp_data scan_clear;
+        memset(&scan_clear, 0, sizeof(scan_clear));
+        scan_clear.len = 0;
+        send_cmd(BT_HCI_CMD_LE_SET_SCAN_RSP_DATA, &scan_clear, sizeof(scan_clear));
+
         advertising = false;
-        printf("[ADV] Advertising stopped\n");
+        printf("[ADV] Advertising stopped and data cleared\n");
+        fflush(stdout);
     } else {
         printf("[ADV] Advertising already stopped\n");
+        fflush(stdout);
     }
 }
 
@@ -1908,7 +1979,37 @@ static void reset_no_client_timeout(void)
     }
 }
 
-
+// Global cleanup function for atexit
+static void cleanup_on_exit(void)
+{
+    if (advertising) {
+        printf("[CLEANUP] Cleaning up advertising on exit\n");
+        fflush(stdout);
+        
+        // Force stop advertising
+        struct bt_hci_cmd_le_set_adv_enable param;
+        param.enable = 0;
+        
+        int hdev = hci_get_route(NULL);
+        if (hdev >= 0) {
+            int dd = hci_open_dev(hdev);
+            if (dd >= 0) {
+                struct hci_request rq;
+                uint8_t status;
+                memset(&rq, 0, sizeof(rq));
+                rq.ogf = OGF_LE_CTL;
+                rq.ocf = BT_HCI_CMD_LE_SET_ADV_ENABLE;
+                rq.cparam = &param;
+                rq.clen = sizeof(param);
+                rq.rparam = &status;
+                rq.rlen = 1;
+                hci_send_req(dd, &rq, 1000);
+                hci_close_dev(dd);
+            }
+        }
+        advertising = false;
+    }
+}
 
 int main(int argc, char *argv[])
 {
@@ -1917,6 +2018,13 @@ int main(int argc, char *argv[])
 	int fd;
 	int sec = BT_SECURITY_LOW;
 	uint8_t src_type = BDADDR_LE_PUBLIC;
+
+	// Register cleanup function for all exit paths
+	atexit(cleanup_on_exit);
+
+	// Set stdout to unbuffered for immediate log output
+	setvbuf(stdout, NULL, _IONBF, 0);
+	setvbuf(stderr, NULL, _IONBF, 0);
 
 	printf("[MAIN] === GATT WiFi Configuration Server Starting ===\n");
 	printf("[MAIN] Version: v1.0.1\n");
@@ -1981,9 +2089,11 @@ int main(int argc, char *argv[])
 		
 		// Start advertising before listening
 		printf("[MAIN] Starting advertising before listening for connections...\n");
+		fflush(stdout);
 		start_advertising();
 
 		printf("[MAIN] Create GATT server l2cap_le_att_listen_and_accept ...\n");
+		fflush(stdout);
 
 		bacpy(&src_addr, BDADDR_ANY);
 		fd = l2cap_le_att_listen_and_accept(&src_addr, sec, src_type);

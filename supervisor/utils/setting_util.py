@@ -4,6 +4,10 @@ import os
 import time
 import logging
 import subprocess
+import glob
+import tempfile
+import shutil
+import json
 from datetime import datetime
 
 logger = logging.getLogger("Supervisor")
@@ -79,6 +83,17 @@ def run_setting_backup(progress_callback=None, complete_callback=None):
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         backup_filename = f"setting_{timestamp}.tar.gz"
         backup_filepath = os.path.join(backup_base_path, backup_filename)
+        
+        # Save service states to a temporary file for inclusion in backup
+        temp_service_state_path = os.path.join(backup_base_path, f"service_states_{timestamp}.json")
+        try:
+            with open(temp_service_state_path, 'w') as f:
+                json.dump(original_service_states, f, indent=2)
+            logging.info(f"Service states saved to {temp_service_state_path}")
+            _call_progress(37, "Service states recorded for backup.")
+        except Exception as e:
+            logging.error(f"Failed to save service states: {e}")
+            raise Exception(f"Failed to save service states: {e}")
 
         valid_backup_dirs = []
         for path, _ in backup_dirs_config:
@@ -89,18 +104,31 @@ def run_setting_backup(progress_callback=None, complete_callback=None):
         
         if not valid_backup_dirs:
             logging.error("No valid source directories found for backup. Aborting backup creation.")
+            # Clean up temp service state file
+            if os.path.exists(temp_service_state_path):
+                os.remove(temp_service_state_path)
             raise Exception("No valid source directories found for backup.")
 
-        tar_command = ["tar", "-czf", backup_filepath] + valid_backup_dirs
-        logging.info(f"Creating backup archive: {backup_filepath} from {valid_backup_dirs}")
-        _call_progress(40, f"Creating tarball {backup_filename} from {len(valid_backup_dirs)} source(s).")
+        # Include service state file in the backup
+        backup_sources = valid_backup_dirs + [temp_service_state_path]
+        tar_command = ["tar", "-czf", backup_filepath] + backup_sources
+        logging.info(f"Creating backup archive: {backup_filepath} from {backup_sources}")
+        _call_progress(40, f"Creating tarball {backup_filename} from {len(valid_backup_dirs)} source(s) plus service states.")
         
         tar_process_result = subprocess.run(tar_command, capture_output=True, text=True)
 
         if tar_process_result.returncode != 0:
             error_message = f"Tar command failed. RC: {tar_process_result.returncode}. Stderr: {tar_process_result.stderr.strip()}"
             logging.error(error_message)
+            # Clean up temp service state file
+            if os.path.exists(temp_service_state_path):
+                os.remove(temp_service_state_path)
             raise Exception(error_message)
+        
+        # Clean up temp service state file after successful backup
+        if os.path.exists(temp_service_state_path):
+            os.remove(temp_service_state_path)
+            logging.info(f"Cleaned up temporary service state file: {temp_service_state_path}")
         
         logging.info(f"Backup archive created successfully: {backup_filepath}")
         _call_progress(70, "Backup archive created.")
@@ -127,15 +155,20 @@ def run_setting_backup(progress_callback=None, complete_callback=None):
             logging.info(f"Found {len(backup_files)} backups. No rotation needed (max {max_backups}).")
         _call_progress(85, "Backup file management complete.")
 
-        if complete_callback:
-            complete_callback(True, "success")
-        _call_progress(100, "System settings backup completed successfully.")
-
     except Exception as e:
         logging.error(f"System settings backup failed critically: {e}", exc_info=True)
         if complete_callback:
             complete_callback(False, str(e) if str(e) else "Unknown error during backup")
     finally:
+        # Clean up any remaining temporary service state file
+        try:
+            temp_files = glob.glob(os.path.join(backup_base_path, "service_states_*.json"))
+            for temp_file in temp_files:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+                    logging.info(f"Cleaned up temporary file: {temp_file}")
+        except Exception as cleanup_error:
+            logging.warning(f"Failed to clean up temporary files: {cleanup_error}")
         _call_progress(90, "Restoring services to their original states (if changed).")
         current_progress = 90
         progress_per_service_start = 10 / len(original_service_states) if original_service_states else 0
@@ -155,6 +188,11 @@ def run_setting_backup(progress_callback=None, complete_callback=None):
             _call_progress(int(current_progress), f"Processed service restoration for {service}.")
         
         logging.info("Service restoration phase complete.")
+        
+        # Call completion callback and final progress only after all work is done
+        if complete_callback:
+            complete_callback(True, "success")
+        _call_progress(100, "System settings backup completed successfully.")
 
 
 def run_setting_restore(backup_file=None, progress_callback=None, complete_callback=None):
@@ -175,6 +213,7 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
         "/etc/mosquitto"
     ]
     original_service_states = {}
+    backup_service_states = {}
 
     def _call_progress(percent, message):
         logging.info(f"Restore progress ({percent}%): {message}")
@@ -186,17 +225,19 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
         selected_backup_filepath = None
 
         if backup_file:
-            _call_progress(5, f"Checking for specified backup file: {backup_file}")
-            candidate_filepath = os.path.join(backup_base_path, backup_file)
+            # Convert timestamp to full filename format
+            full_backup_filename = f"setting_{backup_file}.tar.gz"
+            _call_progress(5, f"Checking for specified backup file: {full_backup_filename} (from timestamp: {backup_file})")
+            candidate_filepath = os.path.join(backup_base_path, full_backup_filename)
             if os.path.isfile(candidate_filepath):
                 selected_backup_filepath = candidate_filepath
                 logging.info(f"Using specified backup file: {selected_backup_filepath}")
-                _call_progress(10, f"Specified backup file found: {os.path.basename(selected_backup_filepath)}")
+                _call_progress(10, f"Specified backup file found: {full_backup_filename}")
             else:
                 logging.info(f"Specified backup file {candidate_filepath} not found. Concluding restore as per request.")
-                _call_progress(100, "Specified backup file not found.")
                 if complete_callback:
                     complete_callback(True, "success - specified backup file not found")
+                _call_progress(100, "Specified backup file not found.")
                 return
         else:
             _call_progress(5, "No specific backup file provided. Scanning for existing backups.")
@@ -211,9 +252,9 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
                 _call_progress(10, f"Selected latest backup for restore: {os.path.basename(selected_backup_filepath)}")
             else:
                 logging.info(f"No backup file specified and no 'setting_*.tar.gz' files found in {backup_base_path}. Concluding restore as per request.")
-                _call_progress(100, "No 'setting_*.tar.gz' backup files found to restore.")
                 if complete_callback:
                     complete_callback(True, "success - no backup files found to restore")
+                _call_progress(100, "No 'setting_*.tar.gz' backup files found to restore.")
                 return
         
         # _call_progress(10, f"Selected backup for restore: {os.path.basename(selected_backup_filepath)}") # This line is now covered above
@@ -230,7 +271,25 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
                 raise Exception(error_msg)
             _call_progress(30, "Backup archive extracted successfully.")
 
-            _call_progress(35, "Checking and stopping services prior to restore.")
+            # Try to read service states from backup
+            # Service state file is stored in the backup with path lib/thirdreality/backup/service_states_*.json
+            service_state_pattern = os.path.join(temp_extraction_dir, "lib", "thirdreality", "backup", "service_states_*.json")
+            service_state_files = glob.glob(service_state_pattern)
+            if service_state_files:
+                service_state_file = service_state_files[0]  # Use the first (should be only one)
+                try:
+                    with open(service_state_file, 'r') as f:
+                        backup_service_states = json.load(f)
+                    logging.info(f"Loaded service states from backup: {backup_service_states}")
+                    _call_progress(32, "Service states loaded from backup.")
+                except Exception as e:
+                    logging.warning(f"Failed to load service states from backup: {e}. Will use current service states for restore.")
+                    backup_service_states = {}
+            else:
+                logging.info("No service state file found in backup. Will use current service states for restore.")
+                backup_service_states = {}
+
+            _call_progress(35, "Stopping all services prior to restore.")
             current_progress_services = 35
             progress_per_service_stop = 15 / len(services_to_manage) if services_to_manage else 0
 
@@ -300,9 +359,6 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
                 _call_progress(int(current_progress_data), f"Finished processing restore for {target_sys_path}.")
             
             _call_progress(80, "Data restoration phase complete.")
-            if complete_callback:
-                complete_callback(True, "success")
-            _call_progress(100, "System settings restore completed successfully.")
 
     except Exception as e:
         logging.error(f"System settings restore failed: {e}", exc_info=True)
@@ -310,24 +366,38 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
             complete_callback(False, str(e) if str(e) else "Unknown error during restore")
     finally:
         if original_service_states: # Only proceed if services were actually stopped
-            _call_progress(85, "Restoring services to their original states (if changed).")
+            _call_progress(85, "Restoring services based on backup service states.")
             current_progress_finally = 85
-            progress_per_service_start = 15 / len(original_service_states) if original_service_states else 0 # Should not be 0 if original_service_states is true
+            
+            # Use backup service states if available, otherwise fall back to original states
+            service_states_to_restore = backup_service_states if backup_service_states else original_service_states
+            progress_per_service_start = 15 / len(service_states_to_restore) if service_states_to_restore else 0
 
-            for service, was_active in original_service_states.items():
-                if was_active:
+            for service, should_be_active in service_states_to_restore.items():
+                if should_be_active:
                     try:
-                        logging.info(f"Service {service} was originally active. Ensuring it is started post-restore.")
+                        logging.info(f"Service {service} should be active according to backup. Starting it.")
                         start_result = subprocess.run(["systemctl", "start", service], check=False, capture_output=True, text=True)
                         if start_result.returncode == 0:
                             logging.info(f"Service {service} started successfully.")
                         else:
-                            logging.warning(f"Failed to restart service {service} post-restore. RC: {start_result.returncode}. Error: {start_result.stderr.strip()}")
+                            logging.warning(f"Failed to start service {service} post-restore. RC: {start_result.returncode}. Error: {start_result.stderr.strip()}")
                     except Exception as e_restart:
-                        logging.error(f"Unexpected error restarting service {service} post-restore: {e_restart}")
+                        logging.error(f"Unexpected error starting service {service} post-restore: {e_restart}")
+                else:
+                    logging.info(f"Service {service} should remain inactive according to backup. Leaving it stopped.")
                 current_progress_finally += progress_per_service_start
                 _call_progress(int(min(current_progress_finally,100)), f"Processed service restoration for {service}.")
-            logging.info("Service restoration phase in 'finally' block complete.")
+            
+            if backup_service_states:
+                logging.info("Service restoration based on backup service states complete.")
+            else:
+                logging.info("Service restoration based on current service states complete (no backup states found).")
+            
+            # Call completion callback and final progress only after all work is done
+            if complete_callback:
+                complete_callback(True, "success")
+            _call_progress(100, "System settings restore completed successfully.")
         else:
             # This case is hit if an early return occurred (e.g., no backup file found)
             # or if an error occurred before original_service_states was populated.

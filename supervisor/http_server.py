@@ -120,8 +120,8 @@ class SupervisorHTTPServer:
             def log_message(self, format, *args):
                 self._logger.info(f"{self.client_address[0]} - {format % args}")
             
-            def _set_headers(self, content_type="application/json"):
-                self.send_response(200)
+            def _set_headers(self, content_type="application/json", status_code=200):
+                self.send_response(status_code)
                 self.send_header('Content-type', content_type)
                 self.send_header('Access-Control-Allow-Origin', '*')  # Enable CORS
                 self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
@@ -282,7 +282,7 @@ class SupervisorHTTPServer:
                             "Version": getattr(system_info, "version", "Unknown"),
                             "Build Number": getattr(system_info, "build_number", "Unknown"),
                             "Zigbee Support": getattr(system_info, "support_zigbee", False),
-                            "Thread Support": getattr(system_info, "support_thread", False),
+                            "Thread Support": getattr(system_info, "support_thread", True),
                             "Memory": f"{getattr(system_info, 'memory_size', '')} MB",
                             "Storage": f"{storage.get('available', '')}/{storage.get('total', '')}"
                         }
@@ -324,10 +324,11 @@ class SupervisorHTTPServer:
                 files = []
                 try:
                     if os.path.isdir(backup_dir):
-                        all_files = [f for f in os.listdir(backup_dir) if os.path.isfile(os.path.join(backup_dir, f))]
+                        all_files = [f for f in os.listdir(backup_dir) if os.path.isfile(os.path.join(backup_dir, f)) and f.startswith("setting_") and f.endswith(".tar.gz")]
                         # Sort by modification time, get the latest 5
                         all_files.sort(key=lambda f: os.path.getmtime(os.path.join(backup_dir, f)), reverse=True)
-                        files = all_files[:5]
+                        # Remove "setting_" prefix and ".tar.gz" suffix, only return timestamp
+                        files = [f.replace("setting_", "").replace(".tar.gz", "") for f in all_files[:5]]
                     result = {"backups": files}
                 except Exception as e:
                     result = {"error": str(e)}
@@ -765,8 +766,9 @@ class SupervisorHTTPServer:
                                 self.wfile.write(json.dumps({"success": False, "error": "Failed to start backup process."}).encode())
 
                         elif action == "restore":
-                            filename = param_dict.get("file")
-                            if not filename:
+                            timestamp = param_dict.get("file")
+                            if not timestamp:
+                                # No specific file, restore from latest backup
                                 if self._supervisor.start_setting_restore():
                                     self._set_headers()
                                     self.wfile.write(json.dumps({"success": True, "msg": "Restore process started successfully."}).encode())
@@ -775,18 +777,19 @@ class SupervisorHTTPServer:
                                     self.wfile.write(json.dumps({"success": False, "error": "Failed to start restore process."}).encode())
                                 return
 
-                            backup_file_path = os.path.join(backup_dir, filename)
+                            # Convert timestamp to full filename
+                            full_filename = f"setting_{timestamp}.tar.gz"
+                            backup_file_path = os.path.join(backup_dir, full_filename)
                             if not os.path.isfile(backup_file_path):
                                 self._set_headers(status_code=404)
-                                self.wfile.write(json.dumps({"success": False, "error": "Backup file not found."}).encode())
+                                self.wfile.write(json.dumps({"success": False, "error": f"Backup file {full_filename} not found."}).encode())
                                 return
                             
-                            self._logger.info(f"[Setting] Restore from {filename} requested")
-                            # NOTE: Assuming start_setting_restore knows which file to use,
-                            # as its signature in supervisor.py takes no arguments.
-                            if self._supervisor.start_setting_restore():
+                            self._logger.info(f"[Setting] Restore from {full_filename} (timestamp: {timestamp}) requested")
+                            # Pass the timestamp to the restore function
+                            if self._supervisor.start_setting_restore(timestamp):
                                 self._set_headers()
-                                self.wfile.write(json.dumps({"success": True, "msg": f"Restore from {filename} started successfully."}).encode())
+                                self.wfile.write(json.dumps({"success": True, "msg": f"Restore from {full_filename} started successfully."}).encode())
                             else:
                                 self._set_headers(status_code=500)
                                 self.wfile.write(json.dumps({"success": False, "error": "Failed to start restore process."}).encode())

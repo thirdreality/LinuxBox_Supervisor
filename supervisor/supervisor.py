@@ -137,15 +137,13 @@ class Supervisor:
         logger.info(f"thread Command: param={cmd}")
         
         if cmd.lower() == "enabled":
-            # Used for state synchronization between different modules
-            logger.info("Set Enabled Thread state")
-            self.system_info.support_thread = True
+            # Thread support is always enabled
+            logger.info("Thread support is always enabled")
             return "Thread support enabled"
         elif cmd.lower() == "disabled":
-            # Used for state synchronization between different modules
-            logger.info("Set Disabled Thread state")
-            self.system_info.support_thread = False
-            return "Thread support disabled"
+            # Thread support is always enabled, cannot be disabled
+            logger.info("Thread support is always enabled, cannot be disabled")
+            return "Thread support is always enabled"
         elif cmd.lower() == "enable":
             try:
                 self.task_manager.start_thread_mode_enable()
@@ -249,15 +247,18 @@ class Supervisor:
             logger.error(f"Failed to start setting backup process: {e}")
             return False
 
-    def start_setting_restore(self) -> bool:
+    def start_setting_restore(self, backup_file=None) -> bool:
         """
         Starts the setting restore process.
+
+        Args:
+            backup_file: Optional backup file timestamp to restore from
 
         Returns:
             bool: True if the restore process started successfully, False otherwise.
         """
         try:
-            self.task_manager.start_setting_restore()
+            self.task_manager.start_setting_restore(backup_file)
             logger.info("Setting restore process started successfully.")
             return True
         except Exception as e:

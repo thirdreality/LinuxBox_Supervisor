@@ -68,7 +68,7 @@ class SystemInfo:
         self.version = release_info.get("VERSION", "v0.0.1")
         self.name = "3RHUB-XXXX"
         self.support_zigbee=True
-        self.support_thread=False        
+        self.support_thread=True  # Fixed to always support thread        
         self.mode = "homeassistant-core"
         self.memory_size = ""  # 设备内存大小，单位为MB
         self.storage_space = ""  # 存储空间大小，单位为GB
@@ -260,13 +260,15 @@ class SystemInfoUpdater:
             # Get device memory size
             sys_info.memory_size = get_memory_size()
 
-            # Check otbr-agent service status
-            from supervisor.utils import util
-            if util.is_service_running("otbr-agent.service"):
-                sys_info.support_thread = True
-            else:
-                sys_info.support_thread = False
-            self.logger.info(f"Thread support (otbr-agent.service running): {sys_info.support_thread}")
+            # Thread support is always enabled
+            sys_info.support_thread = True
+            # # Check otbr-agent service status
+            # from supervisor.utils import util
+            # if util.is_service_running("otbr-agent.service"):
+            #     sys_info.support_thread = True
+            # else:
+            #     sys_info.support_thread = False
+            self.logger.info(f"Thread support: {sys_info.support_thread} (fixed to always true)")
             self.logger.info(f"Device memory size: {sys_info.memory_size} MB")
             
             # Get storage space information
