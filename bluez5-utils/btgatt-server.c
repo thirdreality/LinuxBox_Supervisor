@@ -1875,7 +1875,10 @@ static void set_adv_data(void)
     str2uuid(LINUXBOX_SERVICE_UUID_STR, (uint8_t *)&uuid_value, 16);
     param.data[param.len++] = 17;  // Length: 1 byte type + 16 bytes UUID
     param.data[param.len++] = 0x07;  // Complete List of 128-bit Service UUIDs
-    memcpy(&param.data[param.len], &uuid_value, 16);
+    // 修正：BLE 广播包要求 UUID 用 little-endian 顺序
+    for (int i = 0; i < 16; i++) {
+        param.data[param.len + i] = ((uint8_t *)&uuid_value)[15 - i];
+    }
     param.len += 16;
 
     // Add TX power
@@ -2087,7 +2090,7 @@ int main(int argc, char *argv[])
 	setvbuf(stderr, NULL, _IONBF, 0);
 
 	printf("[MAIN] === GATT WiFi Configuration Server Starting ===\n");
-	printf("[MAIN] Version: v1.0.1\n");
+	printf("[MAIN] Version: v1.0.2\n");
 	printf("[MAIN] Service UUID: %s\n", LINUXBOX_SERVICE_UUID_STR);
 	printf("[MAIN] Characteristic UUID: %s\n", WIFI_CONFIG_CHAR_UUID_STR);
 	printf("[MAIN] ======================================== ===\n");
