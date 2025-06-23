@@ -159,7 +159,7 @@ static volatile bool should_exit = false;
 static unsigned int no_client_timeout_id = 0;
 
 // Timeout settings (5 minutes = 300 seconds)
-#define NO_CLIENT_TIMEOUT_SECONDS 300
+static int NO_CLIENT_TIMEOUT_SECONDS = 300;
 
 #define TEST_MAC_ADDRESS 0  // Set to 1 to enable test mode, 0 to disable
 #define TEST_ATT_LOG 0  // Set to 1 to enable att log, 0 to disable
@@ -294,7 +294,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
     if (!root) {
         printf("[DEBUG] Failed to parse JSON\n");
         snprintf(response, response_len, 
-                "{\"error\":\"Invalid format\"}");
+                "{\"error\":\"format\"}");
         return -1;
     }
 
@@ -303,12 +303,12 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
         printf("[DEBUG] Missing or invalid SSID\n");
         cJSON_Delete(root);
         snprintf(response, response_len, 
-                "{\"error\":\"Invalid SSID\"}");
+                "{\"error\":\"ssid\"}");
         return -1;
     }
 
     char *ssid = ssid_item->valuestring;
-    cJSON *password_item = cJSON_GetObjectItem(root, "password");
+    cJSON *password_item = cJSON_GetObjectItem(root, "psk");
     char *password = NULL;
     if (password_item && cJSON_IsString(password_item)) {
         password = password_item->valuestring;
@@ -332,7 +332,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
             send_socket_command(LED_SYS_WIFI_SUCCESS);
             
             snprintf(response, response_len, 
-                    "{\"connected\":true,\"ip_address\":\"%s\"}", 
+                    "{\"status\":true,\"ip\":\"%s\"}", 
                     current_ip);
             
             free(current_ssid);
@@ -364,7 +364,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
     if (!cmd_fp) {
         printf("[WIFI] Failed to execute nmcli command\n");
         snprintf(response, response_len, 
-                "{\"error\":\"Command failed\"}");
+                "{\"error\":\"cmd\"}");
         cJSON_Delete(root);
         return -1;
     }
@@ -425,7 +425,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
         if (!cmd_fp) {
             printf("[WIFI] Failed to execute retry nmcli command\n");
             snprintf(response, response_len, 
-                    "{\"error\":\"Command failed\"}");
+                    "{\"error\":\"cmd\"}");
             cJSON_Delete(root);
             return -1;
         }
@@ -455,7 +455,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
     if (!cmd_success || cmd_exit_status != 0) {
         printf("[WIFI] nmcli command failed, not checking IP address\n");
         snprintf(response, response_len, 
-                "{\"error\":\"Connection failed\"}");
+                "{\"error\":\"conn\"}");
         cJSON_Delete(root);
         return -1;
     }
@@ -469,7 +469,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
         if (!client_connected) {
             printf("[WIFI] BLE client disconnected during WiFi config, aborting\n");
             snprintf(response, response_len, 
-                    "{\"error\":\"BLE disconnected\"}");
+                    "{\"error\":\"ble\"}");
             cJSON_Delete(root);
             return -1;
         }
@@ -486,7 +486,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
             cleanup_old_connections(ssid);
             
             snprintf(response, response_len, 
-                    "{\"connected\":true,\"ip_address\":\"%s\"}", 
+                    "{\"status\":true,\"ip\":\"%s\"}", 
                     ip);
             
             free(ip);
@@ -523,7 +523,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
     }
     
     snprintf(response, response_len, 
-            "{\"error\":\"Timeout\"}");
+            "{\"error\":\"timeout\"}");
     
     cJSON_Delete(root);
     return -1;
@@ -873,20 +873,20 @@ static void wifi_config_write_cb(struct gatt_db_attribute *attrib,
     // Process WiFi configuration (for both Write Request and Execute Write)
     if (len > 512) {
         printf("[DEBUG] Write value too long: %zu > 512\n", len);
-        snprintf(response, sizeof(response), "{\"connected\":false,\"ip_address\":\"\"}");
+        snprintf(response, sizeof(response), "{\"status\":false,\"ip\":\"\"}");
         goto send_response;
     }
 
     if (len == 0) {
         printf("[DEBUG] No data received\n");
-        snprintf(response, sizeof(response), "{\"connected\":false,\"ip_address\":\"\"}");
+        snprintf(response, sizeof(response), "{\"status\":false,\"ip\":\"\"}");
         goto send_response;
     }
 
     json_str = malloc(len + 1);
     if (!json_str) {
         printf("[DEBUG] Failed to allocate memory for JSON string\n");
-        snprintf(response, sizeof(response), "{\"connected\":false,\"ip_address\":\"\"}");
+        snprintf(response, sizeof(response), "{\"status\":false,\"ip\":\"\"}");
         goto send_response;
     }
 
@@ -898,7 +898,7 @@ static void wifi_config_write_cb(struct gatt_db_attribute *attrib,
     // IMMEDIATE RESPONSE STRATEGY: Send "processing" notification first
     if (!client_connected) {
         printf("[WIFI] ERROR: BLE client disconnected before WiFi processing!\n");
-        snprintf(response, sizeof(response), "{\"ok\":0,\"err\":\"ble lost\"}");
+        snprintf(response, sizeof(response), "{\"error\":\"ble\"}");
         free(json_str);
         goto send_response;
     }
@@ -906,7 +906,7 @@ static void wifi_config_write_cb(struct gatt_db_attribute *attrib,
     // 检查连接状态后开始WiFi处理
     if (!client_connected) {
         printf("[WIFI] ERROR: BLE client disconnected after processing notification!\n");
-        snprintf(response, sizeof(response), "{\"ok\":0,\"err\":\"ble lost\"}");
+        snprintf(response, sizeof(response), "{\"error\":\"ble\"}");
         free(json_str);
         goto send_response;
     }
@@ -1337,7 +1337,9 @@ static struct server *server_create(int fd)
         bt_att_unref(server->att);
         free(server);
         return NULL;
-	}
+    }
+    // Debug: print actual GATT server MTU
+    printf("[DEBUG] Actual GATT server MTU: %u\n", bt_gatt_server_get_mtu(server->gatt));
 
 	if (verbose) {
         bt_gatt_server_set_debug(server->gatt, gatt_debug_cb, "server: ", NULL);
@@ -2089,6 +2091,20 @@ int main(int argc, char *argv[])
 	setvbuf(stdout, NULL, _IONBF, 0);
 	setvbuf(stderr, NULL, _IONBF, 0);
 
+	// 解析命令行参数 --timeout <秒数>
+	for (int i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "--timeout") == 0 && i + 1 < argc) {
+			int t = atoi(argv[i + 1]);
+			if (t > 0) {
+				NO_CLIENT_TIMEOUT_SECONDS = t;
+				printf("[MAIN] Set no-client timeout to %d seconds via --timeout\n", NO_CLIENT_TIMEOUT_SECONDS);
+			} else {
+				printf("[MAIN] Invalid --timeout value: %s, using default %d\n", argv[i + 1], NO_CLIENT_TIMEOUT_SECONDS);
+			}
+			i++; // skip value
+		}
+	}
+
 	printf("[MAIN] === GATT WiFi Configuration Server Starting ===\n");
 	printf("[MAIN] Version: v1.0.2\n");
 	printf("[MAIN] Service UUID: %s\n", LINUXBOX_SERVICE_UUID_STR);
@@ -2251,5 +2267,7 @@ int main(int argc, char *argv[])
     printf("[DEBUG] SETTING_WIFI_NOTIFY[3]...\n");
 	send_socket_command(SETTING_WIFI_NOTIFY);
 	usleep(800000);
+
 	return EXIT_SUCCESS;
 }
+
