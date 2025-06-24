@@ -113,7 +113,8 @@ static struct server *server;
 
 #define ATT_CID 4
 
-
+// Timeout settings (5 minutes = 300 seconds)
+#define NO_CLIENT_TIMEOUT_SECONDS 300
 
 #define COLOR_OFF	"\x1B[0m"
 #define COLOR_RED	"\x1B[0;91m"
@@ -126,6 +127,7 @@ static struct server *server;
 
 
 static bool verbose = false;
+static int user_timeout_seconds = NO_CLIENT_TIMEOUT_SECONDS; // User-specified timeout
 
 struct server {
 	int fd;
@@ -158,8 +160,7 @@ static int wifi_success_count = 0;
 static volatile bool should_exit = false;
 static unsigned int no_client_timeout_id = 0;
 
-// Timeout settings (5 minutes = 300 seconds)
-static int NO_CLIENT_TIMEOUT_SECONDS = 300;
+
 
 #define TEST_MAC_ADDRESS 0  // Set to 1 to enable test mode, 0 to disable
 #define TEST_ATT_LOG 0  // Set to 1 to enable att log, 0 to disable
@@ -294,7 +295,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
     if (!root) {
         printf("[DEBUG] Failed to parse JSON\n");
         snprintf(response, response_len, 
-                "{\"error\":\"format\"}");
+                "{\"error\":\"Invalid format\"}");
         return -1;
     }
 
@@ -303,12 +304,12 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
         printf("[DEBUG] Missing or invalid SSID\n");
         cJSON_Delete(root);
         snprintf(response, response_len, 
-                "{\"error\":\"ssid\"}");
+                "{\"error\":\"Invalid SSID\"}");
         return -1;
     }
 
     char *ssid = ssid_item->valuestring;
-    cJSON *password_item = cJSON_GetObjectItem(root, "psk");
+    cJSON *password_item = cJSON_GetObjectItem(root, "pw");
     char *password = NULL;
     if (password_item && cJSON_IsString(password_item)) {
         password = password_item->valuestring;
@@ -332,7 +333,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
             send_socket_command(LED_SYS_WIFI_SUCCESS);
             
             snprintf(response, response_len, 
-                    "{\"status\":true,\"ip\":\"%s\"}", 
+                    "{\"ip\":\"%s\"}", 
                     current_ip);
             
             free(current_ssid);
@@ -364,7 +365,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
     if (!cmd_fp) {
         printf("[WIFI] Failed to execute nmcli command\n");
         snprintf(response, response_len, 
-                "{\"error\":\"cmd\"}");
+                "{\"error\":\"Command failed\"}");
         cJSON_Delete(root);
         return -1;
     }
@@ -425,7 +426,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
         if (!cmd_fp) {
             printf("[WIFI] Failed to execute retry nmcli command\n");
             snprintf(response, response_len, 
-                    "{\"error\":\"cmd\"}");
+                    "{\"error\":\"Command failed\"}");
             cJSON_Delete(root);
             return -1;
         }
@@ -455,7 +456,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
     if (!cmd_success || cmd_exit_status != 0) {
         printf("[WIFI] nmcli command failed, not checking IP address\n");
         snprintf(response, response_len, 
-                "{\"error\":\"conn\"}");
+                "{\"error\":\"Connection failed\"}");
         cJSON_Delete(root);
         return -1;
     }
@@ -469,7 +470,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
         if (!client_connected) {
             printf("[WIFI] BLE client disconnected during WiFi config, aborting\n");
             snprintf(response, response_len, 
-                    "{\"error\":\"ble\"}");
+                    "{\"error\":\"BLE disconnected\"}");
             cJSON_Delete(root);
             return -1;
         }
@@ -486,7 +487,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
             cleanup_old_connections(ssid);
             
             snprintf(response, response_len, 
-                    "{\"status\":true,\"ip\":\"%s\"}", 
+                    "{\"ip\":\"%s\"}", 
                     ip);
             
             free(ip);
@@ -523,7 +524,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
     }
     
     snprintf(response, response_len, 
-            "{\"error\":\"timeout\"}");
+            "{\"ip\":\"\"}");
     
     cJSON_Delete(root);
     return -1;
@@ -749,38 +750,77 @@ static void send_notification(struct server *server, const char *message)
 
     size_t message_len = strlen(message);
     
+    // Add '\n' terminator to the message for protocol compliance
+    size_t total_len = message_len + 1; // +1 for '\n' terminator
+    
     // Get current MTU and calculate max payload for notifications
     // Notification format: opcode (1 byte) + handle (2 bytes) + data
     uint16_t current_mtu = bt_gatt_server_get_mtu(server->gatt);
     size_t max_payload = current_mtu - 3;  // MTU - (opcode + handle)
     
-    printf("[DEBUG] Sending notification: %s (length: %zu)\n", message, message_len);
+    printf("[DEBUG] Sending notification: %s (length: %zu, total with newline: %zu)\n", 
+           message, message_len, total_len);
     printf("[DEBUG] Current MTU: %u, Max payload: %zu\n", current_mtu, max_payload);
     
-    if (message_len <= max_payload) {
-        // Single packet
+    if (total_len <= max_payload) {
+        // Single packet - create buffer with terminator
+        uint8_t *buffer = malloc(total_len);
+        if (!buffer) {
+            printf("[DEBUG] Failed to allocate buffer for notification\n");
+            return;
+        }
+        
+        memcpy(buffer, message, message_len);
+        buffer[message_len] = '\n'; // Add newline terminator
+        
         bool result = bt_gatt_server_send_notification(server->gatt, server->chara_handle,
-                (uint8_t *)message, message_len, false);
+                buffer, total_len, false);
         printf("[DEBUG] Single packet notification result: %s\n", result ? "SUCCESS" : "FAILED");
+        
+        free(buffer);
         return;
     }
     
     // Multi-packet: need fragmentation for MTU=23
-    printf("[DEBUG] Message too long (%zu bytes), fragmenting into %zu-byte chunks\n", 
-           message_len, max_payload);
+    printf("[DEBUG] Message too long (%zu bytes with newline), fragmenting into %zu-byte chunks\n", 
+           total_len, max_payload);
     
     size_t offset = 0;
     int fragment_num = 0;
     
-    while (offset < message_len) {
-        size_t remaining = message_len - offset;
+    while (offset < total_len) {
+        size_t remaining = total_len - offset;
         size_t chunk_size = (remaining > max_payload) ? max_payload : remaining;
         
         printf("[DEBUG] Sending fragment %d: offset=%zu, size=%zu\n", 
                fragment_num, offset, chunk_size);
         
+        // Create buffer for this fragment
+        uint8_t *buffer = malloc(chunk_size);
+        if (!buffer) {
+            printf("[DEBUG] Failed to allocate buffer for fragment %d\n", fragment_num);
+            break;
+        }
+        
+        // Copy data for this fragment
+        if (offset < message_len) {
+            // Copy message data
+            size_t data_to_copy = (chunk_size <= (message_len - offset)) ? chunk_size : (message_len - offset);
+            memcpy(buffer, message + offset, data_to_copy);
+            
+            // If this fragment includes the end of message, add terminator
+            if (offset + data_to_copy >= message_len) {
+                buffer[data_to_copy] = '\n';
+            }
+        } else {
+            // This fragment only contains the terminator
+            buffer[0] = '\n';
+        }
+        
         bool result = bt_gatt_server_send_notification(server->gatt, server->chara_handle,
-                (uint8_t *)(message + offset), chunk_size, false);
+                buffer, chunk_size, false);
+        
+        free(buffer);
         
         if (!result) {
             printf("[DEBUG] Fragment %d failed to send\n", fragment_num);
@@ -793,7 +833,7 @@ static void send_notification(struct server *server, const char *message)
         fragment_num++;
         
         // Add delay between fragments to prevent overwhelming the client
-        if (offset < message_len) {
+        if (offset < total_len) {
             usleep(50000); // 50ms delay for MTU=23 to ensure stable delivery
         }
     }
@@ -873,32 +913,45 @@ static void wifi_config_write_cb(struct gatt_db_attribute *attrib,
     // Process WiFi configuration (for both Write Request and Execute Write)
     if (len > 512) {
         printf("[DEBUG] Write value too long: %zu > 512\n", len);
-        snprintf(response, sizeof(response), "{\"status\":false,\"ip\":\"\"}");
+        snprintf(response, sizeof(response), "{\"ip\":\"\"}");
         goto send_response;
     }
 
     if (len == 0) {
         printf("[DEBUG] No data received\n");
-        snprintf(response, sizeof(response), "{\"status\":false,\"ip\":\"\"}");
+        snprintf(response, sizeof(response), "{\"ip\":\"\"}");
         goto send_response;
     }
 
     json_str = malloc(len + 1);
     if (!json_str) {
         printf("[DEBUG] Failed to allocate memory for JSON string\n");
-        snprintf(response, sizeof(response), "{\"status\":false,\"ip\":\"\"}");
+        snprintf(response, sizeof(response), "{\"ip\":\"\"}");
         goto send_response;
     }
 
     memcpy(json_str, value, len);
     json_str[len] = '\0';
 
+    // Check for '\n' terminator in the received data (client sends '\n' as terminator)
+    size_t actual_len = len;
+    for (size_t i = 0; i < len; i++) {
+        if (json_str[i] == '\n') {
+            actual_len = i;
+            printf("[DEBUG] Found '\\n' terminator at position %zu, actual data length: %zu\n", i, actual_len);
+            break;
+        }
+    }
+    
+    // Null-terminate the actual data (remove '\n' terminator)
+    json_str[actual_len] = '\0';
+
     printf("[DEBUG] Processing WiFi config JSON: %s\n", json_str);
 
     // IMMEDIATE RESPONSE STRATEGY: Send "processing" notification first
     if (!client_connected) {
         printf("[WIFI] ERROR: BLE client disconnected before WiFi processing!\n");
-        snprintf(response, sizeof(response), "{\"error\":\"ble\"}");
+        snprintf(response, sizeof(response), "{\"ok\":0,\"err\":\"ble lost\"}");
         free(json_str);
         goto send_response;
     }
@@ -906,7 +959,7 @@ static void wifi_config_write_cb(struct gatt_db_attribute *attrib,
     // 检查连接状态后开始WiFi处理
     if (!client_connected) {
         printf("[WIFI] ERROR: BLE client disconnected after processing notification!\n");
-        snprintf(response, sizeof(response), "{\"error\":\"ble\"}");
+        snprintf(response, sizeof(response), "{\"ok\":0,\"err\":\"ble lost\"}");
         free(json_str);
         goto send_response;
     }
@@ -1337,9 +1390,7 @@ static struct server *server_create(int fd)
         bt_att_unref(server->att);
         free(server);
         return NULL;
-    }
-    // Debug: print actual GATT server MTU
-    printf("[DEBUG] Actual GATT server MTU: %u\n", bt_gatt_server_get_mtu(server->gatt));
+	}
 
 	if (verbose) {
         bt_gatt_server_set_debug(server->gatt, gatt_debug_cb, "server: ", NULL);
@@ -1428,7 +1479,7 @@ static int l2cap_le_att_listen_and_accept(bdaddr_t *src, int sec,
 	time_t start_time = time(NULL);
 	
 	printf("[SELECT] Entering select loop, should_exit = %d\n", should_exit);
-	printf("[SELECT] Starting 300-second timeout for no client connection\n");
+	printf("[SELECT] Starting %d-second timeout for no client connection\n", user_timeout_seconds);
 	
 	// Setup signal mask for pselect
 	sigset_t empty_mask, blocked_mask;
@@ -1458,8 +1509,8 @@ static int l2cap_le_att_listen_and_accept(bdaddr_t *src, int sec,
 		
 		// Check if we've exceeded the no-client timeout
 		time_t current_time = time(NULL);
-		if (current_time - start_time >= NO_CLIENT_TIMEOUT_SECONDS) {
-			printf("[SELECT] No client connected for %d seconds, exiting...\n", NO_CLIENT_TIMEOUT_SECONDS);
+		if (current_time - start_time >= user_timeout_seconds) {
+			printf("[SELECT] No client connected for %d seconds, exiting...\n", user_timeout_seconds);
 			send_socket_command(LED_SYS_EVENT_OFF);
 			should_exit = true;
 			goto fail;
@@ -1477,7 +1528,7 @@ static int l2cap_le_att_listen_and_accept(bdaddr_t *src, int sec,
 			// Timeout, continue to check should_exit
 			if (select_count % 10 == 0) { // Print every 10 seconds
 				printf("[SELECT] Timeout (count: %d), should_exit = %d, elapsed = %ld/%d seconds\n", 
-				       select_count, should_exit, current_time - start_time, NO_CLIENT_TIMEOUT_SECONDS);
+				       select_count, should_exit, current_time - start_time, user_timeout_seconds);
 				printf("[SELECT] Press Ctrl+C to exit immediately\n");
 			}
 			// Explicitly check should_exit after each timeout
@@ -2018,7 +2069,7 @@ static void stop_advertising(void)
 static void no_client_timeout_cb(int timeout_id, void *user_data)
 {
     printf("[TIMEOUT] No client connected for %d seconds, exiting...\n", 
-           NO_CLIENT_TIMEOUT_SECONDS);
+           user_timeout_seconds);
     
     // Send LED off command
     send_socket_command(LED_SYS_EVENT_OFF);
@@ -2037,10 +2088,10 @@ static void reset_no_client_timeout(void)
     
     // Only start timeout when no client connected
     if (!client_connected) {
-        no_client_timeout_id = mainloop_add_timeout(NO_CLIENT_TIMEOUT_SECONDS * 1000,
+        no_client_timeout_id = mainloop_add_timeout(user_timeout_seconds * 1000,
                                                    no_client_timeout_cb, NULL, NULL);
         printf("[TIMEOUT] Started %d second timeout for no client connection\n", 
-               NO_CLIENT_TIMEOUT_SECONDS);
+               user_timeout_seconds);
     }
 }
 
@@ -2083,6 +2134,7 @@ int main(int argc, char *argv[])
 	int fd;
 	int sec = BT_SECURITY_LOW;
 	uint8_t src_type = BDADDR_LE_PUBLIC;
+	int opt;
 
 	// Register cleanup function for all exit paths
 	atexit(cleanup_on_exit);
@@ -2091,17 +2143,24 @@ int main(int argc, char *argv[])
 	setvbuf(stdout, NULL, _IONBF, 0);
 	setvbuf(stderr, NULL, _IONBF, 0);
 
-	// 解析命令行参数 --timeout <秒数>
-	for (int i = 1; i < argc; i++) {
-		if (strcmp(argv[i], "--timeout") == 0 && i + 1 < argc) {
-			int t = atoi(argv[i + 1]);
-			if (t > 0) {
-				NO_CLIENT_TIMEOUT_SECONDS = t;
-				printf("[MAIN] Set no-client timeout to %d seconds via --timeout\n", NO_CLIENT_TIMEOUT_SECONDS);
-			} else {
-				printf("[MAIN] Invalid --timeout value: %s, using default %d\n", argv[i + 1], NO_CLIENT_TIMEOUT_SECONDS);
+	// Parse command line arguments
+	while ((opt = getopt(argc, argv, "t:v")) != -1) {
+		switch (opt) {
+		case 't':
+			user_timeout_seconds = atoi(optarg);
+			if (user_timeout_seconds <= 0) {
+				fprintf(stderr, "Invalid timeout value: %s\n", optarg);
+				return EXIT_FAILURE;
 			}
-			i++; // skip value
+			break;
+		case 'v':
+			verbose = true;
+			break;
+		default:
+			fprintf(stderr, "Usage: %s [-t timeout_seconds] [-v]\n", argv[0]);
+			fprintf(stderr, "  -t timeout_seconds: Set timeout for no client connection (default: 300)\n");
+			fprintf(stderr, "  -v: Enable verbose mode\n");
+			return EXIT_FAILURE;
 		}
 	}
 
@@ -2109,6 +2168,7 @@ int main(int argc, char *argv[])
 	printf("[MAIN] Version: v1.0.2\n");
 	printf("[MAIN] Service UUID: %s\n", LINUXBOX_SERVICE_UUID_STR);
 	printf("[MAIN] Characteristic UUID: %s\n", WIFI_CONFIG_CHAR_UUID_STR);
+	printf("[MAIN] Timeout: %d seconds\n", user_timeout_seconds);
 	printf("[MAIN] ======================================== ===\n");
 
 	// Set signal handlers using sigaction to ensure proper interruption
@@ -2212,7 +2272,7 @@ int main(int argc, char *argv[])
 		printf("[ADV] === GATT Server Ready - Waiting for Android App ===\n");
 		printf("[ADV] Device name: %s\n", get_device_name());
 		printf("[ADV] Ready to receive WiFi configuration from Android app\n");
-		printf("[ADV] No client timeout: %d seconds\n", NO_CLIENT_TIMEOUT_SECONDS);
+		printf("[ADV] No client timeout: %d seconds\n", user_timeout_seconds);
 		printf("[ADV] ============================================= ===\n");
 
 		mainloop_run_with_signal(signal_cb, NULL);
@@ -2267,7 +2327,5 @@ int main(int argc, char *argv[])
     printf("[DEBUG] SETTING_WIFI_NOTIFY[3]...\n");
 	send_socket_command(SETTING_WIFI_NOTIFY);
 	usleep(800000);
-
 	return EXIT_SUCCESS;
 }
-

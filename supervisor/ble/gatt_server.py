@@ -40,6 +40,7 @@ from .advertisement import Advertisement
 from .service import Application, Service, Characteristic, Descriptor
 from ..utils.wifi_manager import WifiManager
 from ..utils.wifi_utils import get_wlan0_ip
+from ..utils import util
 
 #define HUBV3_CONFIG_SERVICE_UUID "6e400000-0000-4e98-8024-bc5b71e0893e"
 
@@ -229,7 +230,7 @@ class LinuxBoxManagerService(Service):
 class WIFIConfigCharacteristic(Characteristic):
     _CHARACTERISTIC_UUID = "6e400001-0000-4e98-8024-bc5b71e0893e"
     # Parameters optimized for MTU=23
-    _MAX_CHUNK_SIZE = 18  # 23-3(protocol overhead)-2(safety margin) 
+    _MAX_CHUNK_SIZE = 20  # 23-3(protocol overhead) = 20 bytes
     _CHUNK_DELAY = 0.05   # 50ms delay is sufficient
     _MAX_RETRIES = 3      # Reduce retry count to avoid excessive retries
 
@@ -248,17 +249,35 @@ class WIFIConfigCharacteristic(Characteristic):
         # Record using notify mode (was indicate)
         self._use_indicate = False # Set to False for notify
         self.logger.info("Using notify mode with MTU=23 optimization")
+        
+        # Add buffer for receiving commands
+        self._command_buffer = ""
 
     def WriteValue(self, value, options):
         #self.logger.info(f"Write Value: {value}")
 
-        command_str = "".join(chr(byte) for byte in value)
-        process_thread = threading.Thread(target=self._process_command_and_notify, args=(command_str,))
-        process_thread.daemon = True  # Make thread daemon so it doesn't block program exit
-        process_thread.start()    
+        # Convert bytes to string and add to buffer
+        chunk_str = "".join(chr(byte) for byte in value)
+        self._command_buffer += chunk_str
+        
+        # Check if command is complete (ends with \n)
+        if '\n' in self._command_buffer:
+            # Extract complete command (remove \n)
+            command_str = self._command_buffer.split('\n')[0]
+            self._command_buffer = self._command_buffer.split('\n', 1)[1]  # Keep remaining data
+            
+            # Process the complete command
+            process_thread = threading.Thread(target=self._process_command_and_notify, args=(command_str,))
+            process_thread.daemon = True  # Make thread daemon so it doesn't block program exit
+            process_thread.start()    
 
     def _process_command_and_notify(self, command):
         self.logger.info(f"_process_command_and_notify: {command}")
+
+        # Check BLE connection before processing
+        if not self._is_ble_connected():
+            self.logger.warning("BLE connection lost before processing command")
+            return
 
         # Default values
         ret = False  # Default result
@@ -274,37 +293,71 @@ class WIFIConfigCharacteristic(Characteristic):
             config = json.loads(command)
             if "ssid" in config:
                 ssid = config["ssid"]
-                password = config.get("password", "")
+                password = config.get("pw", "")  # Changed from "password" to "pw"
                 restore = config.get("restore", False)
+                
+                # Validate SSID
+                if not ssid or len(ssid.strip()) == 0:
+                    result = json.dumps({"err": "Invalid SSID"})
+                    self.send_response_notification(result)
+                    return
+                
+                # Check BLE connection before WiFi configuration
+                if not self._is_ble_connected():
+                    self.logger.warning("BLE connection lost during WiFi configuration")
+                    return
                 
                 # Get wifi_manager from supervisor if available
                 if hasattr(self.service, 'supervisor') and self.service.supervisor and hasattr(self.service.supervisor, 'wifi_manager'):
                     wifi_manager = self.service.supervisor.wifi_manager
                     ret = wifi_manager.configure(ssid, password)
                     self.logger.info(f"WiFi configuration result: {ret}")
+                    
+                    # Check BLE connection after WiFi configuration
+                    if not self._is_ble_connected():
+                        self.logger.warning("BLE connection lost after WiFi configuration")
+                        return
+                    
                     if ret == 0:
                         time.sleep(3)  # Wait for WiFi connection
                         ip_address = get_wlan0_ip() or ""
                         self.logger.info(f"WiFi IP address: {ip_address}")
                         self.service.supervisor.update_wifi_info(ip_address, ssid)  
                         #self.service.supervisor.check_ha_resume()
+                    else:
+                        # Connection failed
+                        result = json.dumps({"err": "Connect failed"})
+                        self.send_response_notification(result)
+                        return
                 else:
                     self.logger.info("WiFi manager not initialized")
+                    result = json.dumps({"err": "Command failed"})
+                    self.send_response_notification(result)
+                    return
 
-            # Format the response for WiFi configuration
-            result = json.dumps({"connected": ret==0, "ip_address": ip_address})
+            # Format the response for WiFi configuration - new format
+            result = json.dumps({"ip": ip_address})
         except json.JSONDecodeError:
             self.logger.error(f"Invalid command format: {command}")
-            result = json.dumps({"error": "Invalid command format"})
+            result = json.dumps({"err": "Invalid format"})
 
         self.logger.info(f"Sending result: {result}")
 
         # Send notification with retry mechanism
-        self.send_response_notification(result)
+        if not self.send_response_notification(result):
+            # If sending failed due to BLE connection loss, log it
+            if not self._is_ble_connected():
+                self.logger.warning("BLE connection lost, could not send response")
 
         if restore:
             self.logger.info(f"Restore previous state ...")
-            utils.perform_wifi_provision_restore()            
+            try:
+                if hasattr(util, 'perform_wifi_provision_restore'):
+                    util.perform_wifi_provision_restore()
+                else:
+                    self.logger.warning("perform_wifi_provision_restore function not available")
+            except Exception as e:
+                self.logger.error(f"Error during WiFi provision restore: {e}")
 
     def _send_notification_value(self, value):
         """
@@ -333,9 +386,16 @@ class WIFIConfigCharacteristic(Characteristic):
             self.logger.warning("Cannot send notification: notifications not enabled")
             return False
 
-        value = [dbus.Byte(c) for c in result.encode('utf-8')]
+        # Check if BLE connection is still active before sending
+        if not self._is_ble_connected():
+            self.logger.warning("BLE connection lost, cannot send notification")
+            return False
+
+        # Add "\n" to all responses
+        result_with_newline = result + "\n"
+        value = [dbus.Byte(c) for c in result_with_newline.encode('utf-8')]
         
-        # Force fragmentation, each 18 bytes (optimized for MTU=23)
+        # Force fragmentation, each 20 bytes (optimized for MTU=23)
         chunks = [value[i:i+self._MAX_CHUNK_SIZE] 
                  for i in range(0, len(value), self._MAX_CHUNK_SIZE)]
         
@@ -346,11 +406,20 @@ class WIFIConfigCharacteristic(Characteristic):
             for retry in range(self._MAX_RETRIES):
                 try:
                     with self._notification_lock:
+                        # Check connection before each chunk
+                        if not self._is_ble_connected():
+                            self.logger.warning("BLE connection lost during transmission")
+                            return False
+                        
                         self._send_notification_value(chunk)
                         success = True
                         break
                 except Exception as e:
                     self.logger.warning(f"Chunk {i+1} retry {retry+1} failed: {e}")
+                    # Check if it's a connection-related error
+                    if "Connection" in str(e) or "disconnected" in str(e).lower():
+                        self.logger.error("BLE connection lost during transmission")
+                        return False
                     time.sleep(0.02 * (retry + 1))
             
             if not success:
@@ -363,6 +432,17 @@ class WIFIConfigCharacteristic(Characteristic):
         
         return True
 
+    def _is_ble_connected(self):
+        """
+        Check if BLE connection is still active.
+        Returns True if connected, False otherwise.
+        """
+        try:
+            # Check if notifications are still enabled (indicates connection is active)
+            return self._notifying
+        except Exception as e:
+            self.logger.warning(f"Error checking BLE connection status: {e}")
+            return False
 
     def StartNotify(self):
         """
