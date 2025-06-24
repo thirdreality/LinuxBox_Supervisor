@@ -139,6 +139,11 @@ struct server {
 	bool notifying;
 	bool notification_ready;
 	pthread_mutex_t notification_lock;
+    // BLE GATT long write buffer for WiFi config
+#define MAX_WRITE_BUFFER 1024
+    char write_buffer[MAX_WRITE_BUFFER];
+    size_t write_buffer_len;
+    bool write_in_progress;
 };
 
 // Forward declaration
@@ -294,8 +299,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
     cJSON *root = cJSON_Parse(json_str);
     if (!root) {
         printf("[DEBUG] Failed to parse JSON\n");
-        snprintf(response, response_len, 
-                "{\"error\":\"Invalid format\"}");
+        snprintf(response, response_len, "{\"err\":\"bad fmt\"}");
         return -1;
     }
 
@@ -303,8 +307,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
     if (!ssid_item || !cJSON_IsString(ssid_item)) {
         printf("[DEBUG] Missing or invalid SSID\n");
         cJSON_Delete(root);
-        snprintf(response, response_len, 
-                "{\"error\":\"Invalid SSID\"}");
+        snprintf(response, response_len, "{\"err\":\"bad ssid\"}");
         return -1;
     }
 
@@ -332,9 +335,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
             // 发送成功LED指令
             send_socket_command(LED_SYS_WIFI_SUCCESS);
             
-            snprintf(response, response_len, 
-                    "{\"ip\":\"%s\"}", 
-                    current_ip);
+            snprintf(response, response_len, "{\"ip\":\"%s\"}", current_ip);
             
             free(current_ssid);
             free(current_ip);
@@ -364,8 +365,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
     FILE *cmd_fp = popen(connect_cmd, "r");
     if (!cmd_fp) {
         printf("[WIFI] Failed to execute nmcli command\n");
-        snprintf(response, response_len, 
-                "{\"error\":\"Command failed\"}");
+        snprintf(response, response_len, "{\"err\":\"cmd fail\"}");
         cJSON_Delete(root);
         return -1;
     }
@@ -425,8 +425,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
         cmd_fp = popen(connect_cmd, "r");
         if (!cmd_fp) {
             printf("[WIFI] Failed to execute retry nmcli command\n");
-            snprintf(response, response_len, 
-                    "{\"error\":\"Command failed\"}");
+            snprintf(response, response_len, "{\"err\":\"cmd fail\"}");
             cJSON_Delete(root);
             return -1;
         }
@@ -455,8 +454,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
     // If command failed after retry (or no retry was needed), return error
     if (!cmd_success || cmd_exit_status != 0) {
         printf("[WIFI] nmcli command failed, not checking IP address\n");
-        snprintf(response, response_len, 
-                "{\"error\":\"Connection failed\"}");
+        snprintf(response, response_len, "{\"err\":\"conn fail\"}");
         cJSON_Delete(root);
         return -1;
     }
@@ -469,8 +467,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
         // 检查BLE连接状态，如果已断开则立即退出
         if (!client_connected) {
             printf("[WIFI] BLE client disconnected during WiFi config, aborting\n");
-            snprintf(response, response_len, 
-                    "{\"error\":\"BLE disconnected\"}");
+            snprintf(response, response_len, "{\"err\":\"BLE lost\"}");
             cJSON_Delete(root);
             return -1;
         }
@@ -486,9 +483,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
             // 4. 清理旧的连接
             cleanup_old_connections(ssid);
             
-            snprintf(response, response_len, 
-                    "{\"ip\":\"%s\"}", 
-                    ip);
+            snprintf(response, response_len, "{\"ip\":\"%s\"}", ip);
             
             free(ip);
             cJSON_Delete(root);
@@ -523,8 +518,7 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
         pclose(status_fp);
     }
     
-    snprintf(response, response_len, 
-            "{\"ip\":\"\"}");
+    snprintf(response, response_len, "{\"ip\":\"\"}");
     
     cJSON_Delete(root);
     return -1;
@@ -749,7 +743,19 @@ static void send_notification(struct server *server, const char *message)
     }
 
     size_t message_len = strlen(message);
-    
+    // 判断是否需要分片：如果消息长度<=20字节，强制单包
+    if (message_len <= 20) {
+        uint8_t buffer[21];
+        memcpy(buffer, message, message_len);
+        // 不加换行符，严格按表格
+        bool result = bt_gatt_server_send_notification(server->gatt, server->chara_handle,
+                buffer, message_len, false);
+        printf("[DEBUG] Single packet notification result: %s\n", result ? "SUCCESS" : "FAILED");
+        return;
+    }
+    // 超过20字节，按原有分片逻辑
+    // ... existing code ...
+
     // Add '\n' terminator to the message for protocol compliance
     size_t total_len = message_len + 1; // +1 for '\n' terminator
     
@@ -849,165 +855,219 @@ static void wifi_config_write_cb(struct gatt_db_attribute *attrib,
                 void *user_data)
 {
     struct server *server = user_data;
-    char *json_str;
+    char *json_str = NULL;
     char response[256];
     int ret;
 
-#if 0
-    printf("[DEBUG] ================== WIFI CONFIG WRITE ==================\n");
-    printf("[DEBUG] wifi_config_write_cb called\n");
-    printf("[DEBUG] - id: %u\n", id);
-    printf("[DEBUG] - offset: %u\n", offset);
-    printf("[DEBUG] - len: %zu\n", len);
-    printf("[DEBUG] - opcode: 0x%02x\n", opcode);
-#endif
-
-    if (len > 0) {
-        printf("[DEBUG] - value as string: ");
-        for (size_t i = 0; i < len; i++) {
-            if (value[i] >= 32 && value[i] <= 126) {
-                printf("%c", value[i]);
-            } else {
-                printf("\\x%02x", value[i]);
-            }
-        }
-        printf("\n");
-    }
-
     // Respond to write immediately to prevent timeout
-    printf("[DEBUG] Sending immediate write response to prevent timeout\n");
     gatt_db_attribute_write_result(attrib, id, 0);
 
-    // Handle different write operations:
-    // - Write Request (0x12): Direct write with full data (when MTU is large enough)
-    // - Prepare Write (0x16): Part of long write sequence 
-    // - Execute Write (0x18): Execute the prepared writes (when MTU is small)
-    
-    if (opcode == BT_ATT_OP_WRITE_REQ) {
-        // Direct Write Request - process immediately if we have data
-        printf("[DEBUG] Direct write request received\n");
+    // Handle Prepare Write (0x16), Execute Write (0x18), Write Request (0x12)
+    if (opcode == BT_ATT_OP_PREP_WRITE_REQ) {
+        // 分包写入，缓存数据
+        printf("[DEBUG] Prepare Write: offset=%u, len=%zu\n", offset, len);
+        if (len > 0) {
+            printf("[DEBUG] Prepare Write value (hex):");
+            for (size_t i = 0; i < len; i++) {
+                printf(" %02x", value[i]);
+            }
+            printf("\n");
+            memcpy(server->write_buffer + offset, value, len);
+            if (offset + len > server->write_buffer_len)
+                server->write_buffer_len = offset + len;
+            printf("[DEBUG] After memcpy, write_buffer_len=%zu\n", server->write_buffer_len);
+            printf("[DEBUG] Current write_buffer (hex):");
+            for (size_t i = 0; i < server->write_buffer_len; i++) {
+                printf(" %02x", (unsigned char)server->write_buffer[i]);
+            }
+            printf("\n");
+        } else {
+            printf("[DEBUG] Prepare Write: len=0, skip memcpy\n");
+        }
+        server->write_in_progress = true;
+        return; // 等待 Execute Write
+    } else if (opcode == BT_ATT_OP_EXEC_WRITE_REQ) {
+        // 分包写入完成，处理缓存
+        printf("[DEBUG] Execute Write: buffer_len=%zu\n", server->write_buffer_len);
+        printf("[DEBUG] Execute Write: buffer (hex):");
+        for (size_t i = 0; i < server->write_buffer_len; i++) {
+            printf(" %02x", (unsigned char)server->write_buffer[i]);
+        }
+        printf("\n");
+        if (!server->write_in_progress || server->write_buffer_len == 0) {
+            printf("[DEBUG] Execute Write but no data in buffer\n");
+            snprintf(response, sizeof(response), "{\"ip\":\"\"}");
+            goto send_response;
+        }
+        // 查找换行符，截断
+        size_t actual_len = server->write_buffer_len;
+        for (size_t i = 0; i < server->write_buffer_len; i++) {
+            if (server->write_buffer[i] == '\n') {
+                actual_len = i;
+                break;
+            }
+        }
+        json_str = malloc(actual_len + 1);
+        if (!json_str) {
+            snprintf(response, sizeof(response), "{\"ip\":\"\"}");
+            server->write_buffer_len = 0;
+            server->write_in_progress = false;
+            goto send_response;
+        }
+        memcpy(json_str, server->write_buffer, actual_len);
+        json_str[actual_len] = '\0';
+        printf("[DEBUG] Execute Write: JSON: '%s'\n", json_str);
+        server->write_buffer_len = 0;
+        server->write_in_progress = false;
+        // 处理 WiFi 配置
+        if (!client_connected) {
+            snprintf(response, sizeof(response), "{\"err\":\"BLE lost\"}");
+            free(json_str);
+            goto send_response;
+        }
+        ret = process_wifi_config(json_str, response, sizeof(response));
+        free(json_str);
+        goto send_response;
+    } else if (opcode == BT_ATT_OP_WRITE_REQ) {
+        // 直接写入
+        printf("[DEBUG] Direct Write: offset=%u, len=%zu\n", offset, len);
+        if (len > 0) {
+            printf("[DEBUG] Direct Write value (hex):");
+            for (size_t i = 0; i < len; i++) {
+                printf(" %02x", value[i]);
+            }
+            printf("\n");
+        }
         if (offset > 0) {
             printf("[DEBUG] Write request with offset not supported for WiFi config\n");
+            snprintf(response, sizeof(response), "{\"ip\":\"\"}");
+            goto send_response;
+        }
+        if (len == 0) {
+            snprintf(response, sizeof(response), "{\"ip\":\"\"}");
+            goto send_response;
+        }
+        // 查找换行符，截断
+        size_t actual_len = len;
+        for (size_t i = 0; i < len; i++) {
+            if (value[i] == '\n') {
+                actual_len = i;
+                break;
+            }
+        }
+        json_str = malloc(actual_len + 1);
+        if (!json_str) {
+            snprintf(response, sizeof(response), "{\"ip\":\"\"}");
+            goto send_response;
+        }
+        memcpy(json_str, value, actual_len);
+        json_str[actual_len] = '\0';
+        printf("[DEBUG] Direct Write: JSON: '%s'\n", json_str);
+        if (!client_connected) {
+            snprintf(response, sizeof(response), "{\"err\":\"BLE lost\"}");
+            free(json_str);
+            goto send_response;
+        }
+        ret = process_wifi_config(json_str, response, sizeof(response));
+        free(json_str);
+        goto send_response;
+    } else if (opcode == BT_ATT_OP_WRITE_CMD) {
+        // Write Without Response 分片缓存处理，兼容 iOS 长数据
+        printf("[DEBUG] Write Without Response (opcode=0x52): offset=%u, len=%zu\n", offset, len);
+        if (len > 0) {
+            printf("[DEBUG] Write Without Response value (hex):");
+            for (size_t i = 0; i < len; i++) {
+                printf(" %02x", value[i]);
+            }
+            printf("\n");
+        }
+        if (offset > 0) {
+            printf("[DEBUG] Write Without Response with offset not supported for WiFi config\n");
             return;
         }
         if (len == 0) {
-            printf("[DEBUG] Empty write request, ignoring\n");
             return;
         }
-        // Process the WiFi configuration immediately
-        printf("[DEBUG] Processing WiFi config from direct write\n");
-    } else if (opcode == BT_ATT_OP_EXEC_WRITE_REQ) {
-        // Execute Write - process the complete prepared data
-        printf("[DEBUG] Execute write received - processing complete WiFi configuration\n");
-    } else {
-        // Prepare Write or other - just acknowledge and wait
-        if (offset > 0) {
-            printf("[DEBUG] Handling long write, offset: %u\n", offset);
+        // 追加到缓存
+        if (server->write_buffer_len + len > MAX_WRITE_BUFFER) {
+            printf("[DEBUG] Write buffer overflow: %zu + %zu > %d\n", server->write_buffer_len, len, MAX_WRITE_BUFFER);
+            server->write_buffer_len = 0;
+            return;
+        }
+        memcpy(server->write_buffer + server->write_buffer_len, value, len);
+        server->write_buffer_len += len;
+        printf("[DEBUG] After append, write_buffer_len=%zu\n", server->write_buffer_len);
+        printf("[DEBUG] Current write_buffer (hex):");
+        for (size_t i = 0; i < server->write_buffer_len; i++) {
+            printf(" %02x", (unsigned char)server->write_buffer[i]);
+        }
+        printf("\n");
+        // 检查是否有换行符
+        size_t json_end = 0;
+        bool found_newline = false;
+        for (size_t i = 0; i < server->write_buffer_len; i++) {
+            if (server->write_buffer[i] == '\n') {
+                json_end = i;
+                found_newline = true;
+                break;
+            }
+        }
+        if (!found_newline) {
+            printf("[DEBUG] No newline found, waiting for more fragments\n");
+            return;
+        }
+        // 处理完整 JSON
+        char *json_str = malloc(json_end + 1);
+        if (!json_str) {
+            server->write_buffer_len = 0;
+            return;
+        }
+        memcpy(json_str, server->write_buffer, json_end);
+        json_str[json_end] = '\0';
+        printf("[DEBUG] Write Without Response: JSON: '%s'\n", json_str);
+        // 清空缓存
+        server->write_buffer_len = 0;
+        if (!client_connected) {
+            free(json_str);
+            return;
+        }
+        int ret = process_wifi_config(json_str, response, sizeof(response));
+        free(json_str);
+        // 发送通知
+        pthread_mutex_lock(&server->notification_lock);
+        if (server->notifying && client_connected) {
+            printf("[DEBUG] Sending WiFi result notification: %s\n", response);
+            send_notification(server, response);
         } else {
-            printf("[DEBUG] Prep write received, waiting for execute write\n");
+            printf("[DEBUG] Client not subscribed to notifications or disconnected, cannot send result\n");
         }
-        printf("[DEBUG] ================== WIFI CONFIG PREP COMPLETE ==================\n");
+        pthread_mutex_unlock(&server->notification_lock);
+        printf("[DEBUG] ================== WIFI CONFIG COMPLETE ==================\n");
         return;
-    }
-
-    // Process WiFi configuration (for both Write Request and Execute Write)
-    if (len > 512) {
-        printf("[DEBUG] Write value too long: %zu > 512\n", len);
-        snprintf(response, sizeof(response), "{\"ip\":\"\"}");
-        goto send_response;
-    }
-
-    if (len == 0) {
-        printf("[DEBUG] No data received\n");
-        snprintf(response, sizeof(response), "{\"ip\":\"\"}");
-        goto send_response;
-    }
-
-    json_str = malloc(len + 1);
-    if (!json_str) {
-        printf("[DEBUG] Failed to allocate memory for JSON string\n");
-        snprintf(response, sizeof(response), "{\"ip\":\"\"}");
-        goto send_response;
-    }
-
-    memcpy(json_str, value, len);
-    json_str[len] = '\0';
-
-    // Check for '\n' terminator in the received data (client sends '\n' as terminator)
-    size_t actual_len = len;
-    for (size_t i = 0; i < len; i++) {
-        if (json_str[i] == '\n') {
-            actual_len = i;
-            printf("[DEBUG] Found '\\n' terminator at position %zu, actual data length: %zu\n", i, actual_len);
-            break;
-        }
-    }
-    
-    // Null-terminate the actual data (remove '\n' terminator)
-    json_str[actual_len] = '\0';
-
-    printf("[DEBUG] Processing WiFi config JSON: %s\n", json_str);
-
-    // IMMEDIATE RESPONSE STRATEGY: Send "processing" notification first
-    if (!client_connected) {
-        printf("[WIFI] ERROR: BLE client disconnected before WiFi processing!\n");
-        snprintf(response, sizeof(response), "{\"ok\":0,\"err\":\"ble lost\"}");
-        free(json_str);
-        goto send_response;
-    }
-    
-    // 检查连接状态后开始WiFi处理
-    if (!client_connected) {
-        printf("[WIFI] ERROR: BLE client disconnected after processing notification!\n");
-        snprintf(response, sizeof(response), "{\"ok\":0,\"err\":\"ble lost\"}");
-        free(json_str);
-        goto send_response;
-    }
-    
-    printf("[DEBUG] Starting WiFi configuration (with immediate feedback strategy)\n");
-    ret = process_wifi_config(json_str, response, sizeof(response));
-    free(json_str);
-
-    if (ret < 0) {
-        printf("[DEBUG] Failed to process WiFi config\n");
-        // response is already set by process_wifi_config
     } else {
-        printf("[DEBUG] WiFi config processed successfully\n");
+        printf("[DEBUG] Unsupported opcode: 0x%02x\n", opcode);
+        snprintf(response, sizeof(response), "{\"ip\":\"\"}");
+        goto send_response;
     }
 
 send_response:
-    // 检查连接状态，等待一小段时间确保连接稳定
     if (!client_connected) {
         printf("[DEBUG] BLE client disconnected, cannot send notification\n");
         return;
     }
-    
-    // 添加小延迟确保连接稳定，特别是在MTU协商后
-    usleep(100000); // 100ms延迟
-    
-    // 再次检查连接状态
+    usleep(100000);
     if (!client_connected) {
         printf("[DEBUG] BLE client disconnected during delay, cannot send notification\n");
         return;
     }
-    
-    // Send notification with result
     pthread_mutex_lock(&server->notification_lock);
     if (server->notifying && client_connected) {
         printf("[DEBUG] Sending WiFi result notification: %s\n", response);
         send_notification(server, response);
-        
-        // 发送后再次检查是否成功
-        if (client_connected) {
-            printf("[DEBUG] Notification sent successfully, connection still active\n");
-        } else {
-            printf("[DEBUG] Connection lost immediately after sending notification\n");
-        }
     } else {
         printf("[DEBUG] Client not subscribed to notifications or disconnected, cannot send result\n");
     }
     pthread_mutex_unlock(&server->notification_lock);
-    
     printf("[DEBUG] ================== WIFI CONFIG COMPLETE ==================\n");
 }
 
@@ -1383,7 +1443,7 @@ static struct server *server_create(int fd)
 	}
 
     // Use MTU (23) - fixed MTU value
-	server->gatt = bt_gatt_server_new(server->db, server->att, 23, 0);
+	server->gatt = bt_gatt_server_new(server->db, server->att, 64, 0);
 	if (!server->gatt) {
         printf("[DEBUG] Failed to create GATT server\n");
         gatt_db_unref(server->db);
