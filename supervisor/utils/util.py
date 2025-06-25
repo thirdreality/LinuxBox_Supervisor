@@ -163,7 +163,11 @@ def perform_reboot():
             bool: True if reboot command was executed successfully, False otherwise
         """
     try:
-        subprocess.run(["systemctl", "stop", "docker"], check=True)
+        # Try to stop docker service if it exists
+        try:
+            subprocess.run(["systemctl", "stop", "docker"], check=True)
+        except subprocess.CalledProcessError:
+            logging.info("Docker service not found or already stopped, proceeding with reboot")
         subprocess.run(["reboot"], check=True)
         return True
     except Exception as e:
