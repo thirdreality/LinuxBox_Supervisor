@@ -2,6 +2,9 @@
 
 import subprocess
 import logging
+import glob
+import os
+import configparser
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -150,3 +153,86 @@ def has_active_connection():
     except Exception as e:
         logging.error(f"An unexpected error occurred: {e}")
         return False
+
+def _get_info_nmcli():
+    """Get WiFi info using nmcli"""
+    try:
+        # Get the name of the current active WiFi connection
+        result = subprocess.run(
+            ['nmcli', '-t', '-f', 'NAME', 'connection', 'show', '--active'],
+            capture_output=True, text=True, check=True
+        )
+        connections = result.stdout.strip().split('\n')
+
+        for conn_name in connections:
+            if conn_name:
+                try:
+                    # Check connection type
+                    type_result = subprocess.run(
+                        ['nmcli', '-t', '-f', 'connection.type', 'connection', 'show', conn_name],
+                        capture_output=True, text=True, check=True
+                    )
+                    if '802-11-wireless' in type_result.stdout:
+                        # Get SSID and PSK
+                        ssid_cmd = [
+                            'nmcli', '-t', '-f', '802-11-wireless.ssid',
+                            'connection', 'show', conn_name
+                        ]
+                        psk_cmd = [
+                            'nmcli', '-s', '-t', '-f', '802-11-wireless-security.psk',
+                            'connection', 'show', conn_name
+                        ]
+                        ssid_result = subprocess.run(ssid_cmd, capture_output=True, text=True)
+                        psk_result = subprocess.run(psk_cmd, capture_output=True, text=True)
+
+                        ssid = ssid_result.stdout.strip().split(':')[-1] if ssid_result.stdout.strip() else None
+                        psk = psk_result.stdout.strip().split(':')[-1] if psk_result.stdout.strip() else None
+
+                        if ssid:
+                            return ssid, psk
+                except subprocess.CalledProcessError:
+                    continue
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to execute nmcli command: {e}")
+    return None, None
+
+def _get_info_from_config():
+    """Read WiFi info from NetworkManager config files"""
+    config_dir = '/etc/NetworkManager/system-connections/'
+
+    if not os.path.exists(config_dir):
+        return None, None
+
+    try:
+        config_files = glob.glob(os.path.join(config_dir, '*'))
+        for config_file in config_files:
+            if os.path.isfile(config_file):
+                try:
+                    with open(config_file, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    config = configparser.ConfigParser()
+                    config.read_string(content)
+                    if config.has_section('wifi'):
+                        ssid = config.get('wifi', 'ssid', fallback=None)
+                        psk = None
+                        if config.has_section('wifi-security'):
+                            psk = config.get('wifi-security', 'psk', fallback=None)
+                        if ssid:
+                            return ssid, psk
+                except Exception as e:
+                    logging.error(f"Failed to parse config file {config_file}: {e}")
+                    continue
+    except PermissionError:
+        logging.error("Root permission is required to access NetworkManager config files.")
+    return None, None
+
+def get_current_wifi_info():
+    """Get current WiFi connection info"""
+    # First try using nmcli
+    ssid, psk = _get_info_nmcli()
+        
+    # If nmcli fails, try reading config files
+    if not ssid or not psk:
+        ssid, psk = _get_info_from_config()
+            
+    return ssid, psk    

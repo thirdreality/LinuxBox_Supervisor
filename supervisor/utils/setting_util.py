@@ -9,8 +9,11 @@ import tempfile
 import shutil
 import json
 from datetime import datetime
+from .wifi_utils import get_current_wifi_info
+import base64
 
 from ..const import BACKUP_STORAGE_MODE, BACKUP_INTERNAL_PATH, BACKUP_EXTERNAL_PATH
+from supervisor.sysinfo import SystemInfoUpdater
 
 SERVICES_TO_MANAGE = [
     "home-assistant.service",
@@ -175,6 +178,21 @@ def run_setting_backup(progress_callback=None, complete_callback=None):
             service_states_path = os.path.join(temp_backup_dir, "service_states.json")
             with open(service_states_path, 'w') as f:
                 json.dump(original_service_states, f, indent=2)
+            # 收集并写入network_states.json
+            network_states = None
+            try:
+                ssid, psk = get_current_wifi_info()
+                if ssid and psk:
+                    encrypted_psk = base64.b64encode(psk.encode()).decode()
+                    network_states = {"ssid": ssid, "psk": encrypted_psk}
+                    network_states_path = os.path.join(temp_backup_dir, "network_states.json")
+                    with open(network_states_path, 'w') as f:
+                        json.dump(network_states, f, indent=2)
+                    logger.info(f"Network states saved: ssid={ssid}")
+                else:
+                    logger.info("No WiFi connection info found, skipping network_states.json backup.")
+            except Exception as e:
+                logger.warning(f"Failed to collect network states: {e}")
             _call_progress(40, "All data copied to temp dir, creating tarball...")
             # 3. 打包整个临时目录内容
             tar_command = ["tar", "-czf", backup_filepath, "-C", temp_backup_dir, "."]
@@ -184,6 +202,9 @@ def run_setting_backup(progress_callback=None, complete_callback=None):
                 logging.error(error_message)
                 raise Exception(error_message)
             logging.info(f"Backup archive created successfully: {backup_filepath}")
+            # Ensure all data is flushed to disk
+            subprocess.run(["sync"])
+            logging.info("Sync command executed after backup archive creation.")
             _call_progress(70, "Backup archive created.")
             backup_archive_created = True
 
@@ -425,6 +446,38 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
                 _call_progress(int(current_progress_data), f"Finished processing restore for {target_sys_path}.")
             
             _call_progress(80, "Data restoration phase complete.")
+            # Ensure all restored data is flushed to disk
+            subprocess.run(["sync"])
+            logging.info("Sync command executed after data restoration.")
+            # 恢复网络连接
+            try:
+                network_states_path = os.path.join(temp_extraction_dir, "network_states.json")
+                network_states = None
+                if os.path.exists(network_states_path):
+                    with open(network_states_path, 'r') as f:
+                        network_states = json.load(f)
+                if network_states:
+                    ssid = network_states.get("ssid")
+                    encrypted_psk = network_states.get("psk")
+                    if ssid and encrypted_psk:
+                        psk = base64.b64decode(encrypted_psk.encode()).decode()
+                        # 检查当前连接
+                        current_ssid, _ = get_current_wifi_info()
+                        if current_ssid == ssid:
+                            logger.info("Current SSID matches saved SSID, skipping network restore.")
+                        else:
+                            cmd = ["nmcli", "device", "wifi", "connect", ssid, "password", psk]
+                            result = subprocess.run(cmd, capture_output=True, text=True)
+                            if result.returncode == 0:
+                                logger.info(f"Successfully restored network connection to {ssid}")
+                            else:
+                                logger.warning(f"Failed to restore network connection: {result.stderr}")
+                    else:
+                        logger.info("network_states.json missing ssid or psk, skipping network restore.")
+                else:
+                    logger.info("No network_states.json found, skipping network restore.")
+            except Exception as e:
+                logger.warning(f"Failed to restore network connection: {e}")
 
     except Exception as e:
         logging.error(f"System settings restore failed: {e}", exc_info=True)
@@ -548,6 +601,12 @@ def run_setting_updated(supervisor=None, progress_callback=None, complete_callba
             progress_callback(90, "Version information cleanup completed...")
         
         logger.info("Software update notification processed - all version information cleared")
+        
+        # 调用SystemInfoUpdater更新软件状态和LED
+        if supervisor and hasattr(supervisor, 'system_info_updater'):
+            supervisor.system_info_updater.update_software_status_and_led()
+        else:
+            logger.warning("Supervisor missing system_info_updater, cannot update software status and LED.")
         
         if complete_callback:
             complete_callback(True, "Version information cleared successfully")

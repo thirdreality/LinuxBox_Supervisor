@@ -423,10 +423,12 @@ class SupervisorHTTPServer:
                         system_info.hainfo.z2m = get_package_version("thirdreality-zigbee-mqtt")
 
                     # If all four package versions are not empty, set installed and enabled to True
-                    if (system_info.hainfo.config and system_info.hainfo.python and 
-                        system_info.hainfo.core and system_info.hainfo.otbr):
+                    if (system_info.hainfo.core and system_info.hainfo.python):
                         system_info.hainfo.installed = True
                         system_info.hainfo.enabled = True
+                    else:
+                        system_info.hainfo.installed = False
+                        system_info.hainfo.enabled = False
 
                     homeassistant_core_items = [
                         {

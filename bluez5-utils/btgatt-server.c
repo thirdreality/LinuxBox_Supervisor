@@ -154,7 +154,7 @@ void ble_init(void);
 #define LED_SYS_WIFI_CONFIG_PENDING "led sys_wifi_config_pending"
 #define LED_SYS_WIFI_CONFIGURING "led sys_wifi_configuring"
 #define LED_SYS_WIFI_SUCCESS "led sys_wifi_config_success" 
-#define LED_SYS_EVENT_OFF "led sys_event_off"
+#define LED_SYS_EVENT_OFF "led sys_wifi_config_stopped"
 
 #define SETTING_WIFI_NOTIFY "setting wifi_notify"
 
@@ -1443,7 +1443,7 @@ static struct server *server_create(int fd)
 	}
 
     // Use MTU (23) - fixed MTU value
-	server->gatt = bt_gatt_server_new(server->db, server->att, 64, 0);
+	server->gatt = bt_gatt_server_new(server->db, server->att, 23, 0);
 	if (!server->gatt) {
         printf("[DEBUG] Failed to create GATT server\n");
         gatt_db_unref(server->db);

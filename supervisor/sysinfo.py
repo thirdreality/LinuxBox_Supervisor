@@ -7,6 +7,7 @@ import subprocess
 import time
 import re
 from .const import DEVICE_MODEL_NAME, DEVICE_BUILD_NUMBER
+from .hardware import LedState
 
 T3R_RELEASE_FILE = "/etc/t3r-release"
 
@@ -253,7 +254,7 @@ class SystemInfoUpdater:
             self.logger.info(f"thirdreality-zigbee-mqtt version: {ha_info.z2m}")
 
             # Set installed status
-            ha_info.installed = bool(ha_info.core and ha_info.python and ha_info.config)
+            ha_info.installed = bool(ha_info.core and ha_info.python)
 
             ha_info.enabled = ha_info.installed
             
@@ -313,3 +314,37 @@ class SystemInfoUpdater:
     def stop(self):
         """Use supervisor.running to close, here for show"""
         self.logger.info("System Information stopped")
+
+    def update_software_status_and_led(self):
+        """
+        更新HomeAssistant和OpenHAB的installed/enabled状态，并根据结果设置LED状态。
+        只依赖core和python字段。
+        """
+        if not hasattr(self.supervisor, 'system_info'):
+            self.logger.error("Supervisor does not have system_info attribute")
+            return
+        sys_info = self.supervisor.system_info
+        # HomeAssistant
+        ha_info = getattr(sys_info, 'hainfo', None)
+        if ha_info:
+            ha_info.installed = bool(ha_info.core and ha_info.python)
+            ha_info.enabled = ha_info.installed
+        # OpenHAB
+        openhab_info = getattr(sys_info, 'openhabinfo', None)
+        if openhab_info:
+            openhab_info.installed = bool(openhab_info.version)
+            openhab_info.enabled = openhab_info.installed
+        # 判断是否有未安装
+        any_not_installed = False
+        if ha_info and not ha_info.installed:
+            any_not_installed = True
+        if openhab_info and not openhab_info.installed:
+            any_not_installed = True
+        # 设置LED
+        if hasattr(self.supervisor, 'set_led_state'):
+            if any_not_installed:
+                self.logger.info("Software not fully installed, set LED SYS_SYSTEM_CORRUPTED")
+                self.supervisor.set_led_state(LedState.SYS_SYSTEM_CORRUPTED)
+            else:
+                self.logger.info("All software installed, clear LED SYS_SYSTEM_CORRUPTED")
+                self.supervisor.clear_led_state(LedState.SYS_SYSTEM_CORRUPTED)
