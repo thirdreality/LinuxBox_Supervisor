@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 import shutil
 import urllib.request
 import urllib.error
-from .wifi_utils import get_wlan0_ip
+
 from supervisor.hardware import LedState
 import threading
 import time
@@ -990,19 +990,9 @@ def run_zha_pairing(progress_callback=None, led_controller=None) -> bool:
             return False
         _call_progress(25, "Bearer token read successfully.")
 
-        # 2. Get local IP address
-        _call_progress(40, "Getting wlan0 IP address.")
-        local_ip = get_wlan0_ip()
-        if not local_ip:
-            err_msg = "Failed to determine wlan0 IP address."
-            logging.error(err_msg)
-            _call_progress(100, err_msg)
-            return False
-        _call_progress(50, f"wlan0 IP address: {local_ip}.")
-
-        # 3. Prepare and send the request
-        _call_progress(60, "Preparing ZHA pairing request.")
-        url = f"http://{local_ip}:8123/api/services/zha/permit"
+        # 2. Prepare and send the request
+        _call_progress(40, "Preparing ZHA pairing request.")
+        url = "http://localhost:8123/api/services/zha/permit"
         headers = {
             "Authorization": f"Bearer {bearer_token}",
             "Content-Type": "application/json",
@@ -1010,7 +1000,7 @@ def run_zha_pairing(progress_callback=None, led_controller=None) -> bool:
         data = {"duration": 254}
 
         try:
-            _call_progress(75, f"Sending request to {url}.")
+            _call_progress(60, f"Sending request to {url}.")
             req = urllib.request.Request(url, headers=headers, data=json.dumps(data).encode('utf-8'), method='POST')
             with urllib.request.urlopen(req, timeout=10) as response:
                 status_code = response.getcode()

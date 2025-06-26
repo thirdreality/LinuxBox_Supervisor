@@ -183,6 +183,14 @@ class Supervisor:
             except Exception as e:
                 logger.error(f"Setting restore fail: {e}")
                 return f"Setting restore fail: {e}"
+        elif cmd.lower() == "updated":
+            try:
+                self.task_manager.start_setting_updated()
+                logger.info("Setting updated finish")
+                return "Setting updated finish"
+            except Exception as e:
+                logger.error(f"Setting updated fail: {e}")
+                return f"Setting updated fail: {e}"
         elif cmd.lower() == "wifi_notify":
             try:
                 threading.Timer(1, self.finish_wifi_provision).start()
@@ -265,7 +273,20 @@ class Supervisor:
             logger.error(f"Failed to start setting restore process: {e}")
             return False
 
+    def start_setting_updated(self) -> bool:
+        """
+        Starts the setting updated process to clear version information.
 
+        Returns:
+            bool: True if the updated process started successfully, False otherwise.
+        """
+        try:
+            self.task_manager.start_setting_updated()
+            logger.info("Setting updated process started successfully.")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to start setting updated process: {e}")
+            return False
 
     def get_led_state(self):
         # Get the LED state from the GpioLed instance

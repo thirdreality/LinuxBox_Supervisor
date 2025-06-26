@@ -28,6 +28,8 @@ class LedState(Enum):
     USER_EVENT_YELLOW = "yellow" # 黄灯
     USER_EVENT_GREEN = "green"   # 绿灯
     USER_EVENT_WHITE = "white"   # 白灯
+    USER_EVENT_CYAN = "cyan"     # 青灯 (绿+蓝)
+    USER_EVENT_MAGENTA = "magenta" # 洋红灯 (红+蓝)
     USER_EVENT_OFF = "off"  
 
     # 系统级状态（次高优先级）
@@ -40,6 +42,9 @@ class LedState(Enum):
     SYS_WIFI_CONFIG_PENDING = "sys_wifi_config_pending"  # 配网模式（待配网）: 黄色慢闪（0.5Hz）
     SYS_WIFI_CONFIGURING = "sys_wifi_configuring"  # 配网中（进行连接）: 黄色快闪（3Hz）
     SYS_WIFI_CONFIG_SUCCESS = "sys_wifi_config_success"  # 配网成功: 黄色常亮1秒后转正常运行
+    SYS_WIFI_CONFIG_STOPPED = "sys_wifi_config_stopped" # 配网停止: 
+
+    # 系统级状态（中优先级）
     SYS_DEVICE_PAIRING = "sys_device_pairing"  # 添加子设备（扫描中）: 绿色慢闪（1Hz）
     SYS_FIRMWARE_UPDATING = "sys_firmware_updating"  # 设备升级中: 绿色类呼吸灯效果 (1Hz pulse)
     SYS_EVENT_OFF = "sys_event_off" #系统操作完成
@@ -63,14 +68,38 @@ class GpioLed:
             'BLUE': {'chip': LINUXBOX_LED_B_CHIP, 'line': LINUXBOX_LED_B_LINE}
         }
         
+        # Define state groups by five-tier priority (shared by set_led_state and clear_led_state)
+        self.user_event_states = [ # Tier 1
+            LedState.USER_EVENT_RED, LedState.USER_EVENT_BLUE,
+            LedState.USER_EVENT_YELLOW, LedState.USER_EVENT_GREEN,
+            LedState.USER_EVENT_WHITE, LedState.USER_EVENT_CYAN,
+            LedState.USER_EVENT_MAGENTA, LedState.USER_EVENT_OFF
+        ]
+        self.system_critical_states = [ # Tier 2
+            LedState.REBOOT, LedState.STARTUP, LedState.STARTUP_OFF, LedState.FACTORY_RESET
+        ]
+        self.system_high_priority_states = [ # Tier 3 (WiFi config operations)
+            LedState.SYS_WIFI_CONFIG_PENDING, LedState.SYS_WIFI_CONFIGURING,
+            LedState.SYS_WIFI_CONFIG_SUCCESS, LedState.SYS_WIFI_CONFIG_STOPPED
+        ]
+        self.system_medium_priority_states = [ # Tier 4 (Device pairing, firmware update)
+            LedState.SYS_DEVICE_PAIRING, LedState.SYS_FIRMWARE_UPDATING,
+            LedState.SYS_EVENT_OFF
+        ]
+        self.general_operational_states = [ # Tier 5
+            LedState.SYS_ERROR_CONDITION, LedState.SYS_OFFLINE,
+            LedState.SYS_SYSTEM_CORRUPTED, LedState.SYS_NORMAL_OPERATION
+        ]
+        
         # Thread control
         self.led_thread = None
         self.timer_thread = None
-        # Store the current LED state using a four-tier priority system
+        # Store the current LED state using a five-tier priority system
         self.user_event_priority_state = None  # Tier 1 (Highest)
         self.system_critical_priority_state = LedState.STARTUP  # Tier 2
-        self.system_working_priority_state = None  # Tier 3
-        self.general_operational_priority_state = None  # Tier 4
+        self.system_high_priority_state = None  # Tier 3 (WiFi config operations)
+        self.system_medium_priority_state = None  # Tier 4 (Device pairing, firmware update)
+        self.general_operational_priority_state = None  # Tier 5
         
         # Determine initial current_led_state based on priorities
         # At init, system_critical_priority_state is set to STARTUP
@@ -78,8 +107,10 @@ class GpioLed:
             self.current_led_state = self.user_event_priority_state
         elif self.system_critical_priority_state is not None:
             self.current_led_state = self.system_critical_priority_state
-        elif self.system_working_priority_state is not None:
-            self.current_led_state = self.system_working_priority_state
+        elif self.system_high_priority_state is not None:
+            self.current_led_state = self.system_high_priority_state
+        elif self.system_medium_priority_state is not None:
+            self.current_led_state = self.system_medium_priority_state
         elif self.general_operational_priority_state is not None:
             self.current_led_state = self.general_operational_priority_state
         else:
@@ -156,6 +187,7 @@ class GpioLed:
     def yellow(self): self.set_color(True, True, False)
     def purple(self): self.set_color(True, False, True)
     def cyan(self): self.set_color(False, True, True)
+    def magenta(self): self.set_color(True, False, True)  # Same as purple but more standard name
     def white(self): self.set_color(True, True, True)
     
     def led_control_task(self):
@@ -211,47 +243,34 @@ class GpioLed:
             old_current_led_state = self.current_led_state
             state_changed = False
 
-            # Define state groups by new four-tier priority
-            user_event_states = [ # Tier 1
-                LedState.USER_EVENT_RED, LedState.USER_EVENT_BLUE,
-                LedState.USER_EVENT_YELLOW, LedState.USER_EVENT_GREEN,
-                LedState.USER_EVENT_WHITE, LedState.USER_EVENT_OFF
-            ]
-            system_critical_states = [ # Tier 2
-                LedState.REBOOT, LedState.STARTUP, LedState.STARTUP_OFF, LedState.FACTORY_RESET
-            ]
-            system_working_states = [ # Tier 3
-                LedState.SYS_WIFI_CONFIG_PENDING, LedState.SYS_WIFI_CONFIGURING,
-                LedState.SYS_WIFI_CONFIG_SUCCESS, LedState.SYS_DEVICE_PAIRING,
-                LedState.SYS_FIRMWARE_UPDATING,
-                LedState.SYS_EVENT_OFF
-            ]
-            general_operational_states = [ # Tier 4
-                LedState.SYS_ERROR_CONDITION, LedState.SYS_OFFLINE,
-                LedState.SYS_SYSTEM_CORRUPTED, LedState.SYS_NORMAL_OPERATION
-            ]
-
-            # Update the respective priority state variable
-            if state in user_event_states:
+            # Update the respective priority state variable using class-level state groups
+            if state in self.user_event_states:
                 if state == LedState.USER_EVENT_OFF:
                     self.user_event_priority_state = None
                 else:
                     if self.user_event_priority_state != state:
                         self.user_event_priority_state = state
-            elif state in system_critical_states:
+            elif state in self.system_critical_states:
                 if state == LedState.STARTUP_OFF and self.system_critical_priority_state == LedState.STARTUP:
                     self.system_critical_priority_state = None
                 else:
                     if self.system_critical_priority_state != state:
                         self.system_critical_priority_state = state
-            elif state in system_working_states:
-                if state == LedState.SYS_EVENT_OFF:
-                    if self.system_working_priority_state is not None:
-                        self.system_working_priority_state = None
+            elif state in self.system_high_priority_states:
+                if state == LedState.SYS_WIFI_CONFIG_STOPPED:
+                    if self.system_high_priority_state is not None:
+                        self.system_high_priority_state = None
                 else:    
-                    if self.system_working_priority_state != state:
-                        self.system_working_priority_state = state
-            elif state in general_operational_states:
+                    if self.system_high_priority_state != state:
+                        self.system_high_priority_state = state
+            elif state in self.system_medium_priority_states:
+                if state == LedState.SYS_EVENT_OFF:
+                    if self.system_medium_priority_state is not None:
+                        self.system_medium_priority_state = None
+                else:    
+                    if self.system_medium_priority_state != state:
+                        self.system_medium_priority_state = state
+            elif state in self.general_operational_states:
                 _general_op_priorities = {
                     LedState.SYS_SYSTEM_CORRUPTED: 0,
                     LedState.SYS_ERROR_CONDITION: 1,
@@ -284,16 +303,7 @@ class GpioLed:
                 self.logger.warning(f"Unknown or unhandled LED state received: {state}")
 
             # Determine the new current_led_state based on the new four-tier priority
-            new_current_led_state = LedState.SYS_NORMAL_OPERATION # Default fallback (Tier 4)
-
-            if self.user_event_priority_state is not None: # Tier 1
-                new_current_led_state = self.user_event_priority_state
-            elif self.system_critical_priority_state is not None: # Tier 2
-                new_current_led_state = self.system_critical_priority_state
-            elif self.system_working_priority_state is not None: # Tier 3
-                new_current_led_state = self.system_working_priority_state
-            elif self.general_operational_priority_state is not None: # Tier 4
-                new_current_led_state = self.general_operational_priority_state
+            new_current_led_state = self._recalculate_current_led_state()
             
             # Check if the actual current_led_state has changed
             if self.current_led_state != new_current_led_state:
@@ -307,37 +317,7 @@ class GpioLed:
                 self.step_counter = 0  # Reset step counter for immediate effect
 
                 # Determine and set timer_delay based on the *actual current_led_state*
-                calculated_reset_delay = None 
-                match self.current_led_state:
-                    case LedState.SYS_WIFI_CONFIG_PENDING:
-                        calculated_reset_delay = 1    # 0.5Hz
-                    case LedState.SYS_WIFI_CONFIGURING:
-                        calculated_reset_delay = 0.166  # 3Hz
-                    case LedState.SYS_WIFI_CONFIG_SUCCESS: 
-                        calculated_reset_delay = 0.5 
-                    case LedState.SYS_DEVICE_PAIRING:
-                        calculated_reset_delay = 0.5    # 1Hz
-                    case LedState.SYS_NORMAL_OPERATION:
-                        calculated_reset_delay = 0.5  # Solid, allow updates
-                    case LedState.SYS_ERROR_CONDITION:
-                        calculated_reset_delay = 1.0    # 0.5Hz
-                    case LedState.SYS_OFFLINE:
-                        calculated_reset_delay = 0.166  # 3Hz
-                    case LedState.SYS_FIRMWARE_UPDATING:
-                        calculated_reset_delay = 1.0 # 0.5Hz pulse
-                    case LedState.SYS_SYSTEM_CORRUPTED:
-                        calculated_reset_delay = 1.0 # 0.5Hz
-                    case LedState.STARTUP:
-                        calculated_reset_delay = 0.5
-                    case LedState.REBOOT:
-                        calculated_reset_delay = 0.5
-                    case LedState.FACTORY_RESET:
-                        calculated_reset_delay = 0.125 # 4Hz
-                    case _:
-                        # States not listed (e.g., user events, SYS_EVENT_OFF, STARTUP_OFF)
-                        # do not trigger a timer_delay change from set_led_state itself.
-                        # Their timing might be implicit or handled directly by process_led_state patterns.
-                        pass # calculated_reset_delay remains None
+                calculated_reset_delay = self._calculate_timer_delay(self.current_led_state)
                 
                 if calculated_reset_delay is not None:
                     self.trigger_led_control(reset_delay=calculated_reset_delay)
@@ -408,6 +388,10 @@ class GpioLed:
                 self.green()
             case LedState.USER_EVENT_WHITE:
                 self.white()
+            case LedState.USER_EVENT_CYAN:
+                self.cyan()
+            case LedState.USER_EVENT_MAGENTA:
+                self.magenta()
             case LedState.STARTUP:
                 self.white()
             case LedState.SYS_WIFI_CONFIG_PENDING: # Yellow slow flash (1Hz)
@@ -424,8 +408,10 @@ class GpioLed:
                 self.yellow()
                 if self.step_counter >= 1: # After 1 second (2 steps of 0.5s timer_delay)
                     self.logger.info("WIFI_CONFIG_SUCCESS: Display time ended, transitioning to NORMAL_OPERATION.")
-                    self.set_led_state(LedState.SYS_EVENT_OFF)
+                    self.set_led_state(LedState.SYS_WIFI_CONFIG_STOPPED)
                     self.set_led_state(LedState.SYS_NORMAL_OPERATION)
+            case LedState.SYS_WIFI_CONFIG_STOPPED: # This state clears WiFi config priority, no LED action needed
+                self.off()
             case LedState.SYS_DEVICE_PAIRING: # Green slow flash (1Hz)
                 if self.step_counter % 2 == 0:
                     self.green()
@@ -475,6 +461,125 @@ class GpioLed:
         self.led_control_event.set()
         self.logger.debug(f"LED control triggered by external event with delay {reset_delay}")
     
+    def clear_led_state(self, state):
+        """Clear the priority level that the specified state belongs to."""
+        with self.state_lock:
+            old_current_led_state = self.current_led_state
+            state_changed = False
+
+            # Clear the respective priority state variable only if current state matches the specified state
+            state_cleared = False
+            if state in self.user_event_states:
+                if self.user_event_priority_state == state:
+                    self.user_event_priority_state = None
+                    self.logger.info(f"Cleared user event priority state (was {state})")
+                    state_cleared = True
+                else:
+                    self.logger.debug(f"User event priority state is {self.user_event_priority_state}, not {state}, no clearing needed")
+            elif state in self.system_critical_states:
+                if self.system_critical_priority_state == state:
+                    self.system_critical_priority_state = None
+                    self.logger.info(f"Cleared system critical priority state (was {state})")
+                    state_cleared = True
+                else:
+                    self.logger.debug(f"System critical priority state is {self.system_critical_priority_state}, not {state}, no clearing needed")
+            elif state in self.system_high_priority_states:
+                if self.system_high_priority_state == state:
+                    self.system_high_priority_state = None
+                    self.logger.info(f"Cleared system high priority state (was {state})")
+                    state_cleared = True
+                else:
+                    self.logger.debug(f"System high priority state is {self.system_high_priority_state}, not {state}, no clearing needed")
+            elif state in self.system_medium_priority_states:
+                if self.system_medium_priority_state == state:
+                    self.system_medium_priority_state = None
+                    self.logger.info(f"Cleared system medium priority state (was {state})")
+                    state_cleared = True
+                else:
+                    self.logger.debug(f"System medium priority state is {self.system_medium_priority_state}, not {state}, no clearing needed")
+            elif state in self.general_operational_states:
+                if self.general_operational_priority_state == state:
+                    self.general_operational_priority_state = None
+                    self.logger.info(f"Cleared general operational priority state (was {state})")
+                    state_cleared = True
+                else:
+                    self.logger.debug(f"General operational priority state is {self.general_operational_priority_state}, not {state}, no clearing needed")
+            else:
+                self.logger.warning(f"Unknown or unhandled LED state in clear_led_state: {state}")
+                return
+
+            # If no state was actually cleared, no need to recalculate
+            if not state_cleared:
+                return
+
+            # Determine the new current_led_state based on remaining priority states
+            new_current_led_state = self._recalculate_current_led_state()
+            
+            # Check if the actual current_led_state has changed
+            if self.current_led_state != new_current_led_state:
+                state_changed = True
+            
+            if state_changed:         
+                self.current_led_state = new_current_led_state # Update to the actual state
+                self.step_counter = 0  # Reset step counter for immediate effect
+
+                # Determine and set timer_delay based on the new current_led_state
+                calculated_reset_delay = self._calculate_timer_delay(self.current_led_state)
+                
+                if calculated_reset_delay is not None:
+                    self.trigger_led_control(reset_delay=calculated_reset_delay)
+                else:
+                    self.led_control_event.set() # Notify the LED control task
+
+    def _recalculate_current_led_state(self):
+        """Recalculate current LED state based on priority levels"""
+        new_current_led_state = LedState.SYS_NORMAL_OPERATION # Default fallback (Tier 5)
+
+        if self.user_event_priority_state is not None: # Tier 1
+            new_current_led_state = self.user_event_priority_state
+        elif self.system_critical_priority_state is not None: # Tier 2
+            new_current_led_state = self.system_critical_priority_state
+        elif self.system_high_priority_state is not None: # Tier 3 (WiFi config)
+            new_current_led_state = self.system_high_priority_state
+        elif self.system_medium_priority_state is not None: # Tier 4 (Device pairing, firmware)
+            new_current_led_state = self.system_medium_priority_state
+        elif self.general_operational_priority_state is not None: # Tier 5
+            new_current_led_state = self.general_operational_priority_state
+        
+        return new_current_led_state
+
+    def _calculate_timer_delay(self, led_state):
+        """Calculate timer delay based on LED state"""
+        calculated_reset_delay = None 
+        match led_state:
+            case LedState.SYS_WIFI_CONFIG_PENDING:
+                calculated_reset_delay = 1    # 0.5Hz
+            case LedState.SYS_WIFI_CONFIGURING:
+                calculated_reset_delay = 0.166  # 3Hz
+            case LedState.SYS_WIFI_CONFIG_SUCCESS: 
+                calculated_reset_delay = 0.5 
+            case LedState.SYS_DEVICE_PAIRING:
+                calculated_reset_delay = 0.5    # 1Hz
+            case LedState.SYS_NORMAL_OPERATION:
+                calculated_reset_delay = 0.5  # Solid, allow updates
+            case LedState.SYS_ERROR_CONDITION:
+                calculated_reset_delay = 1.0    # 0.5Hz
+            case LedState.SYS_OFFLINE:
+                calculated_reset_delay = 0.166  # 3Hz
+            case LedState.SYS_FIRMWARE_UPDATING:
+                calculated_reset_delay = 1.0 # 0.5Hz pulse
+            case LedState.SYS_SYSTEM_CORRUPTED:
+                calculated_reset_delay = 1.0 # 0.5Hz
+            case LedState.STARTUP:
+                calculated_reset_delay = 0.5
+            case LedState.REBOOT:
+                calculated_reset_delay = 0.5
+            case LedState.FACTORY_RESET:
+                calculated_reset_delay = 0.125 # 4Hz
+            case _:
+                pass # calculated_reset_delay remains None
+        
+        return calculated_reset_delay
 
 # -----------------------------------------------------------------------------
 
@@ -567,7 +672,7 @@ class GpioButton:
                             click_count = 1
                         last_press_time = time.time()
                         if click_count == 2:
-                            self.logger.info("[Button][Button]: xxxxxxxxxxxxxxxxxxxxxx double clicked")
+                            self.logger.info("[Button][Button]: ====== double clicked ! ======")
                             if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
                                 self.supervisor.set_led_state(LedState.USER_EVENT_OFF)
                             if self.supervisor and hasattr(self.supervisor, 'perform_wifi_provision'):
@@ -652,16 +757,6 @@ class GpioButton:
                     self.supervisor.set_led_state(LedState.USER_EVENT_RED)  # 红灯
                 last_action = 'red'
                 self.logger.info("Timer: 20+ seconds - Red light (factory reset)")
-            # elif 9 <= press_duration < 15 and last_action != 'blue':
-            #     if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
-            #         self.supervisor.set_led_state(LedState.USER_EVENT_BLUE)  # 蓝灯
-            #     last_action = 'blue'
-            #     self.logger.info("Timer: 9-15 seconds - Blue light")
-            # elif 6 <= press_duration < 9 and last_action != 'yellow':
-            #     if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
-            #         self.supervisor.set_led_state(LedState.USER_EVENT_YELLOW)  # 黄灯
-            #     last_action = 'yellow'
-            #    self.logger.info("Timer: 6-9 seconds - Yellow light (network setup)")
             elif 5 <= press_duration < 20 and last_action != 'green':
                 if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
                     self.supervisor.set_led_state(LedState.USER_EVENT_GREEN)  # 绿灯
@@ -683,18 +778,6 @@ class GpioButton:
             if self.supervisor and hasattr(self.supervisor, 'perform_factory_reset'):
                 self.logger.info("Executing factory reset")
                 self.supervisor.perform_factory_reset()
-        # elif 9 <= press_duration < 15:
-        #     # 9-15秒：蓝灯操作
-        #     self.logger.info("Blue light action completed")
-        #     if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
-        #         self.supervisor.set_led_state(LedState.USER_EVENT_OFF)
-        # elif 6 <= press_duration < 9:
-        #     # 6-9秒：网络设置
-        #     self.logger.info("Network setup action triggered")
-        #     if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
-        #         self.supervisor.set_led_state(LedState.USER_EVENT_OFF)
-        #     if self.supervisor and hasattr(self.supervisor, 'perform_wifi_provision_prepare'):
-        #         self.supervisor.perform_wifi_provision_prepare()
         elif 5 <= press_duration < 20:
             # 5-20秒：Zigbee配对
             self.logger.info("Zigbee pairing action triggered")

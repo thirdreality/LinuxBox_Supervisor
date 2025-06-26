@@ -17,6 +17,7 @@ from ..const import (
     GATT_SERVER_TIMEOUT_MINUTES
 )
 from .gatt_server import SupervisorGattServer
+from ..hardware import LedState
 
 
 class GattServerManager:
@@ -114,9 +115,8 @@ class GattServerManager:
                 self._stop_internal_service()
                 
             # Set LED to off state when stopping
-            from ..hardware import LedState
             if hasattr(self.supervisor, 'set_led_state'):
-                self.supervisor.set_led_state(LedState.SYS_EVENT_OFF)
+                self.supervisor.set_led_state(LedState.SYS_WIFI_CONFIG_STOPPED)
                 self.logger.info("Set LED to off state after stopping provisioning")
                 
         except Exception as e:
@@ -130,7 +130,6 @@ class GattServerManager:
         """Start external GATT service"""
         try:
             # Set LED to provisioning mode early
-            from ..hardware import LedState
             if hasattr(self.supervisor, 'set_led_state'):
                 self.supervisor.set_led_state(LedState.SYS_WIFI_CONFIG_PENDING)
                 self.logger.info("Set LED to provisioning mode")
@@ -161,7 +160,7 @@ class GattServerManager:
                 self.logger.error(f"Failed to start external service: {result.stderr}")
                 # Set LED to off state on failure
                 if hasattr(self.supervisor, 'set_led_state'):
-                    self.supervisor.set_led_state(LedState.SYS_EVENT_OFF)
+                    self.supervisor.set_led_state(LedState.SYS_WIFI_CONFIG_STOPPED)
                 return False
                 
             self.logger.info("External GATT service started successfully")
@@ -171,9 +170,8 @@ class GattServerManager:
             self.logger.error(f"Error starting external service: {e}")
             # Set LED to off state on exception
             try:
-                from ..hardware import LedState
                 if hasattr(self.supervisor, 'set_led_state'):
-                    self.supervisor.set_led_state(LedState.SYS_EVENT_OFF)
+                    self.supervisor.set_led_state(LedState.SYS_WIFI_CONFIG_STOPPED)
             except:
                 pass
             return False
@@ -275,9 +273,8 @@ class GattServerManager:
                 self.timeout_timer = None
             # Try to set LED to off state as fallback
             try:
-                from ..hardware import LedState
                 if hasattr(self.supervisor, 'set_led_state'):
-                    self.supervisor.set_led_state(LedState.SYS_EVENT_OFF)
+                    self.supervisor.set_led_state(LedState.SYS_WIFI_CONFIG_STOPPED)
             except:
                 pass
 
@@ -299,9 +296,8 @@ class GattServerManager:
                     self.is_provisioning = False
                     # Try to set LED to off state as fallback
                     try:
-                        from ..hardware import LedState
                         if hasattr(self.supervisor, 'set_led_state'):
-                            self.supervisor.set_led_state(LedState.SYS_EVENT_OFF)
+                            self.supervisor.set_led_state(LedState.SYS_WIFI_CONFIG_STOPPED)
                     except:
                         pass
             
@@ -362,9 +358,8 @@ class GattServerManager:
             
             # Force LED off
             try:
-                from ..hardware import LedState
                 if hasattr(self.supervisor, 'set_led_state'):
-                    self.supervisor.set_led_state(LedState.SYS_EVENT_OFF)
+                    self.supervisor.set_led_state(LedState.SYS_WIFI_CONFIG_STOPPED)
             except:
                 pass
                 

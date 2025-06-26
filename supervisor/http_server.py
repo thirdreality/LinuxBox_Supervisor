@@ -23,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .utils import util
 from .hardware import LedState
+from . import const
 
 from .sysinfo import get_package_version
 
@@ -318,20 +319,39 @@ class SupervisorHTTPServer:
 
             def _handle_setting_info(self):
                 """Return info of the latest 5 backup files"""
-                backup_dir = "/lib/thirdreality/backup"
-                if not os.path.exists(backup_dir):
-                    os.makedirs(backup_dir) 
+                import supervisor.const as const
+                
+                # Determine backup directory based on configuration
+                if const.BACKUP_STORAGE_MODE == "internal":
+                    backup_dir = const.BACKUP_INTERNAL_PATH
+                elif const.BACKUP_STORAGE_MODE == "external":
+                    backup_dir = const.BACKUP_EXTERNAL_PATH
+                else:
+                    # Default to internal path for unknown modes
+                    backup_dir = const.BACKUP_INTERNAL_PATH
+                
                 files = []
                 try:
+                    # Create backup directory if it doesn't exist
+                    if not os.path.exists(backup_dir):
+                        os.makedirs(backup_dir, exist_ok=True)
+                        self._logger.info(f"Created backup directory: {backup_dir}")
+                    
                     if os.path.isdir(backup_dir):
                         all_files = [f for f in os.listdir(backup_dir) if os.path.isfile(os.path.join(backup_dir, f)) and f.startswith("setting_") and f.endswith(".tar.gz")]
                         # Sort by modification time, get the latest 5
                         all_files.sort(key=lambda f: os.path.getmtime(os.path.join(backup_dir, f)), reverse=True)
                         # Remove "setting_" prefix and ".tar.gz" suffix, only return timestamp
                         files = [f.replace("setting_", "").replace(".tar.gz", "") for f in all_files[:5]]
-                    result = {"backups": files}
+                        self._logger.debug(f"Found {len(files)} backup files in {backup_dir}")
+                    else:
+                        self._logger.warning(f"Backup directory is not accessible: {backup_dir}")
+                    
+                    result = {"backups": files, "backup_path": backup_dir, "storage_mode": const.BACKUP_STORAGE_MODE}
                 except Exception as e:
-                    result = {"error": str(e)}
+                    self._logger.error(f"Error getting backup files from {backup_dir}: {e}")
+                    result = {"error": str(e), "backup_path": backup_dir, "storage_mode": const.BACKUP_STORAGE_MODE}
+                
                 self._set_headers()
                 self.wfile.write(json.dumps(result).encode())
 
@@ -754,7 +774,15 @@ class SupervisorHTTPServer:
                             self.wfile.write(json.dumps({"success": False, "error": "Invalid action for zigbee command."}).encode())
 
                     elif command == "setting":
-                        backup_dir = "/lib/thirdreality/backup"
+                        # Determine backup directory based on configuration
+                        if const.BACKUP_STORAGE_MODE == "internal":
+                            backup_dir = const.BACKUP_INTERNAL_PATH
+                        elif const.BACKUP_STORAGE_MODE == "external":
+                            backup_dir = const.BACKUP_EXTERNAL_PATH
+                        else:
+                            # Default to internal path for unknown modes
+                            backup_dir = const.BACKUP_INTERNAL_PATH
+                        
                         if not os.path.exists(backup_dir):
                             os.makedirs(backup_dir)
 

@@ -10,27 +10,67 @@ import shutil
 import json
 from datetime import datetime
 
+from ..const import BACKUP_STORAGE_MODE, BACKUP_INTERNAL_PATH, BACKUP_EXTERNAL_PATH
+
+SERVICES_TO_MANAGE = [
+    "home-assistant.service",
+    "matter-server.service",
+    "otbr-agent.service",
+    "zigbee2mqtt.service",
+    "mosquitto.service",
+    "openhab.service"
+]
+
+BACKUP_DIRS_CONFIG = [
+    ("/var/lib/thread", "thread_data"),
+    ("/var/lib/homeassistant", "homeassistant_data"),
+    ("/opt/zigbee2mqtt/data", "zigbee2mqtt_data"),
+    ("/etc/mosquitto", "mosquitto_config")
+]
+
 logger = logging.getLogger("Supervisor")
+
+def _check_external_storage_available():
+    """
+    Check if external storage (USB) is mounted at /mnt
+    """
+    try:
+        result = subprocess.run(["mount"], capture_output=True, text=True)
+        if result.returncode == 0:
+            # Check if there's any mount point under /mnt
+            for line in result.stdout.splitlines():
+                if "/mnt" in line:
+                    return True
+        return False
+    except Exception as e:
+        logging.error(f"Failed to check mount status: {e}")
+        return False
+
+def _get_backup_path():
+    """
+    Get backup path based on storage mode configuration
+    """
+    if BACKUP_STORAGE_MODE == "internal":
+        return BACKUP_INTERNAL_PATH
+    elif BACKUP_STORAGE_MODE == "external":
+        if not _check_external_storage_available():
+            raise Exception("External storage mode enabled but no USB device mounted at /mnt")
+        return BACKUP_EXTERNAL_PATH
+    else:
+        raise Exception(f"Invalid backup storage mode: {BACKUP_STORAGE_MODE}")
 
 def run_setting_backup(progress_callback=None, complete_callback=None):
     """
     Backup system settings by stopping services, creating a tarball, managing backups, and restarting services.
     """
-    services_to_manage = [
-        "home-assistant.service",
-        "matter-server.service",
-        "otbr-agent.service",
-        "zigbee2mqtt.service",
-        "mosquitto.service",
-        "openhab.service"
-    ]
-    backup_dirs_config = [
-        ("/var/lib/thread", "thread_data"),
-        ("/var/lib/homeassistant", "homeassistant_data"),
-        ("/opt/zigbee2mqtt/data", "zigbee2mqtt_data"),
-        ("/etc/mosquitto", "mosquitto_config")
-    ]
-    backup_base_path = "/lib/thirdreality/backup"
+    try:
+        backup_base_path = _get_backup_path()
+    except Exception as e:
+        logging.error(f"Failed to determine backup path: {e}")
+        if complete_callback:
+            complete_callback(False, str(e))
+        return
+    
     max_backups = 5
 
     original_service_states = {}
@@ -42,21 +82,32 @@ def run_setting_backup(progress_callback=None, complete_callback=None):
             progress_callback(percent, message)
 
     try:
-        _call_progress(0, "Starting system settings backup.")
+        _call_progress(0, f"Starting system settings backup using {BACKUP_STORAGE_MODE} storage.")
 
         _call_progress(5, "Checking and stopping services.")
         current_progress = 5
-        progress_per_service_stop = 25 / len(services_to_manage) if services_to_manage else 0
+        progress_per_service_stop = 25 / len(SERVICES_TO_MANAGE) if SERVICES_TO_MANAGE else 0
 
-        for i, service in enumerate(services_to_manage):
+        for i, service in enumerate(SERVICES_TO_MANAGE):
             service_active = False
+            service_enabled = False
             try:
+                # Check if service is active
                 result = subprocess.run(["systemctl", "is-active", "--quiet", service])
                 service_active = result.returncode == 0
+                
+                # Check if service is enabled
+                result = subprocess.run(["systemctl", "is-enabled", "--quiet", service])
+                service_enabled = result.returncode == 0
             except Exception as e:
-                logging.warning(f"Could not determine status of service {service}: {e}. Assuming inactive.")
+                logging.warning(f"Could not determine status of service {service}: {e}. Assuming inactive and disabled.")
             
-            original_service_states[service] = service_active
+            # Store both active and enabled status
+            original_service_states[service] = {
+                "active": service_active,
+                "enabled": service_enabled
+            }
+            
             if service_active:
                 try:
                     logging.info(f"Service {service} is active. Stopping it.")
@@ -77,26 +128,27 @@ def run_setting_backup(progress_callback=None, complete_callback=None):
             _call_progress(int(current_progress), f"Processed service {service}.")
 
         _call_progress(30, "Preparing to create backup archive.")
-        os.makedirs(backup_base_path, exist_ok=True)
+        
+        # For external storage, create backup directory if it doesn't exist
+        if BACKUP_STORAGE_MODE == "external" and not os.path.exists(backup_base_path):
+            try:
+                os.makedirs(backup_base_path, exist_ok=True)
+                logging.info(f"Created external backup directory: {backup_base_path}")
+            except Exception as e:
+                error_msg = f"Failed to create external backup directory {backup_base_path}: {e}"
+                logging.error(error_msg)
+                raise Exception(error_msg)
+        else:
+            os.makedirs(backup_base_path, exist_ok=True)
+        
         _call_progress(35, f"Ensured backup directory {backup_base_path} exists.")
 
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         backup_filename = f"setting_{timestamp}.tar.gz"
         backup_filepath = os.path.join(backup_base_path, backup_filename)
         
-        # Save service states to a temporary file for inclusion in backup
-        temp_service_state_path = os.path.join(backup_base_path, f"service_states_{timestamp}.json")
-        try:
-            with open(temp_service_state_path, 'w') as f:
-                json.dump(original_service_states, f, indent=2)
-            logging.info(f"Service states saved to {temp_service_state_path}")
-            _call_progress(37, "Service states recorded for backup.")
-        except Exception as e:
-            logging.error(f"Failed to save service states: {e}")
-            raise Exception(f"Failed to save service states: {e}")
-
         valid_backup_dirs = []
-        for path, _ in backup_dirs_config:
+        for path, _ in BACKUP_DIRS_CONFIG:
             if os.path.exists(path):
                 valid_backup_dirs.append(path)
             else:
@@ -104,35 +156,36 @@ def run_setting_backup(progress_callback=None, complete_callback=None):
         
         if not valid_backup_dirs:
             logging.error("No valid source directories found for backup. Aborting backup creation.")
-            # Clean up temp service state file
-            if os.path.exists(temp_service_state_path):
-                os.remove(temp_service_state_path)
             raise Exception("No valid source directories found for backup.")
 
-        # Include service state file in the backup
-        backup_sources = valid_backup_dirs + [temp_service_state_path]
-        tar_command = ["tar", "-czf", backup_filepath] + backup_sources
-        logging.info(f"Creating backup archive: {backup_filepath} from {backup_sources}")
-        _call_progress(40, f"Creating tarball {backup_filename} from {len(valid_backup_dirs)} source(s) plus service states.")
-        
-        tar_process_result = subprocess.run(tar_command, capture_output=True, text=True)
-
-        if tar_process_result.returncode != 0:
-            error_message = f"Tar command failed. RC: {tar_process_result.returncode}. Stderr: {tar_process_result.stderr.strip()}"
-            logging.error(error_message)
-            # Clean up temp service state file
-            if os.path.exists(temp_service_state_path):
-                os.remove(temp_service_state_path)
-            raise Exception(error_message)
-        
-        # Clean up temp service state file after successful backup
-        if os.path.exists(temp_service_state_path):
-            os.remove(temp_service_state_path)
-            logging.info(f"Cleaned up temporary service state file: {temp_service_state_path}")
-        
-        logging.info(f"Backup archive created successfully: {backup_filepath}")
-        _call_progress(70, "Backup archive created.")
-        backup_archive_created = True
+        # --- 新的打包流程 ---
+        import tempfile
+        _call_progress(37, "Preparing temporary directory for backup.")
+        with tempfile.TemporaryDirectory(prefix="setting_backup_") as temp_backup_dir:
+            # 1. 拷贝所有需要备份的目录到临时目录
+            for src_path, name in BACKUP_DIRS_CONFIG:
+                if os.path.exists(src_path):
+                    dest_path = os.path.join(temp_backup_dir, name)
+                    if os.path.isdir(src_path):
+                        shutil.copytree(src_path, dest_path, symlinks=True)
+                    elif os.path.isfile(src_path):
+                        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                        shutil.copy2(src_path, dest_path)
+            # 2. 写入service_states.json
+            service_states_path = os.path.join(temp_backup_dir, "service_states.json")
+            with open(service_states_path, 'w') as f:
+                json.dump(original_service_states, f, indent=2)
+            _call_progress(40, "All data copied to temp dir, creating tarball...")
+            # 3. 打包整个临时目录内容
+            tar_command = ["tar", "-czf", backup_filepath, "-C", temp_backup_dir, "."]
+            tar_process_result = subprocess.run(tar_command, capture_output=True, text=True)
+            if tar_process_result.returncode != 0:
+                error_message = f"Tar command failed. RC: {tar_process_result.returncode}. Stderr: {tar_process_result.stderr.strip()}"
+                logging.error(error_message)
+                raise Exception(error_message)
+            logging.info(f"Backup archive created successfully: {backup_filepath}")
+            _call_progress(70, "Backup archive created.")
+            backup_archive_created = True
 
         _call_progress(75, "Managing backup files (rotation).")
         backup_files = sorted(
@@ -162,11 +215,10 @@ def run_setting_backup(progress_callback=None, complete_callback=None):
     finally:
         # Clean up any remaining temporary service state file
         try:
-            temp_files = glob.glob(os.path.join(backup_base_path, "service_states_*.json"))
-            for temp_file in temp_files:
-                if os.path.exists(temp_file):
-                    os.remove(temp_file)
-                    logging.info(f"Cleaned up temporary file: {temp_file}")
+            temp_service_state_file = os.path.join(backup_base_path, "service_states.json")
+            if os.path.exists(temp_service_state_file):
+                os.remove(temp_service_state_file)
+                logging.info(f"Cleaned up temporary file: {temp_service_state_file}")
         except Exception as cleanup_error:
             logging.warning(f"Failed to clean up temporary files: {cleanup_error}")
         _call_progress(90, "Restoring services to their original states (if changed).")
@@ -174,7 +226,7 @@ def run_setting_backup(progress_callback=None, complete_callback=None):
         progress_per_service_start = 10 / len(original_service_states) if original_service_states else 0
 
         for i, (service, was_active) in enumerate(original_service_states.items()):
-            if was_active:
+            if was_active["active"]:
                 try:
                     logging.info(f"Service {service} was originally active. Ensuring it is started.")
                     start_result = subprocess.run(["systemctl", "start", service], check=False, capture_output=True, text=True)
@@ -199,19 +251,14 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
     """
     Restore system settings from a backup file.
     """
-    backup_base_path = "/lib/thirdreality/backup"
-    services_to_manage = [
-        "home-assistant.service", "matter-server.service", "otbr-agent.service",
-        "zigbee2mqtt.service", "mosquitto.service", "openhab.service"
-    ]
-    # Define what directories are expected to be restored. Assumes tarball contains these paths relative to its root.
-    # E.g., /var/lib/thread in the system is var/lib/thread inside the tarball.
-    restore_target_system_paths = [
-        "/var/lib/thread",
-        "/var/lib/homeassistant/", # Trailing slash will be normalized
-        "/opt/zigbee2mqtt/data",
-        "/etc/mosquitto"
-    ]
+    
+    try:
+        backup_base_path = _get_backup_path()
+    except Exception as e:
+        logging.error(f"Failed to determine backup path: {e}")
+        if complete_callback:
+            complete_callback(False, str(e))
+        return
     original_service_states = {}
     backup_service_states = {}
 
@@ -221,7 +268,17 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
             progress_callback(percent, message)
 
     try:
-        _call_progress(0, "Starting system settings restore.")
+        _call_progress(0, f"Starting system settings restore using {BACKUP_STORAGE_MODE} storage.")
+        
+        # Check if backup directory exists for external storage
+        if BACKUP_STORAGE_MODE == "external" and not os.path.exists(backup_base_path):
+            error_msg = f"External backup directory {backup_base_path} does not exist"
+            logging.error(error_msg)
+            if complete_callback:
+                complete_callback(False, error_msg)
+            _call_progress(100, "External backup directory not found.")
+            return
+        
         selected_backup_filepath = None
 
         if backup_file:
@@ -234,9 +291,10 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
                 logging.info(f"Using specified backup file: {selected_backup_filepath}")
                 _call_progress(10, f"Specified backup file found: {full_backup_filename}")
             else:
-                logging.info(f"Specified backup file {candidate_filepath} not found. Concluding restore as per request.")
+                error_msg = f"Specified backup file {full_backup_filename} not found in backup directory {backup_base_path}"
+                logging.error(error_msg)
                 if complete_callback:
-                    complete_callback(True, "success - specified backup file not found")
+                    complete_callback(False, error_msg)
                 _call_progress(100, "Specified backup file not found.")
                 return
         else:
@@ -251,11 +309,19 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
                 logging.info(f"Using the latest backup file found: {selected_backup_filepath}")
                 _call_progress(10, f"Selected latest backup for restore: {os.path.basename(selected_backup_filepath)}")
             else:
-                logging.info(f"No backup file specified and no 'setting_*.tar.gz' files found in {backup_base_path}. Concluding restore as per request.")
-                if complete_callback:
-                    complete_callback(True, "success - no backup files found to restore")
-                _call_progress(100, "No 'setting_*.tar.gz' backup files found to restore.")
-                return
+                if BACKUP_STORAGE_MODE == "external":
+                    error_msg = f"No backup files found in external storage directory {backup_base_path}"
+                    logging.error(error_msg)
+                    if complete_callback:
+                        complete_callback(False, error_msg)
+                    _call_progress(100, "No backup files found in external storage.")
+                    return
+                else:
+                    logging.info(f"No backup file specified and no 'setting_*.tar.gz' files found in {backup_base_path}. Concluding restore as per request.")
+                    if complete_callback:
+                        complete_callback(True, "success - no backup files found to restore")
+                    _call_progress(100, "No 'setting_*.tar.gz' backup files found to restore.")
+                    return
         
         # _call_progress(10, f"Selected backup for restore: {os.path.basename(selected_backup_filepath)}") # This line is now covered above
 
@@ -272,14 +338,11 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
             _call_progress(30, "Backup archive extracted successfully.")
 
             # Try to read service states from backup
-            # Service state file is stored in the backup with path lib/thirdreality/backup/service_states_*.json
-            service_state_pattern = os.path.join(temp_extraction_dir, "lib", "thirdreality", "backup", "service_states_*.json")
-            service_state_files = glob.glob(service_state_pattern)
-            if service_state_files:
-                service_state_file = service_state_files[0]  # Use the first (should be only one)
+            # Service state file is stored at the top level of the backup as service_states.json
+            service_state_file = os.path.join(temp_extraction_dir, "service_states.json")
+            if os.path.exists(service_state_file):
                 try:
-                    with open(service_state_file, 'r') as f:
-                        backup_service_states = json.load(f)
+                    backup_service_states = json.load(open(service_state_file, 'r'))
                     logging.info(f"Loaded service states from backup: {backup_service_states}")
                     _call_progress(32, "Service states loaded from backup.")
                 except Exception as e:
@@ -291,16 +354,23 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
 
             _call_progress(35, "Stopping all services prior to restore.")
             current_progress_services = 35
-            progress_per_service_stop = 15 / len(services_to_manage) if services_to_manage else 0
+            progress_per_service_stop = 15 / len(SERVICES_TO_MANAGE) if SERVICES_TO_MANAGE else 0
 
-            for service in services_to_manage:
+            for service in SERVICES_TO_MANAGE:
                 service_active = False
+                service_enabled = False
                 try:
                     result = subprocess.run(["systemctl", "is-active", "--quiet", service])
                     service_active = result.returncode == 0
+                    
+                    result = subprocess.run(["systemctl", "is-enabled", "--quiet", service])
+                    service_enabled = result.returncode == 0
                 except Exception as e_stat:
-                    logging.warning(f"Could not determine status of service {service}: {e_stat}. Assuming inactive.")
-                original_service_states[service] = service_active
+                    logging.warning(f"Could not determine status of service {service}: {e_stat}. Assuming inactive and disabled.")
+                original_service_states[service] = {
+                    "active": service_active,
+                    "enabled": service_enabled
+                }
                 if service_active:
                     try:
                         logging.info(f"Service {service} is active. Stopping it for restore.")
@@ -317,36 +387,32 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
 
             _call_progress(55, "Starting data restoration from extracted backup.")
             current_progress_data = 55
-            progress_per_dir_restore = 25 / len(restore_target_system_paths) if restore_target_system_paths else 0
+            progress_per_dir_restore = 25 / len(BACKUP_DIRS_CONFIG) if BACKUP_DIRS_CONFIG else 0
 
-            for target_sys_path_orig in restore_target_system_paths:
-                target_sys_path = os.path.normpath(target_sys_path_orig)
-                # Path inside tarball is relative to tar root, matching the absolute path structure
-                source_in_temp = os.path.join(temp_extraction_dir, target_sys_path.lstrip(os.sep))
-
+            for target_sys_path, mapped_name in BACKUP_DIRS_CONFIG:
+                target_sys_path = os.path.normpath(target_sys_path)
+                source_in_temp = os.path.join(temp_extraction_dir, mapped_name)
                 _call_progress(int(current_progress_data), f"Restoring data for {target_sys_path}")
                 if os.path.exists(source_in_temp):
                     logging.info(f"Source {source_in_temp} found in backup. Restoring to {target_sys_path}.")
                     try:
                         parent_of_target = os.path.dirname(target_sys_path)
                         if parent_of_target and not os.path.exists(parent_of_target):
-                             os.makedirs(parent_of_target, exist_ok=True)
-
+                            os.makedirs(parent_of_target, exist_ok=True)
                         if os.path.exists(target_sys_path):
                             logging.info(f"Removing existing content at {target_sys_path} before restore.")
                             if os.path.isdir(target_sys_path):
                                 shutil.rmtree(target_sys_path)
                             else:
                                 os.remove(target_sys_path)
-                        
                         if os.path.isdir(source_in_temp):
                             shutil.copytree(source_in_temp, target_sys_path, symlinks=True)
                         elif os.path.isfile(source_in_temp):
-                            os.makedirs(os.path.dirname(target_sys_path), exist_ok=True) # Ensure target dir exists for file copy
+                            os.makedirs(os.path.dirname(target_sys_path), exist_ok=True)
                             shutil.copy2(source_in_temp, target_sys_path)
                         else:
                             logging.warning(f"Source {source_in_temp} is neither a file nor a directory. Skipping restore for {target_sys_path}.")
-                            current_progress_data += progress_per_dir_restore # Still count progress
+                            current_progress_data += progress_per_dir_restore
                             _call_progress(int(current_progress_data), f"Skipped non-file/dir source for {target_sys_path}.")
                             continue
                         logging.info(f"Successfully restored {target_sys_path}.")
@@ -373,7 +439,38 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
             service_states_to_restore = backup_service_states if backup_service_states else original_service_states
             progress_per_service_start = 15 / len(service_states_to_restore) if service_states_to_restore else 0
 
-            for service, should_be_active in service_states_to_restore.items():
+            for service, service_state in service_states_to_restore.items():
+                # Handle both old format (boolean) and new format (dict) for backward compatibility
+                if isinstance(service_state, bool):
+                    # Old format: only active status was stored
+                    should_be_active = service_state
+                    should_be_enabled = None  # Unknown
+                else:
+                    # New format: both active and enabled status
+                    should_be_active = service_state.get("active", False)
+                    should_be_enabled = service_state.get("enabled", None)
+                
+                # Restore enabled status if available
+                if should_be_enabled is not None:
+                    try:
+                        if should_be_enabled:
+                            logging.info(f"Service {service} should be enabled according to backup. Enabling it.")
+                            enable_result = subprocess.run(["systemctl", "enable", service], check=False, capture_output=True, text=True)
+                            if enable_result.returncode == 0:
+                                logging.info(f"Service {service} enabled successfully.")
+                            else:
+                                logging.warning(f"Failed to enable service {service} post-restore. RC: {enable_result.returncode}. Error: {enable_result.stderr.strip()}")
+                        else:
+                            logging.info(f"Service {service} should be disabled according to backup. Disabling it.")
+                            disable_result = subprocess.run(["systemctl", "disable", service], check=False, capture_output=True, text=True)
+                            if disable_result.returncode == 0:
+                                logging.info(f"Service {service} disabled successfully.")
+                            else:
+                                logging.warning(f"Failed to disable service {service} post-restore. RC: {disable_result.returncode}. Error: {disable_result.stderr.strip()}")
+                    except Exception as e_enable:
+                        logging.error(f"Unexpected error managing enabled status for service {service} post-restore: {e_enable}")
+                
+                # Restore active status
                 if should_be_active:
                     try:
                         logging.info(f"Service {service} should be active according to backup. Starting it.")
@@ -403,3 +500,62 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
             # or if an error occurred before original_service_states was populated.
             logging.info("No services were modified or an early exit occurred; skipping service restoration progress in 'finally' block.")
         logging.info("Restore function 'finally' block finished execution.")
+
+def run_setting_updated(supervisor=None, progress_callback=None, complete_callback=None):
+    """
+    Clear version information for HomeAssistantInfo and OpenHabInfo when software is updated.
+    """
+    try:
+        if progress_callback:
+            progress_callback(0, "Starting version information cleanup...")
+        
+        if not supervisor or not hasattr(supervisor, 'system_info'):
+            error_msg = "Cannot access supervisor system_info"
+            logger.error(error_msg)
+            if complete_callback:
+                complete_callback(False, error_msg)
+            return
+        
+        if progress_callback:
+            progress_callback(20, "Clearing HomeAssistant version information...")
+        
+        # Clear HomeAssistant version information
+        if hasattr(supervisor.system_info, 'hainfo'):
+            ha_info = supervisor.system_info.hainfo
+            ha_info.config = ""
+            ha_info.python = ""
+            ha_info.core = ""
+            ha_info.otbr = ""
+            ha_info.z2m = ""
+            # Reset installation status
+            ha_info.installed = False
+            ha_info.enabled = False
+            logger.info("HomeAssistant version information cleared")
+        
+        if progress_callback:
+            progress_callback(60, "Clearing OpenHAB version information...")
+        
+        # Clear OpenHAB version information
+        if hasattr(supervisor.system_info, 'openhabinfo'):
+            openhab_info = supervisor.system_info.openhabinfo
+            openhab_info.version = ""
+            # Reset installation status
+            openhab_info.installed = False
+            openhab_info.enabled = False
+            logger.info("OpenHAB version information cleared")
+        
+        if progress_callback:
+            progress_callback(90, "Version information cleanup completed...")
+        
+        logger.info("Software update notification processed - all version information cleared")
+        
+        if complete_callback:
+            complete_callback(True, "Version information cleared successfully")
+        if progress_callback:
+            progress_callback(100, "Software update notification completed successfully")
+        
+    except Exception as e:
+        error_msg = f"Error during version information cleanup: {e}"
+        logger.error(error_msg, exc_info=True)
+        if complete_callback:
+            complete_callback(False, error_msg)

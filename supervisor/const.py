@@ -2,7 +2,7 @@
 
 """Constants."""
 
-VERSION = "v1.0.4"
+VERSION = "v1.0.6"
 
 VERSION_URL = "https://raw.githubusercontent.com/thirdreality/LinuxBox-Installer/refs/heads/main/version.json"
 DOWNLOAD_BASE_URL = "https://github.com/thirdreality/LinuxBox-Installer/releases/download"
@@ -22,7 +22,7 @@ LINUXBOX_BUTTON_CHIP=0
 LINUXBOX_BUTTON_LINE=26
 
 DEVICE_MODEL_NAME="LinuxBox Dev Edition"
-DEVICE_BUILD_NUMBER="20250624-0000"
+DEVICE_BUILD_NUMBER="20250626-0000"
 
 # BLE GATT Server Configuration
 # 'auto' - Automatically detect whether there is an external service
@@ -36,4 +36,13 @@ EXTERNAL_GATT_BINARY_PATH = "/usr/local/bin/btgatt-config-server"
 
 # GATT server timeout configuration (minutes)
 GATT_SERVER_TIMEOUT_MINUTES = 3
+
+# Backup storage configuration
+# 'internal' - Use internal storage path
+# 'external' - Use external storage path (default)
+BACKUP_STORAGE_MODE = "external"
+
+# Backup storage paths
+BACKUP_INTERNAL_PATH = "/lib/thirdreality/backup"
+BACKUP_EXTERNAL_PATH = "/mnt/R3Backup"
 
