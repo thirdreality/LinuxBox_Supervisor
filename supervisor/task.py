@@ -6,6 +6,7 @@ from enum import Enum
 import subprocess
 from .utils import util
 from .utils import zigbee_util, setting_util, thread_util
+from .websocket_manager import WebSocketManager
 
 
 class TaskStatus(Enum):
@@ -152,3 +153,122 @@ class TaskManager:
 
         task()
         return None
+
+    def start_zha_channel_switch(self, channel: int):
+        """Start ZHA channel switching task"""
+        return self._start_task("zigbee", f"switch_channel_{channel}", self._run_zha_channel_switch, channel)
+
+    def start_thread_channel_switch(self, channel: int):
+        """Start Thread channel switching task"""
+        return self._start_task("thread", f"switch_channel_{channel}", self._run_thread_channel_switch, channel)
+
+    def start_zha_firmware_update_notification(self):
+        """Start ZHA firmware update notification task"""
+        return self._start_task("zigbee", "firmware_update_notify", self._run_zha_firmware_update_notification)
+
+    def _run_zha_channel_switch(self, channel: int, progress_callback=None, complete_callback=None):
+        """Run ZHA channel switching using WebSocket manager"""
+        try:
+            if progress_callback:
+                progress_callback(10, f"Initializing ZHA channel switch to {channel}")
+            
+            ws_manager = WebSocketManager()
+            
+            if progress_callback:
+                progress_callback(50, f"Switching ZHA channel to {channel}")
+            
+            success = ws_manager.switch_zha_channel_sync(channel)
+            
+            if success:
+                message = f"Successfully switched ZHA channel to {channel}"
+                if progress_callback:
+                    progress_callback(100, message)
+                if complete_callback:
+                    complete_callback(True, message)
+            else:
+                message = f"Failed to switch ZHA channel to {channel}"
+                if progress_callback:
+                    progress_callback(100, message)
+                if complete_callback:
+                    complete_callback(False, message)
+                    
+        except Exception as e:
+            error_msg = f"Error during ZHA channel switch: {e}"
+            self.logger.error(error_msg)
+            if progress_callback:
+                progress_callback(100, error_msg)
+            if complete_callback:
+                complete_callback(False, error_msg)
+
+    def _run_thread_channel_switch(self, channel: int, progress_callback=None, complete_callback=None):
+        """Run Thread channel switching using WebSocket manager"""
+        try:
+            if progress_callback:
+                progress_callback(10, f"Initializing Thread channel switch to {channel}")
+            
+            ws_manager = WebSocketManager()
+            
+            if progress_callback:
+                progress_callback(50, f"Switching Thread channel to {channel}")
+            
+            success = ws_manager.switch_thread_channel_sync(channel)
+            
+            if success:
+                message = f"Successfully switched Thread channel to {channel}"
+                if progress_callback:
+                    progress_callback(100, message)
+                if complete_callback:
+                    complete_callback(True, message)
+            else:
+                message = f"Failed to switch Thread channel to {channel}"
+                if progress_callback:
+                    progress_callback(100, message)
+                if complete_callback:
+                    complete_callback(False, message)
+                    
+        except Exception as e:
+            error_msg = f"Error during Thread channel switch: {e}"
+            self.logger.error(error_msg)
+            if progress_callback:
+                progress_callback(100, error_msg)
+            if complete_callback:
+                complete_callback(False, error_msg)
+
+    def _run_zha_firmware_update_notification(self, progress_callback=None, complete_callback=None):
+        """Run ZHA firmware update notification using WebSocket manager"""
+        try:
+            if progress_callback:
+                progress_callback(10, "Initializing ZHA firmware update notification")
+            
+            ws_manager = WebSocketManager()
+            
+            if progress_callback:
+                progress_callback(30, "Getting ZHA devices list")
+            
+            devices = ws_manager.get_zha_devices_sync()
+            
+            if progress_callback:
+                progress_callback(50, f"Found {len(devices)} ZHA devices, sending firmware update notifications")
+            
+            success = ws_manager.notify_zha_devices_firmware_update_sync()
+            
+            if success:
+                message = f"Successfully sent firmware update notifications to {len(devices)} ZHA devices"
+                if progress_callback:
+                    progress_callback(100, message)
+                if complete_callback:
+                    complete_callback(True, message)
+            else:
+                message = f"Failed to send firmware update notifications to ZHA devices"
+                if progress_callback:
+                    progress_callback(100, message)
+                if complete_callback:
+                    complete_callback(False, message)
+                    
+        except Exception as e:
+            error_msg = f"Error during ZHA firmware update notification: {e}"
+            self.logger.error(error_msg)
+            if progress_callback:
+                progress_callback(100, error_msg)
+            if complete_callback:
+                complete_callback(False, error_msg)

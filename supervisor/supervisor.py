@@ -128,6 +128,30 @@ class Supervisor:
             except Exception as e:
                 logger.error(f"Zigbee pairing start failed: {e}")
                 return f"Zigbee pairing start failed: {e}"
+        elif cmd_lower.startswith("channel_"):
+            # Handle ZHA channel switching: channel_11, channel_12, etc.
+            try:
+                channel_str = cmd_lower.replace("channel_", "")
+                channel = int(channel_str)
+                if 11 <= channel <= 26:
+                    self.task_manager.start_zha_channel_switch(channel)
+                    logger.info(f"ZHA channel switch to {channel} started")
+                    return f"ZHA channel switch to {channel} started"
+                else:
+                    return f"Invalid ZHA channel: {channel}. Must be between 11-26"
+            except ValueError:
+                return f"Invalid ZHA channel format: {cmd}"
+            except Exception as e:
+                logger.error(f"ZHA channel switch failed: {e}")
+                return f"ZHA channel switch failed: {e}"
+        elif cmd_lower == "firmware_update":
+            try:
+                self.task_manager.start_zha_firmware_update_notification()
+                logger.info("ZHA firmware update notification started")
+                return "ZHA firmware update notification started"
+            except Exception as e:
+                logger.error(f"ZHA firmware update notification failed: {e}")
+                return f"ZHA firmware update notification failed: {e}"
         else:
             logger.warning(f"Unknown Zigbee command: {cmd}")
             return f"Unknown Zigbee command: {cmd}"
@@ -161,6 +185,22 @@ class Supervisor:
             except Exception as e:
                 logger.error(f"Thread support disable fail: {e}")
                 return f"Thread support disable fail: {e}"
+        elif cmd.lower().startswith("channel_"):
+            # Handle Thread channel switching: channel_11, channel_12, etc.
+            try:
+                channel_str = cmd.lower().replace("channel_", "")
+                channel = int(channel_str)
+                if 11 <= channel <= 26:
+                    self.task_manager.start_thread_channel_switch(channel)
+                    logger.info(f"Thread channel switch to {channel} started")
+                    return f"Thread channel switch to {channel} started"
+                else:
+                    return f"Invalid Thread channel: {channel}. Must be between 11-26"
+            except ValueError:
+                return f"Invalid Thread channel format: {cmd}"
+            except Exception as e:
+                logger.error(f"Thread channel switch failed: {e}")
+                return f"Thread channel switch failed: {e}"
 
 
     def set_setting_command(self, cmd):

@@ -13,6 +13,7 @@ import urllib.error
 from supervisor.hardware import LedState
 import threading
 import time
+from supervisor.token_manager import TokenManager
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -959,9 +960,9 @@ def run_mqtt_pairing(progress_callback=None, led_controller=None) -> bool:
 def run_zha_pairing(progress_callback=None, led_controller=None) -> bool:
     """
     Start the ZHA pairing process by calling the Home Assistant API.
-    Reads Bearer token from /etc/automation-robot.conf.
+    Uses TokenManager to get the Bearer token.
     """
-    token_file = "/etc/automation-robot.conf"
+    token_manager = TokenManager()
     bearer_token = None
 
     def _call_progress(percent, message):
@@ -972,22 +973,16 @@ def run_zha_pairing(progress_callback=None, led_controller=None) -> bool:
     try:
         _call_progress(10, "Starting ZHA pairing process.")
 
-        # 1. Read Bearer token
-        _call_progress(20, f"Reading token from {token_file}.")
-        if not os.path.exists(token_file):
-            err_msg = f"Token file not found: {token_file}"
-            logging.error(err_msg)
-            _call_progress(100, err_msg)
-            return False
-        with open(token_file, "r", encoding="utf-8") as f:
-            bearer_token = f.read().strip()
+        # 1. Get Bearer token using TokenManager
+        _call_progress(20, "Getting token from TokenManager.")
+        bearer_token = token_manager.get_long_lived_access_tokens()
         
         if not bearer_token:
-            err_msg = f"Bearer token is empty in {token_file}."
+            err_msg = "Failed to get Bearer token from TokenManager."
             logging.error(err_msg)
             _call_progress(100, err_msg)
             return False
-        _call_progress(25, "Bearer token read successfully.")
+        _call_progress(25, "Bearer token retrieved successfully.")
 
         # 2. Prepare and send the request
         _call_progress(40, "Preparing ZHA pairing request.")
