@@ -356,6 +356,13 @@ class SystemInfoUpdater:
             ha_info.installed = bool(ha_info.core and ha_info.python)
             ha_info.enabled = ha_info.installed
 
+            # 设置LED
+            if hasattr(self.supervisor, 'set_led_state'):
+                if ha_info.installed:
+                    self.logger.info("Software installed, clear LED SYS_SYSTEM_CORRUPTED")
+                    self.supervisor.clear_led_state(LedState.SYS_SYSTEM_CORRUPTED)
+
+
         # OpenHAB
         openhab_info = getattr(sys_info, 'openhabinfo', None)
         if openhab_info:

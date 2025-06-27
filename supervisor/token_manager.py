@@ -35,25 +35,26 @@ class TokenManager:
             if not os.path.exists(self.config_file):
                 self.logger.error(f"Configuration file not found: {self.config_file}")
                 return None
-                
             with open(self.config_file, 'r') as f:
                 config_content = f.read()
-                
-            # Parse the configuration file to extract the token
-            # Assuming the token is stored in a specific format
-            # You may need to adjust this parsing logic based on your actual config format
             lines = config_content.split('\n')
             for line in lines:
                 line = line.strip()
+                if not line:
+                    continue
                 if line.startswith('token=') or line.startswith('access_token='):
                     token = line.split('=', 1)[1].strip()
                     if token:
-                        self.logger.info("Successfully retrieved long-lived access token")
+                        self.logger.info("Successfully retrieved long-lived access token (with prefix)")
                         return token
-                        
+            # 如果没有前缀，直接取第一行非空内容
+            for line in lines:
+                line = line.strip()
+                if line:
+                    self.logger.info("Successfully retrieved long-lived access token (no prefix)")
+                    return line
             self.logger.warning("No token found in configuration file")
             return None
-            
         except Exception as e:
             self.logger.error(f"Error reading long-lived access token: {e}")
             return None

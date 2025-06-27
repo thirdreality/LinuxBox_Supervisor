@@ -310,6 +310,50 @@ class WebSocketManager:
             self.logger.error(f"Error getting Thread devices: {e}")
             return []
 
+    async def get_zha_devices_with_token(self, token: str) -> List[Dict[str, Any]]:
+        """
+        Get all ZHA devices using a specified access token
+        Args:
+            token: HomeAssistant access token (web token or long-lived token)
+        Returns:
+            List of ZHA devices or empty list if failed
+        """
+        try:
+            uri = f"ws://{self.host}:{self.port}/api/websocket"
+            session = aiohttp.ClientSession()
+            websocket = await session.ws_connect(uri)
+            try:
+                # Wait for auth required
+                auth_msg = await websocket.receive_json()
+                if auth_msg.get('type') != 'auth_required':
+                    self.logger.error(f"Unexpected message type: {auth_msg.get('type')}")
+                    await websocket.close()
+                    await session.close()
+                    return []
+                # Send authentication
+                await websocket.send_json({'type': 'auth', 'access_token': token})
+                result = await websocket.receive_json()
+                if result.get('type') != 'auth_ok':
+                    self.logger.error(f"Authentication failed: {result}")
+                    await websocket.close()
+                    await session.close()
+                    return []
+                # Send ZHA devices request
+                request_id = self._get_next_request_id()
+                request = {'id': request_id, 'type': 'zha/devices'}
+                await websocket.send_json(request)
+                response = await websocket.receive_json()
+                if not response or response.get('success') is False:
+                    self.logger.error("Failed to get ZHA devices")
+                    return []
+                return response.get('result', [])
+            finally:
+                await websocket.close()
+                await session.close()
+        except Exception as e:
+            self.logger.error(f"Error getting ZHA devices with token: {e}")
+            return []
+
     def run_async_task(self, coro):
         """Helper method to run async tasks from sync context"""
         try:
