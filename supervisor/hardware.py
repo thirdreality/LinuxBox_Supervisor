@@ -38,16 +38,19 @@ class LedState(Enum):
     STARTUP = "startup" # 白灯
     STARTUP_OFF = "startup_off" # 白灯    
 
-    # 系统级状态（高优先级）
+     # 系统级状态（高优先级）
+    SYS_FIRMWARE_UPDATING = "sys_firmware_updating"  # 设备升级中: 绿色类呼吸灯效果 (1Hz pulse)
+    SYS_EVENT_OFF = "sys_event_off" #系统操作完成
+
+    # 系统级状态（中优先级）
     SYS_WIFI_CONFIG_PENDING = "sys_wifi_config_pending"  # 配网模式（待配网）: 黄色慢闪（0.5Hz）
     SYS_WIFI_CONFIGURING = "sys_wifi_configuring"  # 配网中（进行连接）: 黄色快闪（3Hz）
     SYS_WIFI_CONFIG_SUCCESS = "sys_wifi_config_success"  # 配网成功: 黄色常亮1秒后转正常运行
     SYS_WIFI_CONFIG_STOPPED = "sys_wifi_config_stopped" # 配网停止: 
 
-    # 系统级状态（中优先级）
+    # 系统级状态（次低优先级）
     SYS_DEVICE_PAIRING = "sys_device_pairing"  # 添加子设备（扫描中）: 绿色慢闪（1Hz）
-    SYS_FIRMWARE_UPDATING = "sys_firmware_updating"  # 设备升级中: 绿色类呼吸灯效果 (1Hz pulse)
-    SYS_EVENT_OFF = "sys_event_off" #系统操作完成
+    SYS_DEVICE_PAIRED = "sys_device_paired"  # 添加子设备（扫描停止）: 绿色常亮
 
     # 系统级运行态
     SYS_SYSTEM_CORRUPTED = "sys_system_corrupted"  # 系统未安装（如系统损坏）: 红色慢闪（0.5Hz）
@@ -68,7 +71,7 @@ class GpioLed:
             'BLUE': {'chip': LINUXBOX_LED_B_CHIP, 'line': LINUXBOX_LED_B_LINE}
         }
         
-        # Define state groups by five-tier priority (shared by set_led_state and clear_led_state)
+        # Define state groups by six-tier priority (shared by set_led_state and clear_led_state)
         self.user_event_states = [ # Tier 1
             LedState.USER_EVENT_RED, LedState.USER_EVENT_BLUE,
             LedState.USER_EVENT_YELLOW, LedState.USER_EVENT_GREEN,
@@ -78,15 +81,17 @@ class GpioLed:
         self.system_critical_states = [ # Tier 2
             LedState.REBOOT, LedState.STARTUP, LedState.STARTUP_OFF, LedState.FACTORY_RESET
         ]
-        self.system_high_priority_states = [ # Tier 3 (WiFi config operations)
+        self.system_high_priority_states = [ # Tier 3 (Firmware update operations)
+            LedState.SYS_FIRMWARE_UPDATING, LedState.SYS_EVENT_OFF
+        ]
+        self.system_medium_priority_states = [ # Tier 4 (WiFi config operations)
             LedState.SYS_WIFI_CONFIG_PENDING, LedState.SYS_WIFI_CONFIGURING,
             LedState.SYS_WIFI_CONFIG_SUCCESS, LedState.SYS_WIFI_CONFIG_STOPPED
         ]
-        self.system_medium_priority_states = [ # Tier 4 (Device pairing, firmware update)
-            LedState.SYS_DEVICE_PAIRING, LedState.SYS_FIRMWARE_UPDATING,
-            LedState.SYS_EVENT_OFF
+        self.system_low_priority_states = [ # Tier 5 (Device pairing operations)
+            LedState.SYS_DEVICE_PAIRING, LedState.SYS_DEVICE_PAIRED
         ]
-        self.general_operational_states = [ # Tier 5
+        self.general_operational_states = [ # Tier 6
             LedState.SYS_ERROR_CONDITION, LedState.SYS_OFFLINE,
             LedState.SYS_SYSTEM_CORRUPTED, LedState.SYS_NORMAL_OPERATION
         ]
@@ -94,12 +99,13 @@ class GpioLed:
         # Thread control
         self.led_thread = None
         self.timer_thread = None
-        # Store the current LED state using a five-tier priority system
+        # Store the current LED state using a six-tier priority system
         self.user_event_priority_state = None  # Tier 1 (Highest)
         self.system_critical_priority_state = LedState.STARTUP  # Tier 2
-        self.system_high_priority_state = None  # Tier 3 (WiFi config operations)
-        self.system_medium_priority_state = None  # Tier 4 (Device pairing, firmware update)
-        self.general_operational_priority_state = None  # Tier 5
+        self.system_high_priority_state = None  # Tier 3 (Firmware update operations)
+        self.system_medium_priority_state = None  # Tier 4 (WiFi config operations)
+        self.system_low_priority_state = None  # Tier 5 (Device pairing operations)
+        self.general_operational_priority_state = None  # Tier 6
         
         # Determine initial current_led_state based on priorities
         # At init, system_critical_priority_state is set to STARTUP
@@ -111,11 +117,13 @@ class GpioLed:
             self.current_led_state = self.system_high_priority_state
         elif self.system_medium_priority_state is not None:
             self.current_led_state = self.system_medium_priority_state
+        elif self.system_low_priority_state is not None:
+            self.current_led_state = self.system_low_priority_state
         elif self.general_operational_priority_state is not None:
             self.current_led_state = self.general_operational_priority_state
         else:
             # Fallback, though STARTUP should always be active initially
-            self.current_led_state = LedState.SYS_NORMAL_OPERATION 
+            self.current_led_state = LedState.SYS_NORMAL_OPERATION
 
         # self.next_led_state = None # Removed as it's replaced by priority states
         # Add a lock for thread safety
@@ -257,19 +265,26 @@ class GpioLed:
                     if self.system_critical_priority_state != state:
                         self.system_critical_priority_state = state
             elif state in self.system_high_priority_states:
-                if state == LedState.SYS_WIFI_CONFIG_STOPPED:
+                if state == LedState.SYS_EVENT_OFF:
                     if self.system_high_priority_state is not None:
                         self.system_high_priority_state = None
                 else:    
                     if self.system_high_priority_state != state:
                         self.system_high_priority_state = state
             elif state in self.system_medium_priority_states:
-                if state == LedState.SYS_EVENT_OFF:
+                if state == LedState.SYS_WIFI_CONFIG_STOPPED:
                     if self.system_medium_priority_state is not None:
                         self.system_medium_priority_state = None
                 else:    
                     if self.system_medium_priority_state != state:
                         self.system_medium_priority_state = state
+            elif state in self.system_low_priority_states:
+                if state == LedState.SYS_DEVICE_PAIRED:
+                    if self.system_low_priority_state is not None:
+                        self.system_low_priority_state = None
+                else:    
+                    if self.system_low_priority_state != state:
+                        self.system_low_priority_state = state
             elif state in self.general_operational_states:
                 _general_op_priorities = {
                     LedState.SYS_SYSTEM_CORRUPTED: 0,
@@ -417,6 +432,8 @@ class GpioLed:
                     self.green()
                 else:
                     self.off()
+            case LedState.SYS_DEVICE_PAIRED: # Green solid (device pairing stopped)
+                self.green()
             case LedState.SYS_NORMAL_OPERATION: # Blue solid
                 self.blue()
             case LedState.SYS_ERROR_CONDITION: # Red slow flash (1Hz)
@@ -497,6 +514,13 @@ class GpioLed:
                     state_cleared = True
                 else:
                     self.logger.debug(f"System medium priority state is {self.system_medium_priority_state}, not {state}, no clearing needed")
+            elif state in self.system_low_priority_states:
+                if self.system_low_priority_state == state:
+                    self.system_low_priority_state = None
+                    self.logger.info(f"Cleared system low priority state (was {state})")
+                    state_cleared = True
+                else:
+                    self.logger.debug(f"System low priority state is {self.system_low_priority_state}, not {state}, no clearing needed")
             elif state in self.general_operational_states:
                 if self.general_operational_priority_state == state:
                     self.general_operational_priority_state = None
@@ -533,17 +557,19 @@ class GpioLed:
 
     def _recalculate_current_led_state(self):
         """Recalculate current LED state based on priority levels"""
-        new_current_led_state = LedState.SYS_NORMAL_OPERATION # Default fallback (Tier 5)
+        new_current_led_state = LedState.SYS_NORMAL_OPERATION # Default fallback (Tier 6)
 
         if self.user_event_priority_state is not None: # Tier 1
             new_current_led_state = self.user_event_priority_state
         elif self.system_critical_priority_state is not None: # Tier 2
             new_current_led_state = self.system_critical_priority_state
-        elif self.system_high_priority_state is not None: # Tier 3 (WiFi config)
+        elif self.system_high_priority_state is not None: # Tier 3 (Firmware update)
             new_current_led_state = self.system_high_priority_state
-        elif self.system_medium_priority_state is not None: # Tier 4 (Device pairing, firmware)
+        elif self.system_medium_priority_state is not None: # Tier 4 (WiFi config)
             new_current_led_state = self.system_medium_priority_state
-        elif self.general_operational_priority_state is not None: # Tier 5
+        elif self.system_low_priority_state is not None: # Tier 5 (Device pairing)
+            new_current_led_state = self.system_low_priority_state
+        elif self.general_operational_priority_state is not None: # Tier 6
             new_current_led_state = self.general_operational_priority_state
         
         return new_current_led_state
@@ -560,6 +586,8 @@ class GpioLed:
                 calculated_reset_delay = 0.5 
             case LedState.SYS_DEVICE_PAIRING:
                 calculated_reset_delay = 0.5    # 1Hz
+            case LedState.SYS_DEVICE_PAIRED:
+                calculated_reset_delay = 0.5    # Solid green, allow updates
             case LedState.SYS_NORMAL_OPERATION:
                 calculated_reset_delay = 0.5  # Solid, allow updates
             case LedState.SYS_ERROR_CONDITION:

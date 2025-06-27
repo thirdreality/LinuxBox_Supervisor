@@ -893,8 +893,7 @@ def _start_pairing_led_timer(led_controller, duration):
         logging.info(f"Zigbee pairing LED timer started for {duration} seconds.")
         time.sleep(duration)
         # Check if the state is still pairing before turning it off
-        if led_controller.get_led_state() == LedState.SYS_DEVICE_PAIRING:
-            led_controller.set_led_state(LedState.SYS_EVENT_OFF)
+        led_controller.set_led_state(LedState.SYS_DEVICE_PAIRED)
         pairing_state.set_pairing(False)
         logging.info("Zigbee pairing timer finished and state reset.")
 
@@ -1088,5 +1087,5 @@ def run_zigbee_pairing(progress_callback=None, complete_callback=None, led_contr
         if not pairing_initiated_successfully:
             pairing_state.set_pairing(False)
             if led_controller:
-                led_controller.set_led_state(LedState.SYS_EVENT_OFF)
+                led_controller.set_led_state(LedState.SYS_DEVICE_PAIRED)
             logging.info("Pairing initiation failed, state reset.")
