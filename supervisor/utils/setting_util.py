@@ -400,15 +400,15 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
         
         # Check if restore record exists for the selected backup file
         backup_filename = os.path.basename(selected_backup_filepath)
-        if not _check_restore_record_exists(backup_filename):
-            error_msg = f"No restore record found for backup file {backup_filename}. Restore operation cancelled."
+        if _check_restore_record_exists(backup_filename):
+            error_msg = f"Restore record already exists for backup file {backup_filename}. This backup has already been restored. Restore operation cancelled."
             logging.error(error_msg)
             if complete_callback:
                 complete_callback(False, error_msg)
-            _call_progress(100, "Restore cancelled - no record found.")
+            _call_progress(100, "Restore cancelled - backup already restored.")
             return
-        
-        _call_progress(12, f"Restore record verified for {backup_filename}")
+
+        _call_progress(12, f"No restore record found for {backup_filename}, proceeding with restore")
 
         with tempfile.TemporaryDirectory(prefix="restore_temp_") as temp_extraction_dir:
             _call_progress(15, f"Created temporary directory for extraction: {temp_extraction_dir}")

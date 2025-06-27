@@ -19,6 +19,7 @@ import sys
 import logging
 import mimetypes
 import threading
+import glob
 from concurrent.futures import ThreadPoolExecutor
 
 from .utils import util
@@ -785,11 +786,18 @@ class SupervisorHTTPServer:
                             # Default to internal path for unknown modes
                             backup_dir = const.BACKUP_INTERNAL_PATH
                         
-                        if not os.path.exists(backup_dir):
-                            os.makedirs(backup_dir)
-
                         if action == "backup":
                             self._logger.info("[Setting] Backup requested")
+                            
+                            # Check if USB storage is mounted at /mnt
+                            if not os.path.ismount("/mnt"):
+                                self._set_headers(status_code=500)
+                                self.wfile.write(json.dumps({"success": False, "error": "USB Storage missing"}).encode())
+                                return
+                            
+                            if not os.path.exists(backup_dir):
+                                os.makedirs(backup_dir)
+
                             if self._supervisor.start_setting_backup():
                                 self._set_headers()
                                 self.wfile.write(json.dumps({"success": True, "msg": "Backup process started successfully."}).encode())
@@ -798,9 +806,31 @@ class SupervisorHTTPServer:
                                 self.wfile.write(json.dumps({"success": False, "error": "Failed to start backup process."}).encode())
 
                         elif action == "restore":
+                            # Check if USB storage is mounted at /mnt
+                            if not os.path.ismount("/mnt"):
+                                self._set_headers(status_code=500)
+                                self.wfile.write(json.dumps({"success": False, "error": "USB Storage missing"}).encode())
+                                return
+                            
                             timestamp = param_dict.get("file")
+                            
+                            # Define restore record directory for both branches
+                            restore_record_dir = "/usr/lib/thirdreality/conf"
+                            
                             if not timestamp:
                                 # No specific file, restore from latest backup
+                                # Remove all restore records to allow user-initiated restore operation
+                                restore_record_pattern = os.path.join(restore_record_dir, "restore_record_*.json")
+                                removed_count = 0
+                                for record_file in glob.glob(restore_record_pattern):
+                                    try:
+                                        os.remove(record_file)
+                                        self._logger.info(f"Removed restore record: {record_file}")
+                                        removed_count += 1
+                                    except Exception as e:
+                                        self._logger.warning(f"Failed to remove restore record {record_file}: {e}")
+                                self._logger.info(f"Removed {removed_count} restore record(s) for latest backup restore")
+                                
                                 if self._supervisor.start_setting_restore():
                                     self._set_headers()
                                     self.wfile.write(json.dumps({"success": True, "msg": "Restore process started successfully."}).encode())
@@ -818,6 +848,18 @@ class SupervisorHTTPServer:
                                 return
                             
                             self._logger.info(f"[Setting] Restore from {full_filename} (timestamp: {timestamp}) requested")
+                            
+                            # Remove restore record to allow user-initiated restore operation
+                            restore_record_pattern = os.path.join(restore_record_dir, f"restore_record_{timestamp}.json")
+                            if os.path.exists(restore_record_pattern):
+                                try:
+                                    os.remove(restore_record_pattern)
+                                    self._logger.info(f"Removed existing restore record: {restore_record_pattern}")
+                                except Exception as e:
+                                    self._logger.warning(f"Failed to remove restore record {restore_record_pattern}: {e}")
+                            else:
+                                self._logger.info(f"No existing restore record found for {timestamp}")
+                            
                             # Pass the timestamp to the restore function
                             if self._supervisor.start_setting_restore(timestamp):
                                 self._set_headers()
@@ -825,7 +867,7 @@ class SupervisorHTTPServer:
                             else:
                                 self._set_headers(status_code=500)
                                 self.wfile.write(json.dumps({"success": False, "error": "Failed to start restore process."}).encode())
-                        
+
                         else:
                             self._set_headers(status_code=400)
                             self.wfile.write(json.dumps({"success": False, "error": "Invalid action for setting command."}).encode())
@@ -875,7 +917,6 @@ class SupervisorHTTPServer:
                     if not service_name and 'param' in params:
                         try:
                             param_data_base64 = params['param']
-                            import urllib.parse, base64
                             param_data_url_decoded = urllib.parse.unquote(param_data_base64)
                             param_data_json = base64.b64decode(param_data_url_decoded).decode()
                             self._logger.info(f"param_data (decoded): {param_data_json}")
