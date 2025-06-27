@@ -334,6 +334,9 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
             
             // 发送成功LED指令
             send_socket_command(LED_SYS_WIFI_SUCCESS);
+
+            // 确保网络配置被及时保护
+            system("sync");         
             
             snprintf(response, response_len, "{\"ip\":\"%s\"}", current_ip);
             
@@ -482,6 +485,11 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
             
             // 4. 清理旧的连接
             cleanup_old_connections(ssid);
+
+            // 5. 确保网络配置被及时保护
+            printf("[WIFI] Executing sync to protect network configuration...\n");
+            system("sync");
+            printf("[WIFI] Sync command executed after successful WiFi configuration.\n");            
             
             snprintf(response, response_len, "{\"ip\":\"%s\"}", ip);
             
@@ -2225,7 +2233,7 @@ int main(int argc, char *argv[])
 	}
 
 	printf("[MAIN] === GATT WiFi Configuration Server Starting ===\n");
-	printf("[MAIN] Version: v1.0.2\n");
+	printf("[MAIN] Version: v1.0.4\n");
 	printf("[MAIN] Service UUID: %s\n", LINUXBOX_SERVICE_UUID_STR);
 	printf("[MAIN] Characteristic UUID: %s\n", WIFI_CONFIG_CHAR_UUID_STR);
 	printf("[MAIN] Timeout: %d seconds\n", user_timeout_seconds);

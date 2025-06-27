@@ -168,6 +168,11 @@ def perform_reboot():
             subprocess.run(["systemctl", "stop", "docker"], check=True)
         except subprocess.CalledProcessError:
             logging.info("Docker service not found or already stopped, proceeding with reboot")
+        
+        # Ensure all data is flushed to disk before reboot
+        subprocess.run(["sync"], check=True)
+        logging.info("Sync command executed before reboot.")
+        
         subprocess.run(["reboot"], check=True)
         return True
     except Exception as e:
@@ -185,6 +190,11 @@ def perform_power_off():
         """
     try:
         subprocess.run(["systemctl", "stop", "docker"], check=True)
+        
+        # Ensure all data is flushed to disk before power off
+        subprocess.run(["sync"], check=True)
+        logging.info("Sync command executed before power off.")
+        
         subprocess.run(["poweroff"], check=True)
         return True
     except Exception as e:
@@ -193,6 +203,10 @@ def perform_power_off():
 
 def perform_factory_reset():
     try:
+        # Ensure all data is flushed to disk before factory reset
+        subprocess.run(["sync"], check=True)
+        logging.info("Sync command executed before factory reset.")
+        
         subprocess.run(["/lib/armbian/factory-reset.sh"], check=True)
         return True
     except Exception as e:

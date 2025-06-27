@@ -31,6 +31,9 @@ BACKUP_DIRS_CONFIG = [
     ("/etc/mosquitto", "mosquitto_config")
 ]
 
+# Configuration directory for restore records
+RESTORE_RECORD_DIR = "/usr/lib/thirdreality/conf"
+
 logger = logging.getLogger("Supervisor")
 
 def _check_external_storage_available():
@@ -262,11 +265,62 @@ def run_setting_backup(progress_callback=None, complete_callback=None):
         
         logging.info("Service restoration phase complete.")
         
+        # Ensure all data is flushed to disk after successful backup
+        subprocess.run(["sync"])
+        logging.info("Sync command executed after successful backup completion.")
+        
         # Call completion callback and final progress only after all work is done
         if complete_callback:
             complete_callback(True, "success")
         _call_progress(100, "System settings backup completed successfully.")
 
+
+def _get_restore_record_path(backup_filename):
+    """
+    Generate restore record file path based on backup filename
+    """
+    # Extract timestamp from backup filename (setting_YYYYMMDDHHMMSS.tar.gz)
+    if backup_filename.startswith("setting_") and backup_filename.endswith(".tar.gz"):
+        timestamp = backup_filename.replace("setting_", "").replace(".tar.gz", "")
+        record_filename = f"restore_record_{timestamp}.json"
+    else:
+        # Fallback: use the full filename as identifier
+        safe_filename = backup_filename.replace(".", "_").replace("-", "_")
+        record_filename = f"restore_record_{safe_filename}.json"
+    
+    return os.path.join(RESTORE_RECORD_DIR, record_filename)
+
+def _check_restore_record_exists(backup_filename):
+    """
+    Check if restore record exists for the given backup file
+    """
+    record_path = _get_restore_record_path(backup_filename)
+    return os.path.exists(record_path)
+
+def _create_restore_record(backup_filename, success=True):
+    """
+    Create restore record file after successful restore
+    """
+    try:
+        # Ensure record directory exists
+        os.makedirs(RESTORE_RECORD_DIR, exist_ok=True)
+        
+        record_path = _get_restore_record_path(backup_filename)
+        record_data = {
+            "backup_filename": backup_filename,
+            "restore_timestamp": datetime.now().isoformat(),
+            "restore_success": success,
+            "restore_storage_mode": BACKUP_STORAGE_MODE
+        }
+        
+        with open(record_path, 'w') as f:
+            json.dump(record_data, f, indent=2)
+        
+        logging.info(f"Restore record created: {record_path}")
+        return True
+    except Exception as e:
+        logging.error(f"Failed to create restore record: {e}")
+        return False
 
 def run_setting_restore(backup_file=None, progress_callback=None, complete_callback=None):
     """
@@ -344,7 +398,17 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
                     _call_progress(100, "No 'setting_*.tar.gz' backup files found to restore.")
                     return
         
-        # _call_progress(10, f"Selected backup for restore: {os.path.basename(selected_backup_filepath)}") # This line is now covered above
+        # Check if restore record exists for the selected backup file
+        backup_filename = os.path.basename(selected_backup_filepath)
+        if not _check_restore_record_exists(backup_filename):
+            error_msg = f"No restore record found for backup file {backup_filename}. Restore operation cancelled."
+            logging.error(error_msg)
+            if complete_callback:
+                complete_callback(False, error_msg)
+            _call_progress(100, "Restore cancelled - no record found.")
+            return
+        
+        _call_progress(12, f"Restore record verified for {backup_filename}")
 
         with tempfile.TemporaryDirectory(prefix="restore_temp_") as temp_extraction_dir:
             _call_progress(15, f"Created temporary directory for extraction: {temp_extraction_dir}")
@@ -543,6 +607,14 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
                 logging.info("Service restoration based on backup service states complete.")
             else:
                 logging.info("Service restoration based on current service states complete (no backup states found).")
+            
+            # Create restore record after successful restore
+            backup_filename = os.path.basename(selected_backup_filepath)
+            _create_restore_record(backup_filename, True)
+            
+            # Ensure all data is flushed to disk after successful restore
+            subprocess.run(["sync"])
+            logging.info("Sync command executed after successful restore completion.")
             
             # Call completion callback and final progress only after all work is done
             if complete_callback:

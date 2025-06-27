@@ -183,6 +183,14 @@ class WifiManager:
                 self.delete_other_connections(ssid)
                 if self.supervisor and hasattr(self.supervisor, 'led'):
                     self.supervisor.led.set_led_state(LedState.SYS_WIFI_CONFIG_SUCCESS)
+                
+                # Ensure network configuration is flushed to disk after successful WiFi config
+                try:
+                    subprocess.run(["sync"], check=True)
+                    logging.info("Sync command executed after successful WiFi configuration.")
+                except Exception as e:
+                    logging.warning(f"Failed to execute sync after WiFi config: {e}")
+                
                 return 0
             time.sleep(1)
         
