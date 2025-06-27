@@ -258,6 +258,12 @@ class SystemInfoUpdater:
 
             ha_info.enabled = ha_info.installed
             
+            # 设置LED
+            if hasattr(self.supervisor, 'set_led_state'):
+                if not ha_info.installed:
+                    self.logger.info("Software not fully installed, set LED SYS_SYSTEM_CORRUPTED")
+                    self.supervisor.set_led_state(LedState.SYS_SYSTEM_CORRUPTED)
+
             # Get device memory size
             sys_info.memory_size = get_memory_size()
 
@@ -326,25 +332,34 @@ class SystemInfoUpdater:
         sys_info = self.supervisor.system_info
         # HomeAssistant
         ha_info = getattr(sys_info, 'hainfo', None)
-        if ha_info:
+        if ha_info:           
+            # Query thirdreality-hacore-config package version
+            ha_info.config = get_package_version("thirdreality-hacore-config")
+            self.logger.info(f"thirdreality-hacore-config version: {ha_info.config}")
+            
+            # Query thirdreality-python3 package version
+            ha_info.python = get_package_version("thirdreality-python3")
+            self.logger.info(f"thirdreality-python3 version: {ha_info.python}")
+            
+            # Query thirdreality-hacore package version
+            ha_info.core = get_package_version("thirdreality-hacore")
+            self.logger.info(f"thirdreality-hacore version: {ha_info.core}")
+            
+            # Query thirdreality-otbr-agent package version
+            ha_info.otbr = get_package_version("thirdreality-otbr-agent")
+            self.logger.info(f"thirdreality-otbr-agent version: {ha_info.otbr}")
+
+            # Query thirdreality-zigbee-mqtt package version
+            ha_info.z2m = get_package_version("thirdreality-zigbee-mqtt")
+            self.logger.info(f"thirdreality-zigbee-mqtt version: {ha_info.z2m}")
+
             ha_info.installed = bool(ha_info.core and ha_info.python)
             ha_info.enabled = ha_info.installed
+
         # OpenHAB
         openhab_info = getattr(sys_info, 'openhabinfo', None)
         if openhab_info:
             openhab_info.installed = bool(openhab_info.version)
             openhab_info.enabled = openhab_info.installed
-        # 判断是否有未安装
-        any_not_installed = False
-        if ha_info and not ha_info.installed:
-            any_not_installed = True
-        if openhab_info and not openhab_info.installed:
-            any_not_installed = True
-        # 设置LED
-        if hasattr(self.supervisor, 'set_led_state'):
-            if any_not_installed:
-                self.logger.info("Software not fully installed, set LED SYS_SYSTEM_CORRUPTED")
-                self.supervisor.set_led_state(LedState.SYS_SYSTEM_CORRUPTED)
-            else:
-                self.logger.info("All software installed, clear LED SYS_SYSTEM_CORRUPTED")
-                self.supervisor.clear_led_state(LedState.SYS_SYSTEM_CORRUPTED)
+
+

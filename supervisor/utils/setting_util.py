@@ -675,10 +675,10 @@ def run_setting_updated(supervisor=None, progress_callback=None, complete_callba
         logger.info("Software update notification processed - all version information cleared")
         
         # 调用SystemInfoUpdater更新软件状态和LED
-        if supervisor and hasattr(supervisor, 'system_info_updater'):
-            supervisor.system_info_updater.update_software_status_and_led()
+        if supervisor and hasattr(supervisor, 'sysinfo_update'):
+            supervisor.sysinfo_update.update_software_status_and_led()
         else:
-            logger.warning("Supervisor missing system_info_updater, cannot update software status and LED.")
+            logger.warning("Supervisor missing sysinfo_update, cannot update software status and LED.")
         
         if complete_callback:
             complete_callback(True, "Version information cleared successfully")
