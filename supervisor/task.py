@@ -156,15 +156,18 @@ class TaskManager:
 
     def start_zha_channel_switch(self, channel: int):
         """Start ZHA channel switching task"""
-        return self._start_task("zigbee", f"switch_channel_{channel}", self._run_zha_channel_switch, channel)
+        #return self._start_task("zigbee", f"switch_channel_{channel}", self._run_zha_channel_switch, channel)
+        return self._run_zha_channel_switch(channel)
 
     def start_z2m_channel_switch(self, channel: int):
         """Start Z2M channel switching task"""
-        return self._start_task("zigbee", f"switch_channel_{channel}", self._run_z2m_channel_switch, channel)
+        #return self._start_task("zigbee", f"switch_channel_{channel}", 
+        return self._run_z2m_channel_switch(channel)
 
     def start_thread_channel_switch(self, channel: int):
         """Start Thread channel switching task"""
-        return self._start_task("thread", f"switch_channel_{channel}", self._run_thread_channel_switch, channel)
+        #return self._start_task("thread", f"switch_channel_{channel}", self._run_thread_channel_switch, channel)
+        return self._run_thread_channel_switch(channel)
 
     def start_zha_firmware_update_notification(self):
         """Start ZHA firmware update notification task"""
@@ -189,13 +192,14 @@ class TaskManager:
                     progress_callback(100, message)
                 if complete_callback:
                     complete_callback(True, message)
+                return True, message
             else:
                 message = f"Failed to switch ZHA channel to {channel}"
                 if progress_callback:
                     progress_callback(100, message)
                 if complete_callback:
                     complete_callback(False, message)
-                    
+                return False, message
         except Exception as e:
             error_msg = f"Error during ZHA channel switch: {e}"
             self.logger.error(error_msg)
@@ -203,19 +207,21 @@ class TaskManager:
                 progress_callback(100, error_msg)
             if complete_callback:
                 complete_callback(False, error_msg)
+            return False, error_msg
 
     def _run_z2m_channel_switch(self, channel: int, progress_callback=None, complete_callback=None):
-        """Run Z2M channel switching using WebSocket manager"""
+        """Run Z2M channel switching using ChannelManager"""
         try:
             if progress_callback:
                 progress_callback(10, f"Initializing Z2M channel switch to {channel}")
             
-            ws_manager = WebSocketManager()
+            from .channel_manager import ChannelManager
+            channel_manager = ChannelManager()
             
             if progress_callback:
                 progress_callback(50, f"Switching Z2M channel to {channel}")
             
-            success = ws_manager.switch_z2m_channel_sync(channel)
+            success = channel_manager.switch_z2m_channel(channel)
             
             if success:
                 message = f"Successfully switched Z2M channel to {channel}"
@@ -223,13 +229,14 @@ class TaskManager:
                     progress_callback(100, message)
                 if complete_callback:
                     complete_callback(True, message)
+                return True, message
             else:
                 message = f"Failed to switch Z2M channel to {channel}"
                 if progress_callback:
                     progress_callback(100, message)
                 if complete_callback:
                     complete_callback(False, message)
-                    
+                return False, message
         except Exception as e:
             error_msg = f"Error during Z2M channel switch: {e}"
             self.logger.error(error_msg)
@@ -237,6 +244,7 @@ class TaskManager:
                 progress_callback(100, error_msg)
             if complete_callback:
                 complete_callback(False, error_msg)
+            return False, error_msg
 
     def _run_thread_channel_switch(self, channel: int, progress_callback=None, complete_callback=None):
         """Run Thread channel switching using WebSocket manager"""
@@ -257,13 +265,14 @@ class TaskManager:
                     progress_callback(100, message)
                 if complete_callback:
                     complete_callback(True, message)
+                return True, message
             else:
                 message = f"Failed to switch Thread channel to {channel}"
                 if progress_callback:
                     progress_callback(100, message)
                 if complete_callback:
                     complete_callback(False, message)
-                    
+                return False, message
         except Exception as e:
             error_msg = f"Error during Thread channel switch: {e}"
             self.logger.error(error_msg)
@@ -271,6 +280,7 @@ class TaskManager:
                 progress_callback(100, error_msg)
             if complete_callback:
                 complete_callback(False, error_msg)
+            return False, error_msg
 
     def _run_zha_firmware_update_notification(self, progress_callback=None, complete_callback=None):
         """Run ZHA firmware update notification using WebSocket manager"""

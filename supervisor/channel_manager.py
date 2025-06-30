@@ -181,4 +181,49 @@ class ChannelManager:
             return 0
         except Exception as e:
             self.logger.error(f"Error: {e}")
-            return 0 
+            return 0
+    
+    def switch_z2m_channel(self, channel: int) -> bool:
+        """
+        Switch Z2M channel via MQTT (official way: set options then restart)
+        Args:
+            channel: Channel number (11-26)
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Step 1: 设置channel
+            options_cmd = [
+                "/usr/bin/mosquitto_pub",
+                "-h", "localhost",
+                "-t", "zigbee2mqtt/bridge/request/options",
+                "-m", json.dumps({"options": {"advanced": {"channel": channel}}}),
+                "-u", "thirdreality",
+                "-P", "thirdreality"
+            ]
+            self.logger.info(f"[Z2M] Sending options command: {' '.join(options_cmd)}")
+            result = subprocess.run(options_cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                self.logger.error(f"Failed to send options command: {result.stderr}")
+                return False
+
+            # Step 2: 重启zigbee2mqtt
+            restart_cmd = [
+                "/usr/bin/mosquitto_pub",
+                "-h", "localhost",
+                "-t", "zigbee2mqtt/bridge/request/restart",
+                "-m", "{}",
+                "-u", "thirdreality",
+                "-P", "thirdreality"
+            ]
+            self.logger.info(f"[Z2M] Sending restart command: {' '.join(restart_cmd)}")
+            result2 = subprocess.run(restart_cmd, capture_output=True, text=True, timeout=30)
+            if result2.returncode != 0:
+                self.logger.error(f"Failed to send restart command: {result2.stderr}")
+                return False
+
+            self.logger.info(f"Successfully switched Z2M channel to {channel} (restart required)")
+            return True
+        except Exception as e:
+            self.logger.error(f"Error switching Z2M channel: {e}")
+            return False 
