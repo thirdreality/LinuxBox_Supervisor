@@ -725,6 +725,12 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
                 logging.error(f"CRITICAL: Failed to restart Home Assistant service: {e}. Manual intervention may be required.")
             except FileNotFoundError:
                 logging.error("CRITICAL: systemctl not found. Cannot restart Home Assistant service. Manual intervention may be required.")
+        # 强制sync
+        try:
+            subprocess.run(["sync"])
+            logging.info("sync executed after ZHA mode switch.")
+        except Exception as e:
+            logging.error(f"sync failed after ZHA mode switch: {e}")
 
 def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):
     """
@@ -845,6 +851,12 @@ def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):
                 logging.error(f"CRITICAL: Failed to restart Home Assistant service: {e}. Manual intervention may be required.")
             except FileNotFoundError:
                 logging.error("CRITICAL: systemctl not found. Cannot restart Home Assistant service. Manual intervention may be required.")
+        # 强制sync
+        try:
+            subprocess.run(["sync"])
+            logging.info("sync executed after Z2M mode switch.")
+        except Exception as e:
+            logging.error(f"sync failed after Z2M mode switch: {e}")
 
 def get_ha_zigbee_mode(config_file="/var/lib/homeassistant/homeassistant/.storage/core.config_entries"):
     """

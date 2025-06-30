@@ -15,15 +15,15 @@ class ChannelManager:
         self.logger = logging.getLogger("Supervisor")
         self.ws_manager = WebSocketManager()
         
-    def get_all_channels(self) -> Dict[str, int]:
+    def get_all_channels(self) -> Dict[str, Any]:
         """
-        Get all channel information (ZHA, Z2M, Thread)
+        Get all channel information (Zigbee, Thread)
         Returns:
-            Dict with channel information: {"zha": 15, "z2m": 20, "thread": 25}
+            Dict with channel information: {"zigbee_mode": "z2m", "zigbee": 15, "thread": 25}
         """
         result = {
-            "zha": 0,
-            "z2m": 0,
+            "zigbee_mode": "none",
+            "zigbee": 0,
             "thread": 0
         }
         
@@ -31,17 +31,18 @@ class ChannelManager:
             # Get HomeAssistant Zigbee mode
             zigbee_mode = get_ha_zigbee_mode()
             self.logger.info(f"Current Zigbee mode: {zigbee_mode}")
+            result["zigbee_mode"] = zigbee_mode
             
             if zigbee_mode == 'zha':
                 # ZHA is active, get ZHA channel
                 zha_channel = self._get_zha_channel()
-                result["zha"] = zha_channel
+                result["zigbee"] = zha_channel
                 self.logger.info(f"ZHA channel: {zha_channel}")
                 
             elif zigbee_mode == 'z2m':
                 # Zigbee2MQTT is active, get Z2M channel
                 z2m_channel = self._get_z2m_channel()
-                result["z2m"] = z2m_channel
+                result["zigbee"] = z2m_channel
                 self.logger.info(f"Z2M channel: {z2m_channel}")
             
             # Get Thread channel (independent of Zigbee mode)
@@ -54,18 +55,22 @@ class ChannelManager:
         
         return result
     
-    def get_channel_by_type(self, channel_type: str) -> Dict[str, int]:
+    def get_channel_by_type(self, channel_type: str) -> Dict[str, Any]:
         """
         Get channel information for a specific type
         Args:
-            channel_type: "zha", "z2m", or "thread"
+            channel_type: "zigbee" or "thread"
         Returns:
             Dict with channel information for the specified type
         """
-        if channel_type == "zha":
-            return {"zha": self._get_zha_channel()}
-        elif channel_type == "z2m":
-            return {"z2m": self._get_z2m_channel()}
+        if channel_type == "zigbee":
+            zigbee_mode = get_ha_zigbee_mode()
+            if zigbee_mode == 'zha':
+                return {"zigbee_mode": zigbee_mode, "zigbee": self._get_zha_channel()}
+            elif zigbee_mode == 'z2m':
+                return {"zigbee_mode": zigbee_mode, "zigbee": self._get_z2m_channel()}
+            else:
+                return {"zigbee_mode": zigbee_mode, "zigbee": 0}
         elif channel_type == "thread":
             return {"thread": self._get_thread_channel()}
         else:
@@ -138,8 +143,10 @@ class ChannelManager:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             if result.returncode == 0 and result.stdout.strip():
                 data = json.loads(result.stdout.strip())
-                channel = data.get('channel')
+                # Get channel from network.channel path
+                channel = data.get('network', {}).get('channel')
                 if channel:
+                    self.logger.info(f"Found Z2M channel via MQTT: {channel}")
                     return int(channel)
             
             return 0

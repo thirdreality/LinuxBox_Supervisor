@@ -561,7 +561,7 @@ class SupervisorHTTPServer:
                     self.wfile.write(json.dumps({"error": str(e)}).encode())
             
             def _handle_channel_info(self, query_params):
-                """Handle channel info request, return ZHA, Z2M, and Thread channel information"""
+                """Handle channel info request, return Zigbee and Thread channel information"""
                 try:
                     from supervisor.channel_manager import ChannelManager
                     
@@ -572,11 +572,11 @@ class SupervisorHTTPServer:
                     
                     if channel_type:
                         # Return specific channel type
-                        if channel_type not in ['zha', 'z2m', 'thread']:
+                        if channel_type not in ['zigbee', 'thread']:
                             self.send_response(400)
                             self.send_header('Content-type', 'application/json')
                             self.end_headers()
-                            self.wfile.write(json.dumps({"error": f"Invalid channel type: {channel_type}. Must be 'zha', 'z2m', or 'thread'"}).encode())
+                            self.wfile.write(json.dumps({"error": f"Invalid channel type: {channel_type}. Must be 'zigbee' or 'thread'"}).encode())
                             return
                         
                         result = channel_manager.get_channel_by_type(channel_type)
@@ -804,13 +804,94 @@ class SupervisorHTTPServer:
                             else:
                                 self._set_headers(status_code=500)
                                 self.wfile.write(json.dumps({"success": False, "error": "Failed to start switch to Z2M mode."}).encode())
+                        elif action.startswith("channel_"):
+                            # Handle channel setting via action parameter
+                            try:
+                                channel = int(action.split("_")[1])
+                                if channel < 11 or channel > 26:
+                                    self._set_headers(status_code=400)
+                                    self.wfile.write(json.dumps({"success": False, "error": f"Invalid Zigbee channel: {channel}. Must be between 11 and 26. (Recommended: 15, 20, 25)"}).encode())
+                                    return
+                                
+                                self._logger.info(f"[Zigbee] Attempting to set channel to: {channel}")
+                                if self._supervisor.start_zigbee_channel_switch(channel):
+                                    self._set_headers()
+                                    self.wfile.write(json.dumps({"success": True, "msg": f"Successfully started Zigbee channel switch to {channel}."}).encode())
+                                else:
+                                    self._set_headers(status_code=500)
+                                    self.wfile.write(json.dumps({"success": False, "error": f"Failed to start Zigbee channel switch to {channel}."}).encode())
+                            except (ValueError, IndexError):
+                                self._set_headers(status_code=400)
+                                self.wfile.write(json.dumps({"success": False, "error": f"Invalid channel format in action: {action}"}).encode())
                         elif action == "disable":
                             self._logger.warning("[Zigbee] 'disable' action is not yet implemented.")
                             self._set_headers(status_code=400)
                             self.wfile.write(json.dumps({"success": False, "error": "The 'disable' action is not yet implemented."}).encode())
                         else:
-                            self._set_headers(status_code=400)
-                            self.wfile.write(json.dumps({"success": False, "error": "Invalid action for zigbee command."}).encode())
+                            # 只支持新协议 param={"action":"channel", "value":"XX"}
+                            if param_dict and param_dict.get("action") == "channel" and "value" in param_dict:
+                                try:
+                                    channel = int(param_dict["value"])
+                                    if channel < 11 or channel > 26:
+                                        self._set_headers(status_code=400)
+                                        self.wfile.write(json.dumps({"success": False, "error": f"Invalid Zigbee channel: {channel}. Must be between 11 and 26. (Recommended: 15, 20, 25)"}).encode())
+                                        return
+                                    self._logger.info(f"[Zigbee] Attempting to set channel to: {channel} (via param)")
+                                    if self._supervisor.start_zigbee_channel_switch(channel):
+                                        self._set_headers()
+                                        self.wfile.write(json.dumps({"success": True, "msg": f"Successfully started Zigbee channel switch to {channel}."}).encode())
+                                    else:
+                                        self._set_headers(status_code=500)
+                                        self.wfile.write(json.dumps({"success": False, "error": f"Failed to start Zigbee channel switch to {channel}."}).encode())
+                                except (ValueError, TypeError):
+                                    self._set_headers(status_code=400)
+                                    self.wfile.write(json.dumps({"success": False, "error": f"Invalid channel value in param: {param_dict.get('value')}"}).encode())
+                            else:
+                                self._set_headers(status_code=400)
+                                self.wfile.write(json.dumps({"success": False, "error": "Invalid action for zigbee command or param format."}).encode())
+
+                    elif command == "thread":
+                        if action and action.startswith("channel_"):
+                            # Handle Thread channel setting via action parameter
+                            try:
+                                channel = int(action.split("_")[1])
+                                if channel < 11 or channel > 26:
+                                    self._set_headers(status_code=400)
+                                    self.wfile.write(json.dumps({"success": False, "error": f"Invalid Thread channel: {channel}. Must be between 11 and 26. (Recommended: 15, 20, 25)"}).encode())
+                                    return
+                                
+                                self._logger.info(f"[Thread] Attempting to set channel to: {channel}")
+                                if self._supervisor.start_thread_channel_switch(channel):
+                                    self._set_headers()
+                                    self.wfile.write(json.dumps({"success": True, "msg": f"Successfully started Thread channel switch to {channel}. Note: Thread channel changes may take up to 300 seconds to take effect."}).encode())
+                                else:
+                                    self._set_headers(status_code=500)
+                                    self.wfile.write(json.dumps({"success": False, "error": f"Failed to start Thread channel switch to {channel}."}).encode())
+                            except (ValueError, IndexError):
+                                self._set_headers(status_code=400)
+                                self.wfile.write(json.dumps({"success": False, "error": f"Invalid channel format in action: {action}"}).encode())
+                        else:
+                            # 只支持新协议 param={"action":"channel", "value":"XX"}
+                            if param_dict and param_dict.get("action") == "channel" and "value" in param_dict:
+                                try:
+                                    channel = int(param_dict["value"])
+                                    if channel < 11 or channel > 26:
+                                        self._set_headers(status_code=400)
+                                        self.wfile.write(json.dumps({"success": False, "error": f"Invalid Thread channel: {channel}. Must be between 11 and 26. (Recommended: 15, 20, 25)"}).encode())
+                                        return
+                                    self._logger.info(f"[Thread] Attempting to set channel to: {channel} (via param)")
+                                    if self._supervisor.start_thread_channel_switch(channel):
+                                        self._set_headers()
+                                        self.wfile.write(json.dumps({"success": True, "msg": f"Successfully started Thread channel switch to {channel}. Note: Thread channel changes may take up to 300 seconds to take effect."}).encode())
+                                    else:
+                                        self._set_headers(status_code=500)
+                                        self.wfile.write(json.dumps({"success": False, "error": f"Failed to start Thread channel switch to {channel}."}).encode())
+                                except (ValueError, TypeError):
+                                    self._set_headers(status_code=400)
+                                    self.wfile.write(json.dumps({"success": False, "error": f"Invalid channel value in param: {param_dict.get('value')}"}).encode())
+                            else:
+                                self._set_headers(status_code=400)
+                                self.wfile.write(json.dumps({"success": False, "error": "Invalid action for thread command or param format."}).encode())
 
                     elif command == "setting":
                         # Determine backup directory based on configuration

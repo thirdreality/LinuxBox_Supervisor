@@ -280,6 +280,52 @@ class Supervisor:
             logger.error(f"Failed to start Zigbee switch to Z2M mode: {e}")
             return False
 
+    def start_zigbee_channel_switch(self, channel: int) -> bool:
+        """
+        Starts the process of switching Zigbee channel based on current mode (ZHA or Z2M).
+
+        Args:
+            channel: Channel number to switch to (15, 20, or 25)
+
+        Returns:
+            bool: True if the process started successfully, False otherwise.
+        """
+        try:
+            # Get current zigbee mode to determine which channel switch method to use
+            zigbee_mode = get_ha_zigbee_mode()
+            
+            if zigbee_mode == 'zha':
+                self.task_manager.start_zha_channel_switch(channel)
+                logger.info(f"Successfully started ZHA channel switch to {channel}.")
+            elif zigbee_mode == 'z2m':
+                self.task_manager.start_z2m_channel_switch(channel)
+                logger.info(f"Successfully started Z2M channel switch to {channel}.")
+            else:
+                logger.error(f"Cannot switch Zigbee channel: no active Zigbee mode detected")
+                return False
+            return True
+        except Exception as e:
+            logger.error(f"Failed to start Zigbee channel switch to {channel}: {e}")
+            return False
+
+    def start_thread_channel_switch(self, channel: int) -> bool:
+        """
+        Starts the process of switching Thread channel.
+
+        Args:
+            channel: Channel number to switch to (15, 20, or 25)
+
+        Returns:
+            bool: True if the process started successfully, False otherwise.
+        """
+        try:
+            self.task_manager.start_thread_channel_switch(channel)
+            logger.info(f"Successfully started Thread channel switch to {channel}.")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to start Thread channel switch to {channel}: {e}")
+            return False
+
     def start_setting_backup(self) -> bool:
         """
         Starts the setting backup process.

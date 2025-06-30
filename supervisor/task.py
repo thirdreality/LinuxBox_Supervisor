@@ -158,6 +158,10 @@ class TaskManager:
         """Start ZHA channel switching task"""
         return self._start_task("zigbee", f"switch_channel_{channel}", self._run_zha_channel_switch, channel)
 
+    def start_z2m_channel_switch(self, channel: int):
+        """Start Z2M channel switching task"""
+        return self._start_task("zigbee", f"switch_channel_{channel}", self._run_z2m_channel_switch, channel)
+
     def start_thread_channel_switch(self, channel: int):
         """Start Thread channel switching task"""
         return self._start_task("thread", f"switch_channel_{channel}", self._run_thread_channel_switch, channel)
@@ -194,6 +198,40 @@ class TaskManager:
                     
         except Exception as e:
             error_msg = f"Error during ZHA channel switch: {e}"
+            self.logger.error(error_msg)
+            if progress_callback:
+                progress_callback(100, error_msg)
+            if complete_callback:
+                complete_callback(False, error_msg)
+
+    def _run_z2m_channel_switch(self, channel: int, progress_callback=None, complete_callback=None):
+        """Run Z2M channel switching using WebSocket manager"""
+        try:
+            if progress_callback:
+                progress_callback(10, f"Initializing Z2M channel switch to {channel}")
+            
+            ws_manager = WebSocketManager()
+            
+            if progress_callback:
+                progress_callback(50, f"Switching Z2M channel to {channel}")
+            
+            success = ws_manager.switch_z2m_channel_sync(channel)
+            
+            if success:
+                message = f"Successfully switched Z2M channel to {channel}"
+                if progress_callback:
+                    progress_callback(100, message)
+                if complete_callback:
+                    complete_callback(True, message)
+            else:
+                message = f"Failed to switch Z2M channel to {channel}"
+                if progress_callback:
+                    progress_callback(100, message)
+                if complete_callback:
+                    complete_callback(False, message)
+                    
+        except Exception as e:
+            error_msg = f"Error during Z2M channel switch: {e}"
             self.logger.error(error_msg)
             if progress_callback:
                 progress_callback(100, error_msg)

@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import aiohttp
+import subprocess
 from typing import Optional, Dict, Any, List
 from .token_manager import TokenManager
 
@@ -99,7 +100,7 @@ class WebSocketManager:
 
     async def switch_zha_channel(self, channel: int) -> bool:
         """
-        Switch ZHA channel
+        Switch ZHA channel (official way: zha/network/change_channel)
         Args:
             channel: Channel number (11-26)
         Returns:
@@ -109,40 +110,78 @@ class WebSocketManager:
             websocket = await self._connect_and_authenticate()
             if not websocket:
                 return False
-                
             try:
-                # Call ZHA service to change channel
-                request_id = self._get_next_request_id()
-                service_request = {
-                    'id': request_id,
-                    'type': 'call_service',
-                    'domain': 'zha',
-                    'service': 'change_channel',
-                    'service_data': {
-                        'channel': channel
-                    }
+                req_id = self._get_next_request_id()
+                request = {
+                    "id": req_id,
+                    "type": "zha/network/change_channel",
+                    "new_channel": channel
                 }
-                
-                response = await self._send_request_and_wait_response(websocket, service_request)
-                if not response or response.get('success') is False:
+                print(f"[ZHA] Sending WebSocket request: {request}")
+                self.logger.info(f"[ZHA] Sending WebSocket request: {request}")
+                response = await self._send_request_and_wait_response(websocket, request)
+                self.logger.info(f"[ZHA] Received WebSocket response: {response}")
+                if not response or not response.get('success'):
                     self.logger.error("Failed to switch ZHA channel")
                     return False
-                    
                 self.logger.info(f"Successfully switched ZHA channel to {channel}")
                 return True
-                
             finally:
                 await websocket.close()
                 if hasattr(websocket, '_session'):
                     await websocket._session.close()
-                
         except Exception as e:
             self.logger.error(f"Error switching ZHA channel: {e}")
             return False
 
+    async def switch_z2m_channel(self, channel: int) -> bool:
+        """
+        Switch Z2M channel via MQTT (official way: set options then restart)
+        Args:
+            channel: Channel number (11-26)
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Step 1: 设置channel
+            options_cmd = [
+                "/usr/bin/mosquitto_pub",
+                "-h", "localhost",
+                "-t", "zigbee2mqtt/bridge/request/options",
+                "-m", json.dumps({"options": {"advanced": {"channel": channel}}}),
+                "-u", "thirdreality",
+                "-P", "thirdreality"
+            ]
+            self.logger.info(f"[Z2M] Sending options command: {' '.join(options_cmd)}")
+            result = subprocess.run(options_cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                self.logger.error(f"Failed to send options command: {result.stderr}")
+                return False
+
+            # Step 2: 重启zigbee2mqtt
+            restart_cmd = [
+                "/usr/bin/mosquitto_pub",
+                "-h", "localhost",
+                "-t", "zigbee2mqtt/bridge/request/restart",
+                "-m", "{}",
+                "-u", "thirdreality",
+                "-P", "thirdreality"
+            ]
+            self.logger.info(f"[Z2M] Sending restart command: {' '.join(restart_cmd)}")
+            result2 = subprocess.run(restart_cmd, capture_output=True, text=True, timeout=30)
+            if result2.returncode != 0:
+                self.logger.error(f"Failed to send restart command: {result2.stderr}")
+                return False
+
+            self.logger.info(f"Successfully switched Z2M channel to {channel} (restart required)")
+            return True
+        except Exception as e:
+            self.logger.error(f"Error switching Z2M channel: {e}")
+            return False
+
     async def switch_thread_channel(self, channel: int) -> bool:
         """
-        Switch Thread channel
+        Switch Thread channel (OTBR)
         Args:
             channel: Channel number (11-26)
         Returns:
@@ -152,33 +191,46 @@ class WebSocketManager:
             websocket = await self._connect_and_authenticate()
             if not websocket:
                 return False
-                
             try:
-                # Call Thread service to change channel
-                request_id = self._get_next_request_id()
-                service_request = {
-                    'id': request_id,
-                    'type': 'call_service',
-                    'domain': 'thread',
-                    'service': 'change_channel',
-                    'service_data': {
-                        'channel': channel
-                    }
-                }
-                
-                response = await self._send_request_and_wait_response(websocket, service_request)
-                if not response or response.get('success') is False:
-                    self.logger.error("Failed to switch Thread channel")
+                # Step 1: 获取OTBR信息，拿到extended_address
+                req_id = self._get_next_request_id()
+                info_request = {'id': req_id, 'type': 'otbr/info'}
+                self.logger.info(f"[Thread] Sending WebSocket request for OTBR info: {info_request}")
+                info_response = await self._send_request_and_wait_response(websocket, info_request)
+                self.logger.info(f"[Thread] Received OTBR info response: {info_response}")
+                if not info_response or not info_response.get('success'):
+                    self.logger.error("Failed to get OTBR info for Thread channel switch")
                     return False
-                    
+                result = info_response.get('result', {})
+                if not result or not isinstance(result, dict):
+                    self.logger.error("OTBR info result is empty or invalid")
+                    return False
+                # 取第一个border router的extended_address
+                first_br = next(iter(result.values()), None)
+                if not first_br or 'extended_address' not in first_br:
+                    self.logger.error("No extended_address found in OTBR info")
+                    return False
+                extended_address = first_br['extended_address']
+                # Step 2: 设置channel
+                req_id2 = self._get_next_request_id()
+                set_channel_request = {
+                    'type': 'otbr/set_channel',
+                    'extended_address': extended_address,
+                    'channel': channel,
+                    'id': req_id2
+                }
+                self.logger.info(f"[Thread] Sending WebSocket set_channel request: {set_channel_request}")
+                set_channel_response = await self._send_request_and_wait_response(websocket, set_channel_request)
+                self.logger.info(f"[Thread] Received set_channel response: {set_channel_response}")
+                if not set_channel_response or not set_channel_response.get('success'):
+                    self.logger.error("Failed to switch Thread channel via otbr/set_channel")
+                    return False
                 self.logger.info(f"Successfully switched Thread channel to {channel}")
                 return True
-                
             finally:
                 await websocket.close()
                 if hasattr(websocket, '_session'):
                     await websocket._session.close()
-                
         except Exception as e:
             self.logger.error(f"Error switching Thread channel: {e}")
             return False
@@ -374,6 +426,10 @@ class WebSocketManager:
     def switch_zha_channel_sync(self, channel: int) -> bool:
         """Synchronous wrapper for switch_zha_channel"""
         return self.run_async_task(self.switch_zha_channel(channel))
+
+    def switch_z2m_channel_sync(self, channel: int) -> bool:
+        """Synchronous wrapper for switch_z2m_channel"""
+        return self.run_async_task(self.switch_z2m_channel(channel))
 
     def switch_thread_channel_sync(self, channel: int) -> bool:
         """Synchronous wrapper for switch_thread_channel"""
