@@ -46,3 +46,14 @@ BACKUP_STORAGE_MODE = "external"
 BACKUP_INTERNAL_PATH = "/lib/thirdreality/backup"
 BACKUP_EXTERNAL_PATH = "/mnt/R3Backup"
 
+# HomeAssistant Token Mode Configuration
+# 0 - auto: Prefer long_lived_token, fallback to oauth2
+# 1 - longlived: Use long-lived access token only
+# 2 - oauth2: Use OAuth2 authentication with username/password
+TOKEN_MODE_AUTO = 0
+TOKEN_MODE_LONGLIVED = 1
+TOKEN_MODE_OAUTH2 = 2
+
+# Default token mode (longlived)
+TOKEN_MODE = TOKEN_MODE_LONGLIVED
+

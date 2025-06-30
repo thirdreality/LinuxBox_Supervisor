@@ -9,11 +9,15 @@ import logging
 import urllib.request
 import urllib.parse
 from typing import Optional, Dict, Any
+from .const import TOKEN_MODE, TOKEN_MODE_AUTO, TOKEN_MODE_LONGLIVED, TOKEN_MODE_OAUTH2
 
 class TokenManager:
-    def __init__(self):
+    def __init__(self, token_mode: int = None):
         self.logger = logging.getLogger("Supervisor")
         self.config_file = "/etc/automation-robot.conf"
+        
+        # Use provided token_mode or default from const
+        self.token_mode = token_mode if token_mode is not None else TOKEN_MODE
         
         # Cache for web access tokens
         self._web_token_cache: Optional[str] = None
@@ -25,6 +29,41 @@ class TokenManager:
         self.default_password = "shushi6688"
         self.default_host = "localhost"
         self.default_port = 8123
+
+    def get_access_token(self, host: str = None, username: str = None, password: str = None) -> Optional[str]:
+        """
+        Get access token based on configured token mode
+        Args:
+            host: HomeAssistant host (for oauth2 mode)
+            username: Username (for oauth2 mode)
+            password: Password (for oauth2 mode)
+        Returns:
+            Access token string or None if failed
+        """
+        if self.token_mode == TOKEN_MODE_LONGLIVED:
+            # Only use long-lived token
+            self.logger.debug("Using longlived token mode")
+            return self.get_long_lived_access_tokens()
+            
+        elif self.token_mode == TOKEN_MODE_OAUTH2:
+            # Only use oauth2 token
+            self.logger.debug("Using oauth2 token mode")
+            return self.get_web_access_tokens(host, username, password)
+            
+        elif self.token_mode == TOKEN_MODE_AUTO:
+            # Auto mode: prefer long-lived, fallback to oauth2
+            self.logger.debug("Using auto token mode")
+            token = self.get_long_lived_access_tokens()
+            if token:
+                self.logger.info("Auto mode: using long-lived token")
+                return token
+            else:
+                self.logger.info("Auto mode: long-lived token not available, trying oauth2")
+                return self.get_web_access_tokens(host, username, password)
+        
+        else:
+            self.logger.error(f"Unknown token mode: {self.token_mode}")
+            return None
 
     def get_long_lived_access_tokens(self) -> Optional[str]:
         """

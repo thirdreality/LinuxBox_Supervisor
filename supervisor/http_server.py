@@ -171,6 +171,8 @@ class SupervisorHTTPServer:
                                 self._handle_service_info(None)
                     elif path == "/api/zigbee/info":
                         self._handle_zigbee_info()
+                    elif path == "/api/channel/info":
+                        self._handle_channel_info(query_params)
                     elif path == "/api/browser/info":
                         self._handle_browser_info()       
                     elif path == "/api/example/node":
@@ -553,6 +555,40 @@ class SupervisorHTTPServer:
                     self.wfile.write(json.dumps(result).encode())
                 except Exception as e:
                     self._logger.error(f"Error getting Zigbee info: {e}")
+                    self.send_response(500)
+                    self.send_header('Content-type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": str(e)}).encode())
+            
+            def _handle_channel_info(self, query_params):
+                """Handle channel info request, return ZHA, Z2M, and Thread channel information"""
+                try:
+                    from supervisor.channel_manager import ChannelManager
+                    
+                    channel_manager = ChannelManager()
+                    
+                    # Check if specific channel type is requested
+                    channel_type = query_params.get('type', [None])[0]
+                    
+                    if channel_type:
+                        # Return specific channel type
+                        if channel_type not in ['zha', 'z2m', 'thread']:
+                            self.send_response(400)
+                            self.send_header('Content-type', 'application/json')
+                            self.end_headers()
+                            self.wfile.write(json.dumps({"error": f"Invalid channel type: {channel_type}. Must be 'zha', 'z2m', or 'thread'"}).encode())
+                            return
+                        
+                        result = channel_manager.get_channel_by_type(channel_type)
+                    else:
+                        # Return all channels
+                        result = channel_manager.get_all_channels()
+                    
+                    self._set_headers()
+                    self.wfile.write(json.dumps(result).encode())
+                    
+                except Exception as e:
+                    self._logger.error(f"Error getting channel info: {e}")
                     self.send_response(500)
                     self.send_header('Content-type', 'application/json')
                     self.end_headers()

@@ -975,7 +975,7 @@ def run_zha_pairing(progress_callback=None, led_controller=None) -> bool:
 
         # 1. Get Bearer token using TokenManager
         _call_progress(20, "Getting token from TokenManager.")
-        bearer_token = token_manager.get_long_lived_access_tokens()
+        bearer_token = token_manager.get_access_token()
         
         if not bearer_token:
             err_msg = "Failed to get Bearer token from TokenManager."

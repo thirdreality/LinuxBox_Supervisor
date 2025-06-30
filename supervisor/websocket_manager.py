@@ -10,11 +10,14 @@ from typing import Optional, Dict, Any, List
 from .token_manager import TokenManager
 
 class WebSocketManager:
-    def __init__(self, host: str = "localhost", port: int = 8123):
+    def __init__(self, host: str = "localhost", port: int = 8123, token_mode: int = None, 
+                 username: str = None, password: str = None):
         self.logger = logging.getLogger("Supervisor")
         self.host = host
         self.port = port
-        self.token_manager = TokenManager()
+        self.token_manager = TokenManager(token_mode)
+        self.username = username
+        self.password = password
         self.request_id = 0
         
     def _get_next_request_id(self) -> int:
@@ -25,8 +28,12 @@ class WebSocketManager:
     async def _connect_and_authenticate(self) -> Optional[aiohttp.ClientWebSocketResponse]:
         """Connect to HomeAssistant WebSocket and authenticate"""
         try:
-            # Get long-lived access token
-            token = self.token_manager.get_long_lived_access_tokens()
+            # Get access token based on token mode
+            token = self.token_manager.get_access_token(
+                host=self.host, 
+                username=self.username, 
+                password=self.password
+            )
             if not token:
                 self.logger.error("Failed to get access token")
                 return None
@@ -383,3 +390,22 @@ class WebSocketManager:
     def get_thread_devices_sync(self) -> List[Dict[str, Any]]:
         """Synchronous wrapper for get_thread_devices"""
         return self.run_async_task(self.get_thread_devices())
+
+    def _connect_and_authenticate_sync(self) -> Optional[aiohttp.ClientWebSocketResponse]:
+        """Synchronous version of _connect_and_authenticate"""
+        return self.run_async_task(self._connect_and_authenticate())
+
+    def _send_request_and_wait_response_sync(self, websocket: aiohttp.ClientWebSocketResponse, 
+                                           request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Synchronous version of _send_request_and_wait_response"""
+        return self.run_async_task(self._send_request_and_wait_response(websocket, request))
+
+    def _close_websocket_sync(self, websocket: aiohttp.ClientWebSocketResponse):
+        """Synchronous version of WebSocket cleanup"""
+        try:
+            if websocket:
+                self.run_async_task(websocket.close())
+                if hasattr(websocket, '_session'):
+                    self.run_async_task(websocket._session.close())
+        except Exception as e:
+            self.logger.error(f"Error closing WebSocket: {e}")
