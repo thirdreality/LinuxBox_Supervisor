@@ -84,6 +84,10 @@ class Supervisor:
         # Forward the LED state to the GpioLed instance
         self.led.set_led_state(state)
 
+    def clear_led_state(self, state):
+        # Forward the LED state clearing to the GpioLed instance
+        self.led.clear_led_state(state)
+
     def set_ota_command(self, cmd):
         logger.info(f"OTA Command: param={cmd}")
 
