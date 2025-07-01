@@ -821,6 +821,17 @@ def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):
             # Decide if this is a partial success or failure for complete_callback
             # For now, continue and report overall success if other steps passed.
 
+        # Delete HomeAssistant zigbee database file before final success
+        zigbee_db_path = "/var/lib/homeassistant/homeassistant/zigbee.db"
+        try:
+            if os.path.exists(zigbee_db_path):
+                os.remove(zigbee_db_path)
+                logging.info(f"Successfully deleted HomeAssistant zigbee database: {zigbee_db_path}")
+            else:
+                logging.info(f"HomeAssistant zigbee database not found, skipping deletion: {zigbee_db_path}")
+        except OSError as e:
+            logging.warning(f"Error deleting HomeAssistant zigbee database {zigbee_db_path}: {e}")
+
         _call_progress(progress_callback, 100, "Successfully switched to Z2M mode (or confirmed existing Z2M mode).")
         logging.info("Successfully switched to Zigbee2MQTT mode.")
         if complete_callback:
@@ -861,7 +872,7 @@ def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):
 def get_ha_zigbee_mode(config_file="/var/lib/homeassistant/homeassistant/.storage/core.config_entries"):
     """
     Check the current Zigbee mode of HomeAssistant.
-    - If "domain": "mqtt" is found, return 'z2m'
+    - If "domain": "mqtt" is found, return 'z2m' 
     - If "domain": "zha" is found, return 'zha'
     - If neither is found, return 'none'
     """
