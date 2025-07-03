@@ -671,19 +671,14 @@ def _reset_zigbee2mqtt_configuration():
 
 def _reset_blz_hardware():
     """
-    对于blz radio类型，执行zigpy radio reset命令。所有异常都catch并日志警告，不影响主流程。
+    如果脚本/srv/homeassistant/bin/home_assistant_blz_reset.sh存在，则执行该脚本。不输出任何日志。
     """
-    try:
-        cmd = [
-            "zigpy", "radio",
-            "--baudrate", "2000000",
-            "blz", "/dev/ttyAML3", "reset"
-        ]
-        logging.info("Attempting to reset BLZ hardware: %s", ' '.join(cmd))
-        subprocess.run(cmd, check=False, capture_output=True)
-        logging.info("BLZ hardware reset command executed (errors ignored as per firmware bug)")
-    except Exception as e:
-        logging.warning(f"BLZ hardware reset command failed (ignored): {e}")
+    script_path = "/srv/homeassistant/bin/home_assistant_blz_reset.sh"
+    if os.path.exists(script_path):
+        try:
+            subprocess.run([script_path], check=False)
+        except Exception:
+            pass
 
 def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
     """
