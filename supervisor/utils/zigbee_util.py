@@ -129,6 +129,23 @@ def _get_info_from_zha_conf():
     print(f"Found IEEE: {ieee}, Radio Type: {radio_type}")
     return ieee, radio_type
 
+def find_zigbee_coordinator(devices):
+    """Find Zigbee Coordinator device(s) by connection, via_device_id, and identifier."""
+    coordinators = []
+    for device in devices:
+        has_zigbee_connection = any(
+            conn[0] == "zigbee"
+            for conn in device.get("connections", [])
+        )
+        is_root_device = device.get("via_device_id") is None
+        has_zha_identifier = any(
+            identifier[0] == "zha"
+            for identifier in device.get("identifiers", [])
+        )
+        if has_zigbee_connection and is_root_device and has_zha_identifier:
+            coordinators.append(device)
+    return coordinators
+
 def _update_zha_config_entries(radio_type="zigate"):
     config_entries_path = os.path.join(BASE_PATH, "homeassistant/.storage/core.config_entries")
     mqtt_entry_id = None
@@ -169,35 +186,60 @@ def _update_zha_config_entries(radio_type="zigate"):
     
     # If no ZHA configuration exists, add one
     if not has_zha:
-        # Generate a truly new entry_id
-        # Format similar to: 01JWJ0ZAEC9C8YN1BVYW4SFW3G
         zha_entry_id = f"01{uuid.uuid4().hex.upper()[:24]}"
         now = datetime.now(timezone.utc).isoformat()
-        zha_entry = {
-            "created_at": now,
-            "data": {
-                "device": {
-                    "baudrate": 115200,
-                    "flow_control": None,
-                    "path": "/dev/ttyAML3"
+        if radio_type == "blz":
+            zha_entry = {
+                "created_at": now,
+                "data": {
+                    "device": {
+                        "baudrate": 2000000,
+                        "flow_control": None,
+                        "path": "/dev/ttyAML3"
+                    },
+                    "radio_type": "blz"
                 },
-                "radio_type": radio_type
-            },
-            "disabled_by": None,
-            "discovery_keys": {},
-            "domain": "zha",
-            "entry_id": zha_entry_id,
-            "minor_version": 1,
-            "modified_at": now,
-            "options": {},
-            "pref_disable_new_entities": False,
-            "pref_disable_polling": False,
-            "source": "user",
-            "subentries": [],
-            "title": "/dev/ttyAML3",
-            "unique_id": None,
-            "version": 4
-        }
+                "disabled_by": None,
+                "discovery_keys": {},
+                "domain": "zha",
+                "entry_id": zha_entry_id,
+                "minor_version": 1,
+                "modified_at": now,
+                "options": {},
+                "pref_disable_new_entities": False,
+                "pref_disable_polling": False,
+                "source": "user",
+                "subentries": [],
+                "title": "/dev/ttyAML3",
+                "unique_id": None,
+                "version": 4
+            }
+        else:
+            zha_entry = {
+                "created_at": now,
+                "data": {
+                    "device": {
+                        "baudrate": 115200,
+                        "flow_control": None,
+                        "path": "/dev/ttyAML3"
+                    },
+                    "radio_type": radio_type
+                },
+                "disabled_by": None,
+                "discovery_keys": {},
+                "domain": "zha",
+                "entry_id": zha_entry_id,
+                "minor_version": 1,
+                "modified_at": now,
+                "options": {},
+                "pref_disable_new_entities": False,
+                "pref_disable_polling": False,
+                "source": "user",
+                "subentries": [],
+                "title": "/dev/ttyAML3",
+                "unique_id": None,
+                "version": 4
+            }
         new_entries.append(zha_entry)
         print(f"Added ZHA configuration with entry_id: {zha_entry_id}")
     
@@ -209,12 +251,15 @@ def _update_zha_config_entries(radio_type="zigate"):
         with open(config_entries_path, 'w') as f:
             json.dump(config_data, f, indent=2)
         print(f"Updated {config_entries_path}")
+        # sync 3 times
+        for _ in range(3):
+            subprocess.run(["sync"])
     except Exception as e:
         raise ConfigError(f"Error writing to {config_entries_path}: {e}")
     
     return mqtt_entry_id, zha_entry_id
 
-def _update_zha_device_registry(mqtt_entry_id, zha_entry_id, ieee):
+def _update_zha_device_registry(mqtt_entry_id, zha_entry_id, ieee, radio_type="zigate"):
     device_registry_path = os.path.join(BASE_PATH, "homeassistant/.storage/core.device_registry")
     print(f"_update_zha_device_registry zha_entry_id: {zha_entry_id}, mqtt_entry_id: {mqtt_entry_id}")
 
@@ -237,56 +282,77 @@ def _update_zha_device_registry(mqtt_entry_id, zha_entry_id, ieee):
     # Iterate through devices, remove those related to mqtt_entry_id
     for device in devices:
         if mqtt_entry_id and 'config_entries' in device:
-            # If the device's config_entries contains mqtt_entry_id, remove the device
             if mqtt_entry_id in device['config_entries']:
-                print(f"Removing device linked to MQTT: [{device.get('name', 'Unknown device')}]")
+                print(f"Removing device linked to MQTT: [{device.get('name', 'Unknown device')} ]")
                 continue
         new_devices.append(device)
     else:
         new_devices = devices
     
-    # Check if ZiGate USB-TTL device already exists
-    has_zigate = False
-    for device in new_devices:
-        if device.get('model') == 'ZiGate USB-TTL' and device.get('manufacturer') == 'ZiGate':
-            has_zigate = True
-            print("ZiGate device already exists in registry")
-            break
+    # 查找coordinator
+    coordinators = find_zigbee_coordinator(new_devices)
+    has_zha_coordinator = len(coordinators) > 0
     
-    # If no ZiGate device exists, add one
-    if not has_zigate:
+    # 如果没有coordinator，添加
+    if not has_zha_coordinator:
         now = datetime.now(timezone.utc).isoformat()
-        # Use the zha_entry_id obtained from update_config_entries
-        zigate_device = {
-            "area_id": None,
-            "config_entries": [zha_entry_id],
-            "config_entries_subentries": {zha_entry_id: [None]},
-            "configuration_url": None,
-            "connections": [["zigbee", ieee]],
-            "created_at": now,
-            "disabled_by": None,
-            "entry_type": None,
-            "hw_version": None,
-            "id": f"{uuid.uuid4().hex}",
-            "identifiers": [["zha", ieee]],
-            "labels": [],
-            "manufacturer": "ZiGate",
-            "model": "ZiGate USB-TTL",
-            "model_id": None,
-            "modified_at": now,
-            "name_by_user": None,
-            "name": "ZiGate ZiGate USB-TTL",
-            "primary_config_entry": zha_entry_id,
-            "serial_number": None,
-            "sw_version": "3.21",
-            "via_device_id": None
-        }
-        new_devices.append(zigate_device)
-        print(f"Added ZiGate device with ZHA entry_id: {zha_entry_id}")
+        if radio_type == "blz":
+            blz_device = {
+                "area_id": None,
+                "config_entries": [zha_entry_id],
+                "config_entries_subentries": {zha_entry_id: [None]},
+                "configuration_url": None,
+                "connections": [["zigbee", ieee]],
+                "created_at": now,
+                "disabled_by": None,
+                "entry_type": None,
+                "hw_version": None,
+                "id": f"{uuid.uuid4().hex}",
+                "identifiers": [["zha", ieee]],
+                "labels": [],
+                "manufacturer": "Bouffalo Lab",
+                "model": "BL706",
+                "model_id": None,
+                "modified_at": now,
+                "name_by_user": None,
+                "name": "Bouffalo Lab BL706",
+                "primary_config_entry": zha_entry_id,
+                "serial_number": None,
+                "sw_version": "0x00000000",
+                "via_device_id": None
+            }
+            new_devices.append(blz_device)
+            print(f"Added BLZ coordinator device with ZHA entry_id: {zha_entry_id}")
+        else:
+            zigate_device = {
+                "area_id": None,
+                "config_entries": [zha_entry_id],
+                "config_entries_subentries": {zha_entry_id: [None]},
+                "configuration_url": None,
+                "connections": [["zigbee", ieee]],
+                "created_at": now,
+                "disabled_by": None,
+                "entry_type": None,
+                "hw_version": None,
+                "id": f"{uuid.uuid4().hex}",
+                "identifiers": [["zha", ieee]],
+                "labels": [],
+                "manufacturer": "ZiGate",
+                "model": "ZiGate USB-TTL",
+                "model_id": None,
+                "modified_at": now,
+                "name_by_user": None,
+                "name": "ZiGate ZiGate USB-TTL",
+                "primary_config_entry": zha_entry_id,
+                "serial_number": None,
+                "sw_version": "3.21",
+                "via_device_id": None
+            }
+            new_devices.append(zigate_device)
+            print(f"Added ZiGate device with ZHA entry_id: {zha_entry_id}")
     
     # Update devices
     device_data['data']['devices'] = new_devices
-
     device_data['data']['deleted_devices'] = []
     
     # Write back to file
@@ -294,6 +360,9 @@ def _update_zha_device_registry(mqtt_entry_id, zha_entry_id, ieee):
         with open(device_registry_path, 'w') as f:
             json.dump(device_data, f, indent=2)
         print(f"Updated {device_registry_path}")
+        # sync 3 times
+        for _ in range(3):
+            subprocess.run(["sync"])
     except Exception as e:
         raise ConfigError(f"Error writing to {device_registry_path}: {e}")
 
@@ -555,6 +624,51 @@ def _update_zigbee2mqtt_entity_registry():
     except Exception as e:
         print(f"Warning: Error writing to {entity_registry_path}: {e}")
 
+def _reset_zigbee2mqtt_configuration():
+    """
+    根据zha.conf的radio_type选择不同的zigbee2mqtt配置模板，拷贝到目标目录，并sync三次。
+    """
+    import shutil
+    zha_conf_path = "/var/lib/homeassistant/zha.conf"
+    conf_dir = "/lib/thirdreality/conf"
+    z2m_data_path = "/opt/zigbee2mqtt/data"
+    config_file = None
+    radio_type = None
+    try:
+        if os.path.exists(zha_conf_path):
+            # 读取最后一个有效的Radio Type
+            with open(zha_conf_path, 'r') as f:
+                lines = f.readlines()
+            for line in reversed(lines):
+                if "Radio Type:" in line:
+                    radio_type = line.split("Radio Type:")[-1].strip()
+                    break
+        if radio_type == "blz":
+            config_file = os.path.join(conf_dir, "configuration_blz.yaml.default")
+            logging.info("Detected Radio Type: blz, using configuration_blz.yaml.default")
+        elif radio_type == "zigate":
+            config_file = os.path.join(conf_dir, "configuration_zigate.yaml.default")
+            logging.info("Detected Radio Type: zigate, using configuration_zigate.yaml.default")
+        else:
+            config_file = os.path.join(conf_dir, "configuration_blz.yaml.default")
+            if radio_type:
+                logging.info(f"Unknown Radio Type: {radio_type}, defaulting to configuration_blz.yaml.default")
+            else:
+                logging.info("zha.conf not found or no Radio Type, defaulting to configuration_blz.yaml.default")
+        if not os.path.exists(config_file):
+            logging.warning(f"WARNING: Configuration file not found: {config_file}")
+            return
+        if not os.path.exists(z2m_data_path):
+            os.makedirs(z2m_data_path, exist_ok=True)
+            logging.info(f"Created {z2m_data_path} directory")
+        dest_file = os.path.join(z2m_data_path, "configuration.yaml")
+        shutil.copy2(config_file, dest_file)
+        logging.info(f"Installed zigbee2mqtt configuration from {config_file} to {dest_file}")
+        for _ in range(3):
+            subprocess.run(["sync"])
+    except Exception as e:
+        logging.warning(f"Error resetting zigbee2mqtt configuration: {e}")
+
 def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
     """
     Switch to ZHA mode.
@@ -786,18 +900,25 @@ def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):
             logging.info("Updating Home Assistant configurations for Z2M mode...")
             
             _call_progress(progress_callback, 30, "Updating Z2M config entries...")
-            # _update_zigbee2mqtt_config_entries does not take radio_type
             mqtt_entry_id, zha_entry_id = _update_zigbee2mqtt_config_entries()
             logging.info(f"Z2M config entries updated. MQTT Entry ID: {mqtt_entry_id}, ZHA Entry ID targeted for removal: {zha_entry_id}")
+            for _ in range(3):
+                subprocess.run(["sync"])
 
             _call_progress(progress_callback, 50, "Updating Z2M device registry...")
-            # _update_zigbee2mqtt_device_registry does not take ieee
             _update_zigbee2mqtt_device_registry(mqtt_entry_id, zha_entry_id)
             logging.info("Z2M device registry updated.")
+            for _ in range(3):
+                subprocess.run(["sync"])
 
             _call_progress(progress_callback, 70, "Updating Z2M entity registry...")
             _update_zigbee2mqtt_entity_registry()
             logging.info("Z2M entity registry updated.")
+            for _ in range(3):
+                subprocess.run(["sync"])
+
+            # 新增：重置configuration.yaml
+            _reset_zigbee2mqtt_configuration()
 
         _call_progress(progress_callback, 80, "Starting and enabling Z2M services (Mosquitto, Zigbee2MQTT)...")
         all_services_managed_successfully = True
@@ -938,8 +1059,6 @@ def run_mqtt_pairing(progress_callback=None, led_controller=None) -> bool:
             progress_step = 10 + (i * 10) # Progress from 10% to 30% for checks
             _call_progress(progress_callback, progress_step, f"Checking status of {service}.")
             try:
-                # Use systemctl is-active --quiet to check service status
-                # It exits with 0 if active, non-zero otherwise.
                 subprocess.run(["systemctl", "is-active", "--quiet", service], check=True)
                 logging.info(f"Service {service} is active.")
             except subprocess.CalledProcessError:
@@ -959,7 +1078,7 @@ def run_mqtt_pairing(progress_callback=None, led_controller=None) -> bool:
                 "/usr/bin/mosquitto_pub",
                 "-h", "localhost",
                 "-t", "zigbee2mqtt/bridge/request/permit_join",
-                "-m", '{"time": 254}',
+                "-m", f'{{"time": {PERMIT_JOIN_DURATION}}}',
                 "-u", "thirdreality",
                 "-P", "thirdreality"
             ]
@@ -1014,7 +1133,7 @@ def run_zha_pairing(progress_callback=None, led_controller=None) -> bool:
             "Authorization": f"Bearer {bearer_token}",
             "Content-Type": "application/json",
         }
-        data = {"duration": 254}
+        data = {"duration": PERMIT_JOIN_DURATION}
 
         try:
             _call_progress(60, f"Sending request to {url}.")
@@ -1088,7 +1207,7 @@ def run_zigbee_pairing(progress_callback=None, complete_callback=None, led_contr
                 complete_callback(False, error_msg)
         
         if pairing_initiated_successfully:
-            _start_pairing_led_timer(led_controller, 254)
+            _start_pairing_led_timer(led_controller, PERMIT_JOIN_DURATION)
             if complete_callback:
                 complete_callback(True, "Pairing process initiated.")
         else:
@@ -1107,3 +1226,5 @@ def run_zigbee_pairing(progress_callback=None, complete_callback=None, led_contr
             if led_controller:
                 led_controller.set_led_state(LedState.SYS_DEVICE_PAIRED)
             logging.info("Pairing initiation failed, state reset.")
+
+PERMIT_JOIN_DURATION = 254  # Unified permit join duration (seconds)
