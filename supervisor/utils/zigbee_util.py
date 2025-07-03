@@ -669,6 +669,22 @@ def _reset_zigbee2mqtt_configuration():
     except Exception as e:
         logging.warning(f"Error resetting zigbee2mqtt configuration: {e}")
 
+def _reset_blz_hardware():
+    """
+    对于blz radio类型，执行zigpy radio reset命令。所有异常都catch并日志警告，不影响主流程。
+    """
+    try:
+        cmd = [
+            "zigpy", "radio",
+            "--baudrate", "2000000",
+            "blz", "/dev/ttyAML3", "reset"
+        ]
+        logging.info("Attempting to reset BLZ hardware: %s", ' '.join(cmd))
+        subprocess.run(cmd, check=False, capture_output=True)
+        logging.info("BLZ hardware reset command executed (errors ignored as per firmware bug)")
+    except Exception as e:
+        logging.warning(f"BLZ hardware reset command failed (ignored): {e}")
+
 def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
     """
     Switch to ZHA mode.
@@ -730,7 +746,7 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
         logging.info(f"ZHA config entries updated. MQTT Entry ID: {mqtt_entry_id}, ZHA Entry ID: {zha_entry_id}")
 
         _call_progress(progress_callback, 40, "Updating ZHA device registry...")
-        _update_zha_device_registry(mqtt_entry_id, zha_entry_id, ieee)
+        _update_zha_device_registry(mqtt_entry_id, zha_entry_id, ieee, radio_type)
         logging.info("ZHA device registry updated.")
 
         _call_progress(progress_callback, 60, "Updating ZHA entity registry...")
@@ -760,13 +776,11 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
 
         _call_progress(progress_callback, 90, "Cleaning up Zigbee2MQTT data and resetting configuration...")
         z2m_data_path = "/opt/zigbee2mqtt/data"
-        # ... (rest of the file operations remain the same) ...
         files_to_delete = [
             os.path.join(z2m_data_path, "database.db"),
             os.path.join(z2m_data_path, "state.json")
         ]
         dir_to_delete = os.path.join(z2m_data_path, "log")
-        
         config_src = "/lib/thirdreality/conf/configuration.yaml.default"
         config_dest = os.path.join(z2m_data_path, "configuration.yaml")
 
@@ -775,6 +789,14 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
                 if os.path.exists(f_path):
                     os.remove(f_path)
                     logging.info(f"Successfully deleted Zigbee2MQTT file: {f_path}")
+                    # 如果是database.db且radio_type为blz，执行reset
+                    if f_path.endswith("database.db"):
+                        try:
+                            _, radio_type = _get_info_from_zha_conf()
+                        except Exception:
+                            radio_type = None
+                        if radio_type == "blz":
+                            _reset_blz_hardware()
                 else:
                     logging.info(f"Zigbee2MQTT file not found, skipping deletion: {f_path}")
             except OSError as e:
@@ -948,6 +970,13 @@ def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):
             if os.path.exists(zigbee_db_path):
                 os.remove(zigbee_db_path)
                 logging.info(f"Successfully deleted HomeAssistant zigbee database: {zigbee_db_path}")
+                # radio_type判断，复用_get_info_from_zha_conf
+                try:
+                    _, radio_type = _get_info_from_zha_conf()
+                except Exception:
+                    radio_type = None
+                if radio_type == "blz":
+                    _reset_blz_hardware()
             else:
                 logging.info(f"HomeAssistant zigbee database not found, skipping deletion: {zigbee_db_path}")
         except OSError as e:
