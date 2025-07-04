@@ -18,7 +18,7 @@ from ..const import (
 )
 from .gatt_server import SupervisorGattServer
 from ..hardware import LedState
-
+from ..websocket_manager import WebSocketManager
 
 class GattServerManager:
     """Unified GATT server manager"""
@@ -75,21 +75,35 @@ class GattServerManager:
         if self.is_provisioning:
             self.logger.info("Provisioning mode already active, skipping start request")
             return True
-            
+
+        # 检查home-assistant.service是否active，若active则禁用蓝牙集成
+        try:
+            result = subprocess.run([
+                '/bin/systemctl', 'is-active', 'home-assistant.service'
+            ], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0 and result.stdout.strip() == 'active':
+                self.logger.info("home-assistant.service is active, disabling Bluetooth integration via WebSocketManager...")
+                ws_manager = WebSocketManager()
+                if ws_manager is not None:
+                    ok = ws_manager.disable_bluetooth_sync()
+                    if not ok:
+                        self.logger.warning("Failed to disable Home Assistant Bluetooth integration, but will continue provisioning mode.")
+                else:
+                    self.logger.warning("websocket_manager not found in supervisor, will continue provisioning mode.")
+        except Exception as e:
+            self.logger.warning(f"Error checking or disabling Home Assistant Bluetooth integration: {e}, will continue provisioning mode.")
+
         self.is_provisioning = True
         self.logger.info(f"[GATT Manager] Starting provisioning mode ({self.mode})")
-        
         try:
             if self.mode == "external":
                 success = self._start_external_service()
             else:
                 success = self._start_internal_service()
-                
             # Fix: If startup fails, immediately reset state
             if not success:
                 self.is_provisioning = False
                 self.logger.error("Failed to start provisioning mode, resetting state")
-                
             return success
         except Exception as e:
             self.logger.error(f"Failed to start provisioning mode: {e}")
@@ -100,30 +114,42 @@ class GattServerManager:
         """Stop provisioning mode"""
         if not self.is_provisioning:
             return True
-            
+
         self.logger.info(f"[GATT Manager] Stopping provisioning mode ({self.mode})")
-        
         # Stop timeout timer
         if self.timeout_timer:
             self.timeout_timer.cancel()
             self.timeout_timer = None
-            
         try:
             if self.mode == "external":
                 self._stop_external_service()
             else:
                 self._stop_internal_service()
-                
             # Set LED to off state when stopping
             if hasattr(self.supervisor, 'set_led_state'):
                 self.supervisor.set_led_state(LedState.SYS_WIFI_CONFIG_STOPPED)
                 self.logger.info("Set LED to off state after stopping provisioning")
-                
         except Exception as e:
             self.logger.error(f"Error stopping provisioning mode: {e}")
         finally:
             self.is_provisioning = False
-            
+
+        # 新增：检查home-assistant.service是否active，若active则恢复蓝牙集成
+        try:
+            result = subprocess.run([
+                '/bin/systemctl', 'is-active', 'home-assistant.service'
+            ], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0 and result.stdout.strip() == 'active':
+                self.logger.info("home-assistant.service is active, enabling Bluetooth integration via WebSocketManager...")
+                ws_manager = WebSocketManager()
+                if ws_manager is not None:
+                    ok = ws_manager.enable_bluetooth_sync()
+                    if not ok:
+                        self.logger.error("Failed to enable Home Assistant Bluetooth integration after provisioning mode!")
+                else:
+                    self.logger.error("websocket_manager not found in supervisor, cannot enable Bluetooth integration!")
+        except Exception as e:
+            self.logger.error(f"Error checking or enabling Home Assistant Bluetooth integration: {e}")
         return True
 
     def _start_external_service(self):

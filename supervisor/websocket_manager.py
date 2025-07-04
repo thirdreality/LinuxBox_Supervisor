@@ -368,6 +368,106 @@ class WebSocketManager:
             self.logger.error(f"Error getting ZHA devices with token: {e}")
             return []
 
+    async def disable_bluetooth(self) -> bool:
+        """
+        Disable the Bluetooth integration via Home Assistant WebSocket API.
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            websocket = await self._connect_and_authenticate()
+            if not websocket:
+                return False
+            try:
+                # Step 1: 获取所有config entries
+                req_id = self._get_next_request_id()
+                get_entries_request = {
+                    'id': req_id,
+                    'type': 'config_entries/get'
+                }
+                response = await self._send_request_and_wait_response(websocket, get_entries_request)
+                if not response or response.get('success') is False:
+                    self.logger.error("Failed to get config entries for Bluetooth disable")
+                    return False
+                entries = response.get('result', [])
+                # Step 2: 查找domain为bluetooth的entry
+                bluetooth_entry = next((e for e in entries if e.get('domain') == 'bluetooth'), None)
+                if not bluetooth_entry or not bluetooth_entry.get('entry_id'):
+                    self.logger.error("No Bluetooth config entry found")
+                    return False
+                entry_id = bluetooth_entry['entry_id']
+                # Step 3: 发送disable命令
+                req_id2 = self._get_next_request_id()
+                disable_request = {
+                    'id': req_id2,
+                    'type': 'config_entries/disable',
+                    'entry_id': entry_id,
+                    'disabled_by': 'user'
+                }
+                disable_response = await self._send_request_and_wait_response(websocket, disable_request)
+                if not disable_response or disable_response.get('success') is False:
+                    self.logger.error("Failed to disable Bluetooth integration")
+                    return False
+                self.logger.info("Bluetooth integration disabled successfully")
+                return True
+            finally:
+                await websocket.close()
+                if hasattr(websocket, '_session'):
+                    await websocket._session.close()
+        except Exception as e:
+            self.logger.error(f"Error disabling Bluetooth integration: {e}")
+            return False
+
+    async def enable_bluetooth(self) -> bool:
+        """
+        Enable the Bluetooth integration via Home Assistant WebSocket API.
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            websocket = await self._connect_and_authenticate()
+            if not websocket:
+                return False
+            try:
+                # Step 1: 获取所有config entries
+                req_id = self._get_next_request_id()
+                get_entries_request = {
+                    'id': req_id,
+                    'type': 'config_entries/get'
+                }
+                response = await self._send_request_and_wait_response(websocket, get_entries_request)
+                if not response or response.get('success') is False:
+                    self.logger.error("Failed to get config entries for Bluetooth enable")
+                    return False
+                entries = response.get('result', [])
+                # Step 2: 查找domain为bluetooth的entry
+                bluetooth_entry = next((e for e in entries if e.get('domain') == 'bluetooth'), None)
+                if not bluetooth_entry or not bluetooth_entry.get('entry_id'):
+                    self.logger.error("No Bluetooth config entry found")
+                    return False
+                entry_id = bluetooth_entry['entry_id']
+                # Step 3: 发送enable命令（实际上是disable，disabled_by为None）
+                req_id2 = self._get_next_request_id()
+                enable_request = {
+                    'id': req_id2,
+                    'type': 'config_entries/disable',
+                    'entry_id': entry_id,
+                    'disabled_by': None
+                }
+                enable_response = await self._send_request_and_wait_response(websocket, enable_request)
+                if not enable_response or enable_response.get('success') is False:
+                    self.logger.error("Failed to enable Bluetooth integration")
+                    return False
+                self.logger.info("Bluetooth integration enabled successfully")
+                return True
+            finally:
+                await websocket.close()
+                if hasattr(websocket, '_session'):
+                    await websocket._session.close()
+        except Exception as e:
+            self.logger.error(f"Error enabling Bluetooth integration: {e}")
+            return False
+
     def run_async_task(self, coro):
         """Helper method to run async tasks from sync context"""
         try:
@@ -416,3 +516,11 @@ class WebSocketManager:
                     self.run_async_task(websocket._session.close())
         except Exception as e:
             self.logger.error(f"Error closing WebSocket: {e}")
+
+    def disable_bluetooth_sync(self) -> bool:
+        """Synchronous wrapper for disable_bluetooth"""
+        return self.run_async_task(self.disable_bluetooth())
+
+    def enable_bluetooth_sync(self) -> bool:
+        """Synchronous wrapper for enable_bluetooth"""
+        return self.run_async_task(self.enable_bluetooth())
