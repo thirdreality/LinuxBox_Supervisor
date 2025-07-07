@@ -131,6 +131,21 @@ class WebSocketManager:
                     self.logger.error("Failed to switch ZHA channel")
                     return False
                 self.logger.info(f"Successfully switched ZHA channel to {channel}")
+                
+                # Create ZHA network backup (non-critical operation)
+                try:
+                    backup_req_id = self._get_next_request_id()
+                    backup_request = {
+                        "type": "zha/network/backups/create",
+                        "id": backup_req_id
+                    }
+                    print(f"[ZHA] Sending backup creation request: {backup_request}")
+                    self.logger.info(f"[ZHA] Sending backup creation request: {backup_request}")
+                    backup_response = await self._send_request_and_wait_response(websocket, backup_request)
+                    self.logger.info(f"[ZHA] Backup creation response: {backup_response}")
+                except Exception as e:
+                    self.logger.warning(f"ZHA backup creation failed (non-critical): {e}")
+                
                 return True
             finally:
                 await websocket.close()

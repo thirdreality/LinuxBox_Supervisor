@@ -279,15 +279,20 @@ def _update_zha_device_registry(mqtt_entry_id, zha_entry_id, ieee, radio_type="z
     devices = device_data['data']['devices']
     new_devices = []
     
-    # Iterate through devices, remove those related to mqtt_entry_id
+    # Iterate through devices, remove those related to mqtt_entry_id or Zigbee2MQTT
     for device in devices:
+        # Remove devices linked to MQTT entry_id
         if mqtt_entry_id and 'config_entries' in device:
             if mqtt_entry_id in device['config_entries']:
-                print(f"Removing device linked to MQTT: [{device.get('name', 'Unknown device')} ]")
+                print(f"Removing device linked to MQTT entry_id: [{device.get('name', 'Unknown device')} ]")
                 continue
+        
+        # Remove devices with manufacturer "Zigbee2MQTT"
+        if device.get('manufacturer') == 'Zigbee2MQTT':
+            print(f"Removing Zigbee2MQTT device: [{device.get('name', 'Unknown device')} ]")
+            continue
+            
         new_devices.append(device)
-    else:
-        new_devices = devices
     
     # 查找coordinator
     coordinators = find_zigbee_coordinator(new_devices)
@@ -512,20 +517,28 @@ def _update_zigbee2mqtt_device_registry(zha_entry_id, mqtt_entry_id):
     # Remove devices linked to ZHA entry_id if it exists
     # "manufacturer":"Zigbee2MQTT"
     has_z2m_bridge = False
+    bridge_device_to_keep = None
+    
     for device in devices:
         # Check if this is the Zigbee2MQTT Bridge
         if device.get('name') == "Zigbee2MQTT Bridge":
-            has_z2m_bridge = True
-            print("Zigbee2MQTT Bridge already exists in registry")
-            # Update the bridge to use the current MQTT entry_id
-            if device.get('config_entries') and mqtt_entry_id not in device.get('config_entries', []):
+            if has_z2m_bridge:
+                # This is a duplicate bridge, skip it
+                print(f"Removing duplicate Zigbee2MQTT Bridge device: {device.get('id')}")
+                continue
+            else:
+                # This is the first bridge we found, keep it
+                has_z2m_bridge = True
+                print("Found Zigbee2MQTT Bridge in registry")
+                # Update the bridge to use the current MQTT entry_id
                 device['config_entries'] = [mqtt_entry_id]
                 device['config_entries_subentries'] = {mqtt_entry_id: [None]}
                 device['primary_config_entry'] = mqtt_entry_id
                 device['modified_at'] = datetime.now(timezone.utc).isoformat()
                 print("Updated Zigbee2MQTT Bridge with current MQTT entry_id")
-            new_devices.append(device)
-            continue
+                bridge_device_to_keep = device
+                new_devices.append(device)
+                continue
             
         # Skip devices linked to ZHA if zha_entry_id exists
         if zha_entry_id and 'config_entries' in device:
@@ -533,37 +546,7 @@ def _update_zigbee2mqtt_device_registry(zha_entry_id, mqtt_entry_id):
                 print(f"Removing device linked to ZHA: [ {device.get('name', 'Unknown device')} ]")
                 continue
         new_devices.append(device)
-    
-    # # If Zigbee2MQTT Bridge doesn't exist, add it
-    # if not has_z2m_bridge:
-    #     now = datetime.now(timezone.utc).isoformat()
-    #     bridge_device = {
-    #         "area_id": None,
-    #         "config_entries": [mqtt_entry_id],
-    #         "config_entries_subentries": {mqtt_entry_id: [None]},
-    #         "configuration_url": None,
-    #         "connections": [],
-    #         "created_at": now,
-    #         "disabled_by": None,
-    #         "entry_type": None,
-    #         "hw_version": "zigate 321",
-    #         "id": f"{uuid.uuid4().hex}",
-    #         "identifiers": [],
-    #         "labels": [],
-    #         "manufacturer": "Zigbee2MQTT",
-    #         "model": "Bridge",
-    #         "model_id": None,
-    #         "modified_at": now,
-    #         "name_by_user": None,
-    #         "name": "Zigbee2MQTT Bridge",
-    #         "primary_config_entry": mqtt_entry_id,
-    #         "serial_number": None,
-    #         "sw_version": "2.3.0",
-    #         "via_device_id": None
-    #     }
-    #     new_devices.append(bridge_device)
-    #     print(f"Added Zigbee2MQTT Bridge device: {bridge_device}")
-    
+ 
     # Update devices
     device_data['data']['devices'] = new_devices
     
@@ -916,13 +899,13 @@ def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):
             logging.info("Updating Home Assistant configurations for Z2M mode...")
             
             _call_progress(progress_callback, 30, "Updating Z2M config entries...")
-            mqtt_entry_id, zha_entry_id = _update_zigbee2mqtt_config_entries()
+            zha_entry_id, mqtt_entry_id = _update_zigbee2mqtt_config_entries()
             logging.info(f"Z2M config entries updated. MQTT Entry ID: {mqtt_entry_id}, ZHA Entry ID targeted for removal: {zha_entry_id}")
             # Force sync to flush NAND cache
             force_sync()
 
             _call_progress(progress_callback, 50, "Updating Z2M device registry...")
-            _update_zigbee2mqtt_device_registry(mqtt_entry_id, zha_entry_id)
+            _update_zigbee2mqtt_device_registry(zha_entry_id, mqtt_entry_id)
             logging.info("Z2M device registry updated.")
             # Force sync to flush NAND cache
             force_sync()
