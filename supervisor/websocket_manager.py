@@ -76,6 +76,12 @@ class WebSocketManager:
             
         except Exception as e:
             self.logger.error(f"Error connecting to WebSocket: {e}")
+            # Clean up session if it was created
+            if 'session' in locals():
+                try:
+                    await session.close()
+                except Exception as cleanup_error:
+                    self.logger.debug(f"Error closing session during cleanup: {cleanup_error}")
             return None
 
     async def _send_request_and_wait_response(self, websocket: aiohttp.ClientWebSocketResponse, 
@@ -468,6 +474,79 @@ class WebSocketManager:
             self.logger.error(f"Error enabling Bluetooth integration: {e}")
             return False
 
+    async def check_bluetooth_enabled(self) -> bool:
+        """
+        Check if Bluetooth integration is enabled via Home Assistant WebSocket API.
+        Returns:
+            True if Bluetooth is enabled, False if disabled or not found
+        Raises:
+            ConnectionError: If Home Assistant is not available
+        """
+        try:
+            websocket = await self._connect_and_authenticate()
+            if not websocket:
+                raise ConnectionError("Home Assistant WebSocket connection failed")
+            try:
+                req_id = self._get_next_request_id()
+                request = {
+                    'id': req_id,
+                    'type': 'config/device_registry/list'
+                }
+                response = await self._send_request_and_wait_response(websocket, request)
+                if not response or response.get('success') is False:
+                    self.logger.error("Failed to get device registry for Bluetooth status check")
+                    return False
+                devices = response.get('result', [])
+                self.logger.info(f"Total devices in registry: {len(devices)}")
+                
+                # Look for Bluetooth devices in device registry
+                bluetooth_devices = []
+                for device in devices:
+                    identifiers = device.get('identifiers', [])
+                    connections = device.get('connections', [])
+                    self.logger.debug(f"Device: {device.get('name', 'Unknown')}, identifiers: {identifiers}, connections: {connections}")
+                    
+                    # Check if device is Bluetooth by identifiers or connections
+                    is_bluetooth = False
+                    if identifiers and any('bluetooth' in str(identifier) for identifier in identifiers):
+                        is_bluetooth = True
+                    elif connections and any(conn[0] == 'bluetooth' for conn in connections):
+                        is_bluetooth = True
+                    
+                    if is_bluetooth:
+                        bluetooth_devices.append(device)
+                        self.logger.info(f"Found Bluetooth device: {device.get('name', 'Unknown')}, identifiers: {identifiers}, connections: {connections}")
+                
+                self.logger.info(f"Total Bluetooth devices found: {len(bluetooth_devices)}")
+                if not bluetooth_devices:
+                    self.logger.info("No Bluetooth device found in device registry")
+                    return False
+                
+                # Check if any Bluetooth device is enabled (disabled_by is None)
+                self.logger.info("Checking Bluetooth devices status:")
+                for device in bluetooth_devices:
+                    disabled_by = device.get('disabled_by')
+                    is_enabled = disabled_by is None
+                    device_name = device.get('name', 'Unknown')
+                    device_id = device.get('id', 'Unknown')
+                    self.logger.info(f"  - Device: {device_name} (ID: {device_id})")
+                    self.logger.info(f"    disabled_by: {disabled_by}")
+                    self.logger.info(f"    enabled: {is_enabled}")
+                    if is_enabled:
+                        self.logger.info(f"Found enabled Bluetooth device: {device_name}")
+                        return True
+                
+                # If we found Bluetooth devices but none are enabled, return False
+                self.logger.info("Bluetooth devices found but all are disabled")
+                return False
+            finally:
+                await websocket.close()
+                if hasattr(websocket, '_session'):
+                    await websocket._session.close()
+        except Exception as e:
+            self.logger.error(f"Error checking Bluetooth status: {e}")
+            return False
+
     def run_async_task(self, coro):
         """Helper method to run async tasks from sync context"""
         try:
@@ -475,8 +554,22 @@ class WebSocketManager:
         except RuntimeError:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            
-        return loop.run_until_complete(coro)
+        
+        try:
+            return loop.run_until_complete(coro)
+        except Exception as e:
+            self.logger.error(f"Error in async task: {e}")
+            raise
+        finally:
+            # Ensure all pending tasks are cleaned up
+            try:
+                pending = asyncio.all_tasks(loop)
+                for task in pending:
+                    if not task.done():
+                        task.cancel()
+                        self.logger.debug(f"Cancelled pending task: {task}")
+            except Exception as cleanup_error:
+                self.logger.debug(f"Error during task cleanup: {cleanup_error}")
 
     def switch_zha_channel_sync(self, channel: int) -> bool:
         """Synchronous wrapper for switch_zha_channel"""
@@ -497,6 +590,14 @@ class WebSocketManager:
     def get_thread_devices_sync(self) -> List[Dict[str, Any]]:
         """Synchronous wrapper for get_thread_devices"""
         return self.run_async_task(self.get_thread_devices())
+
+    def check_bluetooth_enabled_sync(self) -> bool:
+        """Synchronous wrapper for check_bluetooth_enabled"""
+        try:
+            return self.run_async_task(self.check_bluetooth_enabled())
+        except ConnectionError as e:
+            self.logger.error(f"Home Assistant not available for Bluetooth status check: {e}")
+            raise
 
     def _connect_and_authenticate_sync(self) -> Optional[aiohttp.ClientWebSocketResponse]:
         """Synchronous version of _connect_and_authenticate"""
@@ -524,3 +625,28 @@ class WebSocketManager:
     def enable_bluetooth_sync(self) -> bool:
         """Synchronous wrapper for enable_bluetooth"""
         return self.run_async_task(self.enable_bluetooth())
+    
+    def cleanup(self):
+        """Clean up any remaining resources"""
+        # This method can be called during shutdown to ensure all resources are properly cleaned up
+        self.logger.debug("WebSocketManager cleanup called")
+        
+        # Cancel any pending async tasks
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # If loop is running, we can't cancel tasks from here
+                # The cleanup will happen when the loop stops
+                self.logger.debug("Event loop is running, cleanup will happen when loop stops")
+            else:
+                # Cancel all pending tasks
+                pending = asyncio.all_tasks(loop)
+                for task in pending:
+                    if not task.done():
+                        task.cancel()
+                        self.logger.debug(f"Cancelled pending task: {task}")
+        except RuntimeError:
+            # No event loop in current thread
+            self.logger.debug("No event loop in current thread")
+        except Exception as e:
+            self.logger.debug(f"Error during WebSocketManager cleanup: {e}")

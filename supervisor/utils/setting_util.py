@@ -205,9 +205,9 @@ def run_setting_backup(progress_callback=None, complete_callback=None):
                 logging.error(error_message)
                 raise Exception(error_message)
             logging.info(f"Backup archive created successfully: {backup_filepath}")
-            # Ensure all data is flushed to disk
-            subprocess.run(["sync"])
-            logging.info("Sync command executed after backup archive creation.")
+            # Force sync to flush NAND cache
+            force_sync()
+            logging.info("Force sync executed after backup archive creation.")
             _call_progress(70, "Backup archive created.")
             backup_archive_created = True
 
@@ -265,9 +265,9 @@ def run_setting_backup(progress_callback=None, complete_callback=None):
         
         logging.info("Service restoration phase complete.")
         
-        # Ensure all data is flushed to disk after successful backup
-        subprocess.run(["sync"])
-        logging.info("Sync command executed after successful backup completion.")
+        # Force sync to flush NAND cache after successful backup
+        force_sync()
+        logging.info("Force sync executed after successful backup completion.")
         
         # Call completion callback and final progress only after all work is done
         if complete_callback:
@@ -510,9 +510,9 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
                 _call_progress(int(current_progress_data), f"Finished processing restore for {target_sys_path}.")
             
             _call_progress(80, "Data restoration phase complete.")
-            # Ensure all restored data is flushed to disk
-            subprocess.run(["sync"])
-            logging.info("Sync command executed after data restoration.")
+            # Force sync to flush NAND cache after data restoration
+            force_sync()
+            logging.info("Force sync executed after data restoration.")
             # 恢复网络连接
             try:
                 network_states_path = os.path.join(temp_extraction_dir, "network_states.json")
@@ -612,9 +612,9 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
             backup_filename = os.path.basename(selected_backup_filepath)
             _create_restore_record(backup_filename, True)
             
-            # Ensure all data is flushed to disk after successful restore
-            subprocess.run(["sync"])
-            logging.info("Sync command executed after successful restore completion.")
+            # Force sync to flush NAND cache after successful restore
+            force_sync()
+            logging.info("Force sync executed after successful restore completion.")
             
             # Call completion callback and final progress only after all work is done
             if complete_callback:

@@ -9,6 +9,7 @@ import os
 from typing import Dict, Any, Optional
 from .websocket_manager import WebSocketManager
 from .utils.zigbee_util import get_ha_zigbee_mode
+from .utils.util import force_sync
 
 class ChannelManager:
     def __init__(self):
@@ -223,6 +224,14 @@ class ChannelManager:
                 return False
 
             self.logger.info(f"Successfully switched Z2M channel to {channel} (restart required)")
+            
+            # Force sync to flush NAND cache after successful channel switch
+            try:
+                force_sync()
+                self.logger.info("Force sync executed after successful Z2M channel switch")
+            except Exception as e:
+                self.logger.warning(f"Force sync failed after Z2M channel switch: {e}")
+            
             return True
         except Exception as e:
             self.logger.error(f"Error switching Z2M channel: {e}")

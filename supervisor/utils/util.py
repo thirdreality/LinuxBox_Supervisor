@@ -153,6 +153,24 @@ def start_service(service_name, start):
         logging.error(f"Error {'starting' if start else 'stopping'} service {service_name}: {e}")
         return False
 
+def force_sync():
+    """
+    Force sync to flush NAND cache by executing sync command 3 times.
+    This is necessary due to NAND caching mechanisms.
+    
+    Returns:
+        bool: True if sync commands executed successfully, False otherwise
+    """
+    try:
+        # Force sync 3 times to ensure data is written to NAND storage
+        for _ in range(3):
+            subprocess.run(["sync"], check=True)
+        logging.info("Force sync completed (3 times)")
+        return True
+    except Exception as e:
+        logging.error(f"Error during force sync: {e}")
+        return False
+
 def perform_reboot():
     """
         Safely stop necessary services and reboot the system.
@@ -170,8 +188,7 @@ def perform_reboot():
             logging.info("Docker service not found or already stopped, proceeding with reboot")
         
         # Ensure all data is flushed to disk before reboot
-        subprocess.run(["sync"], check=True)
-        logging.info("Sync command executed before reboot.")
+        force_sync()
         
         subprocess.run(["reboot"], check=True)
         return True
@@ -192,8 +209,7 @@ def perform_power_off():
         subprocess.run(["systemctl", "stop", "docker"], check=True)
         
         # Ensure all data is flushed to disk before power off
-        subprocess.run(["sync"], check=True)
-        logging.info("Sync command executed before power off.")
+        force_sync()
         
         subprocess.run(["poweroff"], check=True)
         return True
@@ -204,8 +220,7 @@ def perform_power_off():
 def perform_factory_reset():
     try:
         # Ensure all data is flushed to disk before factory reset
-        subprocess.run(["sync"], check=True)
-        logging.info("Sync command executed before factory reset.")
+        force_sync()
         
         subprocess.run(["/lib/armbian/factory-reset.sh"], check=True)
         return True

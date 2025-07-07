@@ -14,6 +14,7 @@ from supervisor.hardware import LedState
 import threading
 import time
 from supervisor.token_manager import TokenManager
+from .util import force_sync
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -251,9 +252,8 @@ def _update_zha_config_entries(radio_type="zigate"):
         with open(config_entries_path, 'w') as f:
             json.dump(config_data, f, indent=2)
         print(f"Updated {config_entries_path}")
-        # sync 3 times
-        for _ in range(3):
-            subprocess.run(["sync"])
+        # Force sync to flush NAND cache
+        force_sync()
     except Exception as e:
         raise ConfigError(f"Error writing to {config_entries_path}: {e}")
     
@@ -360,9 +360,8 @@ def _update_zha_device_registry(mqtt_entry_id, zha_entry_id, ieee, radio_type="z
         with open(device_registry_path, 'w') as f:
             json.dump(device_data, f, indent=2)
         print(f"Updated {device_registry_path}")
-        # sync 3 times
-        for _ in range(3):
-            subprocess.run(["sync"])
+        # Force sync to flush NAND cache
+        force_sync()
     except Exception as e:
         raise ConfigError(f"Error writing to {device_registry_path}: {e}")
 
@@ -664,8 +663,8 @@ def _reset_zigbee2mqtt_configuration():
         dest_file = os.path.join(z2m_data_path, "configuration.yaml")
         shutil.copy2(config_file, dest_file)
         logging.info(f"Installed zigbee2mqtt configuration from {config_file} to {dest_file}")
-        for _ in range(3):
-            subprocess.run(["sync"])
+        # Force sync to flush NAND cache
+        force_sync()
     except Exception as e:
         logging.warning(f"Error resetting zigbee2mqtt configuration: {e}")
 
@@ -856,12 +855,12 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
                 logging.error(f"CRITICAL: Failed to restart Home Assistant service: {e}. Manual intervention may be required.")
             except FileNotFoundError:
                 logging.error("CRITICAL: systemctl not found. Cannot restart Home Assistant service. Manual intervention may be required.")
-        # 强制sync
+        # Force sync to flush NAND cache
         try:
-            subprocess.run(["sync"])
-            logging.info("sync executed after ZHA mode switch.")
+            force_sync()
+            logging.info("Force sync executed after ZHA mode switch.")
         except Exception as e:
-            logging.error(f"sync failed after ZHA mode switch: {e}")
+            logging.error(f"Force sync failed after ZHA mode switch: {e}")
 
 def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):
     """
@@ -919,20 +918,20 @@ def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):
             _call_progress(progress_callback, 30, "Updating Z2M config entries...")
             mqtt_entry_id, zha_entry_id = _update_zigbee2mqtt_config_entries()
             logging.info(f"Z2M config entries updated. MQTT Entry ID: {mqtt_entry_id}, ZHA Entry ID targeted for removal: {zha_entry_id}")
-            for _ in range(3):
-                subprocess.run(["sync"])
+            # Force sync to flush NAND cache
+            force_sync()
 
             _call_progress(progress_callback, 50, "Updating Z2M device registry...")
             _update_zigbee2mqtt_device_registry(mqtt_entry_id, zha_entry_id)
             logging.info("Z2M device registry updated.")
-            for _ in range(3):
-                subprocess.run(["sync"])
+            # Force sync to flush NAND cache
+            force_sync()
 
             _call_progress(progress_callback, 70, "Updating Z2M entity registry...")
             _update_zigbee2mqtt_entity_registry()
             logging.info("Z2M entity registry updated.")
-            for _ in range(3):
-                subprocess.run(["sync"])
+            # Force sync to flush NAND cache
+            force_sync()
 
             # 新增：重置configuration.yaml
             _reset_zigbee2mqtt_configuration()
@@ -1007,12 +1006,12 @@ def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):
                 logging.error(f"CRITICAL: Failed to restart Home Assistant service: {e}. Manual intervention may be required.")
             except FileNotFoundError:
                 logging.error("CRITICAL: systemctl not found. Cannot restart Home Assistant service. Manual intervention may be required.")
-        # 强制sync
+        # Force sync to flush NAND cache
         try:
-            subprocess.run(["sync"])
-            logging.info("sync executed after Z2M mode switch.")
+            force_sync()
+            logging.info("Force sync executed after Z2M mode switch.")
         except Exception as e:
-            logging.error(f"sync failed after Z2M mode switch: {e}")
+            logging.error(f"Force sync failed after Z2M mode switch: {e}")
 
 def get_ha_zigbee_mode(config_file="/var/lib/homeassistant/homeassistant/.storage/core.config_entries"):
     """
