@@ -11,6 +11,7 @@ import json
 from datetime import datetime
 from .wifi_utils import get_current_wifi_info
 import base64
+from .util import force_sync
 
 from ..const import BACKUP_STORAGE_MODE, BACKUP_INTERNAL_PATH, BACKUP_EXTERNAL_PATH
 from supervisor.sysinfo import SystemInfoUpdater
@@ -268,6 +269,12 @@ def run_setting_backup(progress_callback=None, complete_callback=None):
         # Force sync to flush NAND cache after successful backup
         force_sync()
         logging.info("Force sync executed after successful backup completion.")
+        
+        # Create restore record for the backup to prevent auto-restore
+        if backup_archive_created:
+            backup_filename = os.path.basename(backup_filepath)
+            _create_restore_record(backup_filename, True)
+            logging.info(f"Restore record created for backup {backup_filename} to prevent auto-restore")
         
         # Call completion callback and final progress only after all work is done
         if complete_callback:
