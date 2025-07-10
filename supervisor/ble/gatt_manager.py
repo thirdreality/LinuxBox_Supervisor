@@ -14,7 +14,7 @@ from ..const import (
     BLE_GATT_SERVER_MODE, 
     EXTERNAL_GATT_SERVICE_NAME, 
     EXTERNAL_GATT_BINARY_PATH,
-    GATT_SERVER_TIMEOUT_MINUTES
+    GATT_SERVER_TIMEOUT_SECONDS
 )
 from .gatt_server import SupervisorGattServer
 from ..hardware import LedState
@@ -318,10 +318,10 @@ class GattServerManager:
         if self.timeout_timer:
             self.timeout_timer.cancel()
             
-        timeout_seconds = GATT_SERVER_TIMEOUT_MINUTES * 60
+        timeout_seconds = GATT_SERVER_TIMEOUT_SECONDS
         self.timeout_timer = threading.Timer(timeout_seconds, self._on_timeout)
         self.timeout_timer.start()
-        self.logger.info(f"Started {GATT_SERVER_TIMEOUT_MINUTES} minute timeout timer")
+        self.logger.info(f"Started {GATT_SERVER_TIMEOUT_SECONDS} seconds timeout timer")
 
     def _on_timeout(self):
         """Timeout callback"""
