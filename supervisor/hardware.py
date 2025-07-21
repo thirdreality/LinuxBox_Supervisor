@@ -54,6 +54,7 @@ class LedState(Enum):
 
     # 系统级运行态
     SYS_SYSTEM_CORRUPTED = "sys_system_corrupted"  # 系统未安装（如系统损坏）: 红色慢闪（0.5Hz）
+    
     SYS_ERROR_CONDITION = "sys_error_condition"  # 异常/错误提示: 红色慢闪(0.5Hz）
     SYS_OFFLINE = "sys_offline"  # 离线: 黄色快闪（3Hz）    
     SYS_NORMAL_OPERATION = "sys_normal_operation"  # 正常运行: 蓝色常亮

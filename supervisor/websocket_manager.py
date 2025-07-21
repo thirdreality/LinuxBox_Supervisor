@@ -131,21 +131,10 @@ class WebSocketManager:
                     self.logger.error("Failed to switch ZHA channel")
                     return False
                 self.logger.info(f"Successfully switched ZHA channel to {channel}")
-                
-                # Create ZHA network backup (non-critical operation)
-                try:
-                    backup_req_id = self._get_next_request_id()
-                    backup_request = {
-                        "type": "zha/network/backups/create",
-                        "id": backup_req_id
-                    }
-                    print(f"[ZHA] Sending backup creation request: {backup_request}")
-                    self.logger.info(f"[ZHA] Sending backup creation request: {backup_request}")
-                    backup_response = await self._send_request_and_wait_response(websocket, backup_request)
-                    self.logger.info(f"[ZHA] Backup creation response: {backup_response}")
-                except Exception as e:
-                    self.logger.warning(f"ZHA backup creation failed (non-critical): {e}")
-                
+
+                # 切换频道成功后，异步延迟5秒再发备份指令
+                asyncio.create_task(self._delayed_zha_backup())
+
                 return True
             finally:
                 await websocket.close()
@@ -154,6 +143,42 @@ class WebSocketManager:
         except Exception as e:
             self.logger.error(f"Error switching ZHA channel: {e}")
             return False
+
+    async def _delayed_zha_backup(self):
+        await asyncio.sleep(5)
+        try:
+            websocket = await self._connect_and_authenticate()
+            if not websocket:
+                self.logger.warning("_delayed_zha_backup: websocket connect failed")
+                return
+            try:
+                # 先发送 zha/network/settings 指令
+                settings_req_id = self._get_next_request_id()
+                settings_request = {
+                    "type": "zha/network/settings",
+                    "id": settings_req_id
+                }
+                print(f"[ZHA] (delayed) Sending settings request: {settings_request}")
+                self.logger.info(f"[ZHA] (delayed) Sending settings request: {settings_request}")
+                settings_response = await self._send_request_and_wait_response(websocket, settings_request)
+                self.logger.info(f"[ZHA] (delayed) Settings response: {settings_response}")
+
+                # 再发送 zha/network/backups/create 指令
+                backup_req_id = self._get_next_request_id()
+                backup_request = {
+                    "type": "zha/network/backups/create",
+                    "id": backup_req_id
+                }
+                print(f"[ZHA] (delayed) Sending backup creation request: {backup_request}")
+                self.logger.info(f"[ZHA] (delayed) Sending backup creation request: {backup_request}")
+                backup_response = await self._send_request_and_wait_response(websocket, backup_request)
+                self.logger.info(f"[ZHA] (delayed) Backup creation response: {backup_response}")
+            finally:
+                await websocket.close()
+                if hasattr(websocket, '_session'):
+                    await websocket._session.close()
+        except Exception as e:
+            self.logger.warning(f"ZHA backup creation failed (non-critical): {e}")
 
     async def switch_thread_channel(self, channel: int) -> bool:
         """

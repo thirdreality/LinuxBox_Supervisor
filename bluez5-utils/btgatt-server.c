@@ -300,6 +300,8 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
     if (!root) {
         printf("[DEBUG] Failed to parse JSON\n");
         snprintf(response, response_len, "{\"err\":\"bad fmt\"}");
+
+        send_socket_command(LED_SYS_WIFI_CONFIG_PENDING);
         return -1;
     }
 
@@ -308,6 +310,8 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
         printf("[DEBUG] Missing or invalid SSID\n");
         cJSON_Delete(root);
         snprintf(response, response_len, "{\"err\":\"bad ssid\"}");
+
+        send_socket_command(LED_SYS_WIFI_CONFIG_PENDING);
         return -1;
     }
 
@@ -404,10 +408,13 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
     
     // If command failed but it's a "network not found" error, try scanning and reconnecting
     if (!cmd_success && need_scan_retry) {
-        printf("[WIFI] Scanning for WiFi networks before retry...\n");
+        printf("[WIFI] Rescanning WiFi networks before connect...\n");
+        system("nmcli device wifi rescan");
+        sleep(2);
         
+        printf("[WIFI] Scanning for WiFi networks before retry...\n");
         // Perform WiFi scan
-        char scan_cmd[] = "nmcli dev wifi list ifname wlan0";
+        char scan_cmd[] = "nmcli device wifi list ifname wlan0";
         FILE *scan_fp = popen(scan_cmd, "r");
         if (scan_fp) {
             char scan_line[256];
@@ -430,6 +437,8 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
             printf("[WIFI] Failed to execute retry nmcli command\n");
             snprintf(response, response_len, "{\"err\":\"cmd fail\"}");
             cJSON_Delete(root);
+
+            send_socket_command(LED_SYS_WIFI_CONFIG_PENDING);
             return -1;
         }
         
@@ -459,6 +468,8 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
         printf("[WIFI] nmcli command failed, not checking IP address\n");
         snprintf(response, response_len, "{\"err\":\"conn fail\"}");
         cJSON_Delete(root);
+
+        send_socket_command(LED_SYS_WIFI_CONFIG_PENDING);
         return -1;
     }
     
@@ -472,6 +483,8 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
             printf("[WIFI] BLE client disconnected during WiFi config, aborting\n");
             snprintf(response, response_len, "{\"err\":\"BLE lost\"}");
             cJSON_Delete(root);
+
+            send_socket_command(LED_SYS_WIFI_CONFIG_PENDING);
             return -1;
         }
         
