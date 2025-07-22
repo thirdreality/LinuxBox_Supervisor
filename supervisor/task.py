@@ -188,6 +188,8 @@ class TaskManager:
             
             if success:
                 message = f"Successfully switched ZHA channel to {channel}"
+                ws_manager.delayed_zha_backup_sync()
+                
                 if progress_callback:
                     progress_callback(100, message)
                 if complete_callback:

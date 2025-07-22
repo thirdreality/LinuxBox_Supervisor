@@ -133,7 +133,7 @@ class WebSocketManager:
                 self.logger.info(f"Successfully switched ZHA channel to {channel}")
 
                 # 切换频道成功后，异步延迟5秒再发备份指令
-                asyncio.create_task(self._delayed_zha_backup())
+                # asyncio.create_task(self._delayed_zha_backup())
 
                 return True
             finally:
@@ -666,6 +666,10 @@ class WebSocketManager:
         """Synchronous wrapper for enable_bluetooth"""
         return self.run_async_task(self.enable_bluetooth())
     
+    def delayed_zha_backup_sync(self):
+        """Synchronous wrapper for _delayed_zha_backup"""
+        return self.run_async_task(self._delayed_zha_backup())
+
     def cleanup(self):
         """Clean up any remaining resources"""
         # This method can be called during shutdown to ensure all resources are properly cleaned up
