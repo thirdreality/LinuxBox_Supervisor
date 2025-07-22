@@ -132,7 +132,7 @@ class WebSocketManager:
                     return False
                 self.logger.info(f"Successfully switched ZHA channel to {channel}")
 
-                # 切换频道成功后，异步延迟5秒再发备份指令
+                # After switching the channel successfully, asynchronously delay 5 seconds before sending the backup command
                 # asyncio.create_task(self._delayed_zha_backup())
 
                 return True
@@ -193,7 +193,7 @@ class WebSocketManager:
             if not websocket:
                 return False
             try:
-                # Step 1: 获取OTBR信息，拿到extended_address
+                # Step 1: Get OTBR info to obtain extended_address
                 req_id = self._get_next_request_id()
                 info_request = {'id': req_id, 'type': 'otbr/info'}
                 self.logger.info(f"[Thread] Sending WebSocket request for OTBR info: {info_request}")
@@ -212,7 +212,7 @@ class WebSocketManager:
                     self.logger.error("No extended_address found in OTBR info")
                     return False
                 extended_address = first_br['extended_address']
-                # Step 2: 设置channel
+                # Step 2: Set channel
                 req_id2 = self._get_next_request_id()
                 set_channel_request = {
                     'type': 'otbr/set_channel',
@@ -425,7 +425,7 @@ class WebSocketManager:
             if not websocket:
                 return False
             try:
-                # Step 1: 获取所有config entries
+                # Step 1: Get all config entries
                 req_id = self._get_next_request_id()
                 get_entries_request = {
                     'id': req_id,
@@ -436,13 +436,13 @@ class WebSocketManager:
                     self.logger.error("Failed to get config entries for Bluetooth disable")
                     return False
                 entries = response.get('result', [])
-                # Step 2: 查找domain为bluetooth的entry
+                # Step 2: Find the entry with domain 'bluetooth'
                 bluetooth_entry = next((e for e in entries if e.get('domain') == 'bluetooth'), None)
                 if not bluetooth_entry or not bluetooth_entry.get('entry_id'):
                     self.logger.error("No Bluetooth config entry found")
                     return False
                 entry_id = bluetooth_entry['entry_id']
-                # Step 3: 发送disable命令
+                # Step 3: Send disable command
                 req_id2 = self._get_next_request_id()
                 disable_request = {
                     'id': req_id2,
@@ -475,7 +475,7 @@ class WebSocketManager:
             if not websocket:
                 return False
             try:
-                # Step 1: 获取所有config entries
+                # Step 1: Get all config entries
                 req_id = self._get_next_request_id()
                 get_entries_request = {
                     'id': req_id,
@@ -486,13 +486,13 @@ class WebSocketManager:
                     self.logger.error("Failed to get config entries for Bluetooth enable")
                     return False
                 entries = response.get('result', [])
-                # Step 2: 查找domain为bluetooth的entry
+                # Step 2: Find the entry with domain 'bluetooth'
                 bluetooth_entry = next((e for e in entries if e.get('domain') == 'bluetooth'), None)
                 if not bluetooth_entry or not bluetooth_entry.get('entry_id'):
                     self.logger.error("No Bluetooth config entry found")
                     return False
                 entry_id = bluetooth_entry['entry_id']
-                # Step 3: 发送enable命令（实际上是disable，disabled_by为None）
+                # Step 3: Send enable command (actually disable with disabled_by as None)
                 req_id2 = self._get_next_request_id()
                 enable_request = {
                     'id': req_id2,
