@@ -408,21 +408,12 @@ static int process_wifi_config(const char *json_str, char *response, size_t resp
     
     // If command failed but it's a "network not found" error, try scanning and reconnecting
     if (!cmd_success && need_scan_retry) {
-        printf("[WIFI] Rescanning WiFi networks before connect...\n");
-        system("nmcli device wifi rescan");
-        sleep(2);
-        
         printf("[WIFI] Scanning for WiFi networks before retry...\n");
         // Perform WiFi scan
-        char scan_cmd[] = "nmcli device wifi list ifname wlan0";
-        FILE *scan_fp = popen(scan_cmd, "r");
-        if (scan_fp) {
-            char scan_line[256];
+        system("nmcli device wifi list ifname wlan0 > /dev/null 2>&1");
+        if (system("nmcli device wifi list ifname wlan0 > /dev/null 2>&1") == 0) {
             printf("[WIFI] Scan results:\n");
-            while (fgets(scan_line, sizeof(scan_line), scan_fp)) {
-                printf("[WIFI] %s", scan_line);
-            }
-            pclose(scan_fp);
+            system("nmcli device wifi list ifname wlan0");
         } else {
             printf("[WIFI] Failed to perform WiFi scan\n");
         }
@@ -2208,6 +2199,20 @@ static void cleanup_on_exit(void)
     }
 }
 
+// WiFi异步扫描线程
+void *wifi_rescan_thread(void *arg) {
+    printf("[WIFI] (thread) Initial WiFi rescan at startup...\n");
+    system("nmcli device wifi rescan");
+
+    sleep(5); //claude suggest 3~5 seconds
+
+    printf("[WIFI] (thread) Initial WiFi list after rescan:\n");
+    system("nmcli device wifi list ifname wlan0 > /dev/null 2>&1");
+    
+    printf("[WIFI] (thread) Initial WiFi list finished.\n");
+    return NULL;
+}
+
 int main(int argc, char *argv[])
 {
 
@@ -2292,6 +2297,10 @@ int main(int argc, char *argv[])
 
 	// Enable verbose mode for better debugging
 	verbose = true;
+
+	// 启动时异步热点扫描
+	pthread_t rescan_tid;
+	pthread_create(&rescan_tid, NULL, wifi_rescan_thread, NULL);
 
 	hci_dev_init();
 
