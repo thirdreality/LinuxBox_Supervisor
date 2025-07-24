@@ -735,11 +735,11 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
         all_services_managed_successfully = True
         for service_file, service_name in services_to_manage:
             try:
-                logging.info(f"Stopping {service_name} ({service_file})...")
-                subprocess.run(["systemctl", "stop", service_file], check=False, timeout=60)
                 logging.info(f"Disabling {service_name} ({service_file})...")
-                subprocess.run(["systemctl", "disable", service_file], check=False, timeout=60)
-                logging.info(f"{service_name} ({service_file}) stopped and disabled.")
+                subprocess.run(["systemctl", "disable", service_file], check=True)
+                logging.info(f"Stopping {service_name} ({service_file})...")
+                subprocess.run(["systemctl", "stop", service_file], check=True)
+                logging.info(f"{service_name} ({service_file}) disabled and stopped.")
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
                 logging.warning(f"Error managing {service_name} ({service_file}): {e}. Continuing...")
                 all_services_managed_successfully = False
@@ -923,11 +923,11 @@ def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):
         all_services_managed_successfully = True
         for service_file, service_name in [("mosquitto.service", "Mosquitto"), ("zigbee2mqtt.service", "Zigbee2MQTT")]:
             try:
-                logging.info(f"Starting {service_name} ({service_file})...")
-                subprocess.run(["systemctl", "start", service_file], check=True)
                 logging.info(f"Enabling {service_name} ({service_file})...")
                 subprocess.run(["systemctl", "enable", service_file], check=True)
-                logging.info(f"{service_name} ({service_file}) started and enabled.")
+                logging.info(f"Starting {service_name} ({service_file})...")
+                subprocess.run(["systemctl", "start", service_file], check=True)
+                logging.info(f"{service_name} ({service_file}) enabled and started.")
             except subprocess.CalledProcessError as e:
                 logging.error(f"Error managing {service_name} ({service_file}): {e}. This might affect Z2M functionality.")
                 all_services_managed_successfully = False # Mark that not all services were perfectly managed
