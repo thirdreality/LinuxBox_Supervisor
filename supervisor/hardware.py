@@ -294,25 +294,14 @@ class GpioLed:
                     LedState.SYS_NORMAL_OPERATION: 3, # Lower value = higher priority
                 }
                 
-                old_gop_state = self.general_operational_priority_state
-                changed_gop_state = False
+                # Apply standard priority logic for all general operational states
+                current_gop_state_priority = _general_op_priorities.get(self.general_operational_priority_state, float('inf'))
+                incoming_state_priority = _general_op_priorities.get(state, float('inf'))
 
-                if state == LedState.SYS_NORMAL_OPERATION:
-                    if self.general_operational_priority_state != LedState.SYS_NORMAL_OPERATION:
-                        self.general_operational_priority_state = LedState.SYS_NORMAL_OPERATION
-                        changed_gop_state = True
-                else: # Incoming state is an error/offline/corrupted state
-                    current_gop_state_priority = _general_op_priorities.get(self.general_operational_priority_state, float('inf'))
-                    # If current state is SYS_NORMAL_OPERATION, any incoming error state should override it.
-                    if self.general_operational_priority_state == LedState.SYS_NORMAL_OPERATION:
-                        current_gop_state_priority = float('inf') # Effectively giving any error higher precedence
-
-                    incoming_state_priority = _general_op_priorities.get(state) # 'state' is guaranteed to be in _general_op_priorities here
-
-                    if incoming_state_priority <= current_gop_state_priority:
-                        if self.general_operational_priority_state != state:
-                            self.general_operational_priority_state = state
-                            changed_gop_state = True
+                # Only update if incoming state has higher priority (lower number)
+                if incoming_state_priority < current_gop_state_priority:
+                    if self.general_operational_priority_state != state:
+                        self.general_operational_priority_state = state
 
 
             else:

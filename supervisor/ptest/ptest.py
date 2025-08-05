@@ -20,8 +20,13 @@ logging.basicConfig(
 logger = logging.getLogger("PTest")
 
 class ProductTest:
-    def __init__(self):
-        self.led = GpioLed()
+    def __init__(self, supervisor=None):
+        # Use supervisor's LED instance if available, otherwise create our own
+        self.supervisor = supervisor
+        if supervisor and hasattr(supervisor, 'led'):
+            self.led = supervisor.led
+        else:
+            self.led = GpioLed()
         self.test_results = {}
         
     def run_command(self, cmd, shell=True, capture_output=True, text=True):
@@ -131,34 +136,55 @@ class ProductTest:
         """Test 3: Check LED colors"""
         print("\n=== Test 3: LED Color Check ===")
         
+        red_pass = False
+        green_pass = False
+        blue_pass = False
+        
+        # Test RED LED
         try:
-            # Set LED to RED
+            print("Testing RED LED...")
             self.led.set_led_state(LedState.USER_EVENT_RED)
             time.sleep(1)
             print("SET LED RED Command : test_result pass")
-            
-            # Set LED to GREEN
+            red_pass = True
+        except Exception as e:
+            logger.error(f"RED LED test failed: {e}")
+            print("SET LED RED Command : test_result fail")
+        
+        # Test GREEN LED
+        try:
+            print("Testing GREEN LED...")
             self.led.set_led_state(LedState.USER_EVENT_GREEN)
             time.sleep(1)
             print("SET LED GREEN Command : test_result pass")
-            
-            # Set LED to BLUE
+            green_pass = True
+        except Exception as e:
+            logger.error(f"GREEN LED test failed: {e}")
+            print("SET LED GREEN Command : test_result fail")
+        
+        # Test BLUE LED
+        try:
+            print("Testing BLUE LED...")
             self.led.set_led_state(LedState.USER_EVENT_BLUE)
             time.sleep(1)
             print("SET LED BLUE Command : test_result pass")
-            
-            # Turn off test mode LED
-            self.led.clear_led_state(LedState.USER_EVENT_BLUE)
-            
-            self.test_results['led_colors'] = True
-            return True
+            blue_pass = True
         except Exception as e:
-            logger.error(f"LED test failed: {e}")
-            print("SET LED RED Command : test_result fail")
-            print("SET LED GREEN Command : test_result fail")
+            logger.error(f"BLUE LED test failed: {e}")
             print("SET LED BLUE Command : test_result fail")
-            self.test_results['led_colors'] = False
-            return False
+        
+        # Turn off test mode LED
+        try:
+            print("Turning off LED...")
+            self.led.set_led_state(LedState.USER_EVENT_OFF)
+            print("LED turned off successfully")
+        except Exception as e:
+            logger.error(f"LED off failed: {e}")
+        
+        # Overall result
+        overall_pass = red_pass and green_pass and blue_pass
+        self.test_results['led_colors'] = overall_pass
+        return overall_pass
 
     def test_04_button(self):
         """Test 4: Button test"""
@@ -459,10 +485,10 @@ class ProductTest:
         
         return passed == total
 
-def run_product_test():
+def run_product_test(supervisor=None):
     """Main entry point for product test"""
     try:
-        test = ProductTest()
+        test = ProductTest(supervisor=supervisor)
         return test.run_all_tests()
     except KeyboardInterrupt:
         print("\nTest interrupted by user")

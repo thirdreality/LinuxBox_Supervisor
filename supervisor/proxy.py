@@ -117,27 +117,51 @@ class SupervisorProxy:
         """Handle a single connection"""
         try:
             with conn:
-                # Try to receive JSON with length prefix first
-                payload = self._recv_json(conn)
+                conn.settimeout(2.0)  # Set a reasonable timeout
                 
-                # If that fails, fall back to old method for backward compatibility
-                if payload is None:
-                    conn.settimeout(1.0)
-                    data = conn.recv(4096).decode('utf-8')
-                    if data:
-                        payload = json.loads(data)
-                    else:
-                        return
+                # Read first 4 bytes to check protocol
+                first_4_bytes = conn.recv(4)
+                if len(first_4_bytes) < 4:
+                    return
                 
-                self.logger.info(f"[Proxy] Received payload: {str(payload)[:100]}") 
+                # Try to interpret as length prefix
+                try:
+                    potential_length = int.from_bytes(first_4_bytes, 'big')
+                    # If it's a reasonable JSON length (1 to 1MB), assume new protocol
+                    if 10 <= potential_length <= 1024*1024:
+                        # Read the rest of the JSON data
+                        remaining_data = self._recv_all(conn, potential_length)
+                        if remaining_data:
+                            payload = json.loads(remaining_data.decode('utf-8'))
+                            self.logger.info(f"[Proxy] Using new protocol, received payload: {str(payload)[:100]}")
+                            
+                            # Check if this is a streaming command (like ptest)
+                            if self._is_streaming_command(payload):
+                                self.handle_streaming_request(conn, payload)
+                                return
+                            else:
+                                response = self.handle_request_data(payload)
+                                # For new protocol, send JSON response
+                                self._send_json(conn, {'response': response})
+                                return
+                except:
+                    pass
                 
-                # Check if this is a streaming command (like ptest)
-                if self._is_streaming_command(payload):
-                    self.handle_streaming_request(conn, payload)
-                else:
+                # Fall back to old protocol - treat first_4_bytes as start of JSON
+                remaining_data = conn.recv(4092)  # Read remaining data (4096 - 4)
+                full_data = first_4_bytes + remaining_data
+                
+                try:
+                    data_str = full_data.decode('utf-8').rstrip('\x00')  # Remove null padding
+                    payload = json.loads(data_str)
+                    self.logger.info(f"[Proxy] Using legacy protocol, received payload: {str(payload)[:100]}") 
+                    
                     response = self.handle_request_data(payload)
                     # For legacy compatibility, send simple string response
                     conn.sendall(response.encode('utf-8'))
+                except json.JSONDecodeError as e:
+                    self.logger.error(f"Failed to parse JSON in legacy mode: {e}, data: {full_data[:100]}")
+                    conn.sendall(b"Invalid JSON format")
                     
         except Exception as e:
             self.logger.error(f"Error handling connection: {e}")
@@ -163,7 +187,7 @@ class SupervisorProxy:
                     from .ptest.ptest import ProductTest
                     
                     # Create test instance and run with streaming output
-                    test = ProductTest()
+                    test = ProductTest(supervisor=self.supervisor)
                     
                     # Override print function to capture output
                     original_print = print
@@ -240,7 +264,7 @@ class SupervisorProxy:
                 if ptest_mode == "start":
                     try:
                         from .ptest.ptest import run_product_test
-                        result = run_product_test()
+                        result = run_product_test(supervisor=self.supervisor)
                         return f"Product test completed with result: {result}"
                     except Exception as e:
                         error_msg = f"Error running product test: {e}"
