@@ -7,6 +7,9 @@ import logging
 import socket
 import tempfile
 import json
+import sys
+from io import StringIO
+import queue
 
 from .hardware import LedState
 
@@ -14,6 +17,7 @@ from .hardware import LedState
 class SupervisorProxy:
     '''Connects SupervisorClient and Supervisor via local socket for local debugging and reuse of local functions by other modules.'''
     SOCKET_PATH = "/run/led_socket"  # Use /run directory, which is a memory filesystem and usually always writable
+    BUFFER_SIZE = 4096  # Increase buffer size
 
     def __init__(self, supervisor):
         self.supervisor = supervisor
@@ -47,6 +51,56 @@ class SupervisorProxy:
             # If creation fails, raise the exception
             raise
 
+    def _recv_all(self, conn, length):
+        """Receive exactly 'length' bytes from socket"""
+        data = b''
+        while len(data) < length:
+            packet = conn.recv(length - len(data))
+            if not packet:
+                break
+            data += packet
+        return data
+
+    def _recv_json(self, conn):
+        """Receive JSON data with length prefix"""
+        try:
+            # First, receive the length of the JSON data (4 bytes)
+            raw_msglen = self._recv_all(conn, 4)
+            if not raw_msglen:
+                return None
+            msglen = int.from_bytes(raw_msglen, 'big')
+            
+            # Receive the actual JSON data
+            raw_msg = self._recv_all(conn, msglen)
+            if not raw_msg:
+                return None
+            
+            return json.loads(raw_msg.decode('utf-8'))
+        except Exception as e:
+            self.logger.error(f"Error receiving JSON: {e}")
+            return None
+
+    def _send_json(self, conn, obj):
+        """Send JSON data with length prefix"""
+        try:
+            msg = json.dumps(obj).encode('utf-8')
+            msglen = len(msg)
+            # Send length first (4 bytes)
+            conn.sendall(msglen.to_bytes(4, 'big'))
+            # Send the actual data
+            conn.sendall(msg)
+        except Exception as e:
+            self.logger.error(f"Error sending JSON: {e}")
+
+    def _send_stream_chunk(self, conn, chunk_type, data):
+        """Send a stream chunk with type and data"""
+        chunk = {
+            'type': chunk_type,
+            'data': data,
+            'timestamp': time.time()
+        }
+        self._send_json(conn, chunk)
+
     def run(self):
         self._setup_socket()
 
@@ -54,29 +108,96 @@ class SupervisorProxy:
         while not self.stop_event.is_set():
             try:
                 conn, _ = self.server.accept()
-                with conn:
-                    data = conn.recv(1024).decode('utf-8')
-                    self.logger.info(f"[Proxy Run] Received data: {data[:100]}") # Log received data (truncated)
-                    response = self.handle_request(data)
-                    self.logger.info(f"[Proxy Run] handle_request returned: '{response}'. Sending response.")
-                    conn.sendall(response.encode('utf-8'))
-                    self.logger.info(f"[Proxy Run] Response sent.")
+                # Handle each connection in a separate thread
+                threading.Thread(target=self._handle_connection, args=(conn,), daemon=True).start()
             except socket.timeout:
                 continue
 
-    def stop(self):
-        self.stop_event.set()
-        if hasattr(self, 'proxy_thread') and self.proxy_thread.is_alive():
-            self.proxy_thread.join(timeout=5)  # Wait for up to 5 seconds
-            if self.proxy_thread.is_alive():
-                self.logger.warning("Proxy thread did not terminate gracefully")
-
-    def handle_request(self, data):
-        self.logger.info(f"[Proxy HandleRequest] Start handling request for data: {data[:100]}") # Log start (truncated)
+    def _handle_connection(self, conn):
+        """Handle a single connection"""
         try:
-            # Parse JSON data
-            payload = json.loads(data)
-            
+            with conn:
+                # Try to receive JSON with length prefix first
+                payload = self._recv_json(conn)
+                
+                # If that fails, fall back to old method for backward compatibility
+                if payload is None:
+                    conn.settimeout(1.0)
+                    data = conn.recv(4096).decode('utf-8')
+                    if data:
+                        payload = json.loads(data)
+                    else:
+                        return
+                
+                self.logger.info(f"[Proxy] Received payload: {str(payload)[:100]}") 
+                
+                # Check if this is a streaming command (like ptest)
+                if self._is_streaming_command(payload):
+                    self.handle_streaming_request(conn, payload)
+                else:
+                    response = self.handle_request_data(payload)
+                    # For legacy compatibility, send simple string response
+                    conn.sendall(response.encode('utf-8'))
+                    
+        except Exception as e:
+            self.logger.error(f"Error handling connection: {e}")
+
+    def _is_streaming_command(self, payload):
+        """Check if the command requires streaming response"""
+        streaming_commands = ['cmd-ptest']
+        return any(cmd in payload for cmd in streaming_commands)
+
+    def handle_streaming_request(self, conn, payload):
+        """Handle requests that need streaming responses"""
+        self.logger.info(f"[Proxy HandleStreamingRequest] Start handling streaming request")
+        
+        try:
+            if "cmd-ptest" in payload:
+                ptest_mode = payload["cmd-ptest"].strip().lower()
+                
+                if ptest_mode == "start":
+                    # Send start signal
+                    self._send_stream_chunk(conn, 'start', 'Starting product test...')
+                    
+                    # Import and run ptest with real-time output capture
+                    from .ptest.ptest import ProductTest
+                    
+                    # Create test instance and run with streaming output
+                    test = ProductTest()
+                    
+                    # Override print function to capture output
+                    original_print = print
+                    def streaming_print(*args, **kwargs):
+                        output = ' '.join(str(arg) for arg in args)
+                        original_print(*args, **kwargs)  # Still print to console
+                        self._send_stream_chunk(conn, 'output', output)
+                    
+                    # Replace print temporarily
+                    import builtins
+                    builtins.print = streaming_print
+                    
+                    try:
+                        result = test.run_all_tests()
+                        self._send_stream_chunk(conn, 'result', result)
+                    finally:
+                        builtins.print = original_print
+                    
+                    # Send completion signal
+                    self._send_stream_chunk(conn, 'end', 'Product test completed')
+                else:
+                    self._send_stream_chunk(conn, 'error', f'Unknown ptest mode: {ptest_mode}')
+            else:
+                self._send_stream_chunk(conn, 'error', 'Unsupported streaming command')
+                
+        except Exception as e:
+            error_msg = f"Error in streaming request: {e}"
+            self.logger.error(error_msg)
+            self._send_stream_chunk(conn, 'error', error_msg)
+
+    def handle_request_data(self, payload):
+        """Handle request payload (dict) instead of JSON string"""
+        self.logger.info(f"[Proxy HandleRequestData] Start handling request")
+        try:
             # Handle LED command (special handling, as it needs to convert to LedState enum)
             if "cmd-led" in payload:
                 state_str = payload["cmd-led"].strip().lower()
@@ -103,12 +224,30 @@ class SupervisorProxy:
                         return error_msg
                     # Use supervisor to set LED state
                     if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
-                        self.logger.info(f"[Proxy HandleRequest] Calling supervisor.set_led_state with {state}")
+                        self.logger.info(f"[Proxy HandleRequestData] Calling supervisor.set_led_state with {state}")
                         self.supervisor.set_led_state(state)
-                        self.logger.info(f"[Proxy HandleRequest] supervisor.set_led_state returned")
+                        self.logger.info(f"[Proxy HandleRequestData] supervisor.set_led_state returned")
                     return "LED state has been set"
                 except Exception as e:
                     error_msg = f"Error setting LED state: {e}"
+                    self.logger.error(error_msg)
+                    return error_msg
+
+            # Handle ptest command (non-streaming mode for backward compatibility)
+            if "cmd-ptest" in payload:
+                ptest_mode = payload["cmd-ptest"].strip().lower()
+                
+                if ptest_mode == "start":
+                    try:
+                        from .ptest.ptest import run_product_test
+                        result = run_product_test()
+                        return f"Product test completed with result: {result}"
+                    except Exception as e:
+                        error_msg = f"Error running product test: {e}"
+                        self.logger.error(error_msg)
+                        return error_msg
+                else:
+                    error_msg = f"Invalid ptest mode: {ptest_mode}"
                     self.logger.error(error_msg)
                     return error_msg
             
@@ -146,19 +285,31 @@ class SupervisorProxy:
                         error_msg = f"Error executing {cmd_type} command: {e}"
                         self.logger.error(error_msg)
                         return error_msg
-                    
-                    # If a command is found and processed, no need to check other command types
-                    return
             
             # If no supported command is found
-            error_msg = "Missing valid command in request. Supported commands: cmd-led, cmd-ota, cmd-thread, cmd-zigbee"
-            self.logger.error(error_msg)
-            return error_msg
-        except json.JSONDecodeError:
-            error_msg = f"Invalid JSON format: {data}"
+            error_msg = "Missing valid command in request. Supported commands: cmd-led, cmd-ota, cmd-thread, cmd-zigbee, cmd-ptest"
             self.logger.error(error_msg)
             return error_msg
         except Exception as e:
             error_msg = f"Unexpected error handling request: {e}"
+            self.logger.error(error_msg)
+            return error_msg
+
+    def stop(self):
+        self.stop_event.set()
+        if hasattr(self, 'proxy_thread') and self.proxy_thread.is_alive():
+            self.proxy_thread.join(timeout=5)  # Wait for up to 5 seconds
+            if self.proxy_thread.is_alive():
+                self.logger.warning("Proxy thread did not terminate gracefully")
+
+    def handle_request(self, data):
+        """Legacy method for backward compatibility"""
+        self.logger.info(f"[Proxy HandleRequest] Start handling request for data: {data[:100]}") 
+        try:
+            # Parse JSON data
+            payload = json.loads(data)
+            return self.handle_request_data(payload)
+        except json.JSONDecodeError:
+            error_msg = f"Invalid JSON format: {data}"
             self.logger.error(error_msg)
             return error_msg

@@ -573,7 +573,7 @@ class Supervisor:
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Supervisor Service")
-    parser.add_argument('command', nargs='?', default='daemon', choices=['daemon', 'led', 'zigbee','thread','setting'], help="Command to run: daemon | led <color> | zigbee <parameter> | thread <parameter> | setting <parameter>")
+    parser.add_argument('command', nargs='?', default='daemon', choices=['daemon', 'led', 'zigbee','thread','setting','ptest'], help="Command to run: daemon | led <color> | zigbee <parameter> | thread <parameter> | setting <parameter> | ptest <mode>")
     parser.add_argument('arg', nargs='?', default=None, help="Argument for command (e.g., color for led)")
     args = parser.parse_args()
 
@@ -619,22 +619,26 @@ def main():
         except Exception as e:
             print(f"Error setting LED color: {e}")
             sys.exit(1)
-    elif args.command in ['ota', 'zigbee', 'thread', 'setting']:
+    elif args.command in ['ota', 'zigbee', 'thread', 'setting', 'ptest']:
         param = args.arg
         if param is None:
             print(f"Usage: supervisor.py {args.command} <parameter>")
+            if args.command == 'ptest':
+                print("Available modes: start")
             sys.exit(1)
             
         try:
             client = SupervisorClient()
-            # Directly use the_send_command method for simplicity and flexibility
+            # Directly use the send_command method for simplicity and flexibility
             response = client.send_command(args.command, param, f"{args.command} command")
             
             if response is None:
                 print(f"Error: Failed to send {args.command} command")
                 sys.exit(1)
                 
-            print(f"{args.command.capitalize()} command sent successfully: {param}")
+            # For ptest, the response handling is done in the client
+            if args.command != 'ptest':
+                print(f"{args.command.capitalize()} command sent successfully: {param}")
         except Exception as e:
             print(f"Error sending {args.command} command: {e}")
             sys.exit(1)               
