@@ -190,6 +190,7 @@ class NetworkMonitor:
         """Handle network connection establishment"""
         with self._lock:
             if self.supervisor:
+                self.supervisor.clear_led_state(LedState.SYS_OFFLINE)
                 self.supervisor.set_led_state(LedState.SYS_NORMAL_OPERATION)
                 
                 if hasattr(self.supervisor, 'wifi_status'):
@@ -258,7 +259,7 @@ class NetworkMonitor:
             
         
         if device_state == NM_DEVICE_STATE_ACTIVATED:
-            self.supervisor.set_led_state(LedState.SYS_NORMAL_OPERATION)
+            self.supervisor.clear_led_state(LedState.SYS_OFFLINE)
         elif device_state in [NM_DEVICE_STATE_PREPARE, NM_DEVICE_STATE_CONFIG, NM_DEVICE_STATE_NEED_AUTH, 
                              NM_DEVICE_STATE_IP_CONFIG, NM_DEVICE_STATE_IP_CHECK, NM_DEVICE_STATE_SECONDARIES]:
             # During connection process
