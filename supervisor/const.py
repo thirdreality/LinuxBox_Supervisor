@@ -57,3 +57,9 @@ TOKEN_MODE_OAUTH2 = 2
 # Default token mode (longlived)
 TOKEN_MODE = TOKEN_MODE_LONGLIVED
 
+# PTest WiFi Configuration
+PTEST_WIFI_SSID = "fatp_test"
+PTEST_WIFI_PASSWORD = "11223344"
+
+# PTEST_WIFI_SSID = "HUAWEI-HUBV3"
+# PTEST_WIFI_PASSWORD = "Shushi0705"

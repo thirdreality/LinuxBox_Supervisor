@@ -11,6 +11,7 @@ import logging
 import re
 from ..hardware import GpioLed, LedState
 from ..sysinfo import _get_t3r_release_info, get_package_version
+from ..const import PTEST_WIFI_SSID, PTEST_WIFI_PASSWORD
 
 # Configure logging for ptest
 logging.basicConfig(
@@ -139,6 +140,9 @@ class ProductTest:
         red_pass = False
         green_pass = False
         blue_pass = False
+        yellow_pass = False
+        cyan_pass = False
+        magenta_pass = False
         
         # Test RED LED
         try:
@@ -173,6 +177,39 @@ class ProductTest:
             logger.error(f"BLUE LED test failed: {e}")
             print("SET LED BLUE Command : test_result fail")
         
+        # Test YELLOW LED
+        try:
+            print("Testing YELLOW LED...")
+            self.led.set_led_state(LedState.USER_EVENT_YELLOW)
+            time.sleep(1)
+            print("SET LED YELLOW Command : test_result pass")
+            yellow_pass = True
+        except Exception as e:
+            logger.error(f"YELLOW LED test failed: {e}")
+            print("SET LED YELLOW Command : test_result fail")
+        
+        # Test CYAN LED
+        try:
+            print("Testing CYAN LED...")
+            self.led.set_led_state(LedState.USER_EVENT_CYAN)
+            time.sleep(1)
+            print("SET LED CYAN Command : test_result pass")
+            cyan_pass = True
+        except Exception as e:
+            logger.error(f"CYAN LED test failed: {e}")
+            print("SET LED CYAN Command : test_result fail")
+        
+        # Test MAGENTA LED
+        try:
+            print("Testing MAGENTA LED...")
+            self.led.set_led_state(LedState.USER_EVENT_MAGENTA)
+            time.sleep(1)
+            print("SET LED MAGENTA Command : test_result pass")
+            magenta_pass = True
+        except Exception as e:
+            logger.error(f"MAGENTA LED test failed: {e}")
+            print("SET LED MAGENTA Command : test_result fail")
+        
         # Turn off test mode LED
         try:
             print("Turning off LED...")
@@ -182,20 +219,50 @@ class ProductTest:
             logger.error(f"LED off failed: {e}")
         
         # Overall result
-        overall_pass = red_pass and green_pass and blue_pass
+        overall_pass = red_pass and green_pass and blue_pass and yellow_pass and cyan_pass and magenta_pass
         self.test_results['led_colors'] = overall_pass
         return overall_pass
 
     def test_04_button(self):
         """Test 4: Button test"""
         print("\n=== Test 4: Button Check ===")
-        print("Check the LED color when press button, if White means pass ...")
-        time.sleep(3)
+        print("Please press the button within 5 seconds...")
+        print("Monitoring LED state for USER_EVENT_WHITE...")
         
-        # Note: This test requires manual verification
-        # In a real implementation, you might monitor GPIO state
-        self.test_results['button'] = True
-        return True
+        # Monitor LED state for 5 seconds, checking every 200ms
+        start_time = time.time()
+        timeout = 5.0  # 5 seconds timeout
+        check_interval = 0.2  # 200 milliseconds
+        
+        button_pressed = False
+        
+        try:
+            while time.time() - start_time < timeout:
+                # Check current LED state
+                if self.led and hasattr(self.led, 'get_led_state'):
+                    current_state = self.led.get_led_state()
+                    if current_state == LedState.USER_EVENT_WHITE:
+                        print("✅ Button press detected (LED is WHITE)!")
+                        button_pressed = True
+                        break
+                
+                # Wait for next check
+                time.sleep(check_interval)
+            
+            if button_pressed:
+                print("Button test: test_result pass")
+                self.test_results['button'] = True
+                return True
+            else:
+                print("Button test: test_result fail - No button press detected within 5 seconds")
+                self.test_results['button'] = False
+                return False
+                
+        except Exception as e:
+            logger.error(f"Button test failed: {e}")
+            print("Button test: test_result fail")
+            self.test_results['button'] = False
+            return False
 
     def test_05_bluetooth(self):
         """Test 5: Bluetooth check"""
@@ -249,6 +316,7 @@ class ProductTest:
     def test_06_wifi_network(self):
         """Test 6: WiFi and NetworkManager check"""
         print("\n=== Test 6: WiFi and NetworkManager Check ===")
+        print(f"WiFi Test Configuration: SSID={PTEST_WIFI_SSID}")
         
         running = False
         mac = ""
@@ -287,11 +355,11 @@ class ProductTest:
             # List available networks
             result = self.run_command("nmcli device wifi list")
             if result and result.returncode == 0:
-                if 'fatp_test' in result.stdout:
+                if PTEST_WIFI_SSID in result.stdout:
                     print("WIFI Scan: pass")
                     scan_pass = True
                 else:
-                    print("WIFI Scan: fail - fatp_test network not found")
+                    print(f"WIFI Scan: fail - {PTEST_WIFI_SSID} network not found")
             else:
                 print("WIFI Scan: fail")
         except Exception as e:
@@ -301,14 +369,14 @@ class ProductTest:
         # WiFi connect test
         try:
             # Connect to test network
-            result = self.run_command("nmcli device wifi connect fatp_test password 11223344")
+            result = self.run_command(f"nmcli device wifi connect {PTEST_WIFI_SSID} password {PTEST_WIFI_PASSWORD}")
             time.sleep(3)
             
             # Check if connected
             conn_result = self.run_command("nmcli connection show --active")
             ip_result = self.run_command("ifconfig wlan0")
             
-            if (conn_result and 'fatp_test' in conn_result.stdout and 
+            if (conn_result and PTEST_WIFI_SSID in conn_result.stdout and 
                 ip_result and 'inet ' in ip_result.stdout):
                 print("WIFI connect: pass")
                 connect_pass = True
@@ -321,7 +389,7 @@ class ProductTest:
         # WiFi reset test
         try:
             # Delete the connection
-            self.run_command("nmcli connection delete fatp_test")
+            self.run_command(f"nmcli connection delete {PTEST_WIFI_SSID}")
             print("WIFI reset: pass")
             reset_pass = True
         except Exception as e:
@@ -361,8 +429,8 @@ class ProductTest:
             if not self.check_package_installed("thirdreality-hacore"):
                 print("WARNING: thirdreality-hacore not installed")
                 print("test_result skip")
-                self.test_results['zigbee'] = True
-                return True
+                self.test_results['zigbee'] = False
+                return False
             else:
                 print("ERROR: thirdreality-hacore installed but zha.conf missing")
                 print("test_result fail")
@@ -418,8 +486,8 @@ class ProductTest:
         if not self.check_package_installed("thirdreality-otbr-agent"):
             print("WARNING: thirdreality-otbr-agent not installed")
             print("test_result skip")
-            self.test_results['thread'] = True
-            return True
+            self.test_results['thread'] = False
+            return False
 
         # Check otbr-agent service
         try:
