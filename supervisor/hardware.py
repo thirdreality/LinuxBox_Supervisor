@@ -466,7 +466,7 @@ class GpioLed:
         
         # Notify the LED control task
         self.led_control_event.set()
-        self.logger.debug(f"LED control triggered by external event with delay {reset_delay}")
+        #self.logger.debug(f"LED control triggered by external event with delay {reset_delay}")
     
     def clear_led_state(self, state):
         """Clear the priority level that the specified state belongs to."""
@@ -479,47 +479,47 @@ class GpioLed:
             if state in self.user_event_states:
                 if self.user_event_priority_state == state:
                     self.user_event_priority_state = None
-                    self.logger.info(f"Cleared user event priority state (was {state})")
+                    #self.logger.info(f"Cleared user event priority state (was {state})")
                     state_cleared = True
                 else:
                     self.logger.debug(f"User event priority state is {self.user_event_priority_state}, not {state}, no clearing needed")
             elif state in self.system_critical_states:
                 if self.system_critical_priority_state == state:
                     self.system_critical_priority_state = None
-                    self.logger.info(f"Cleared system critical priority state (was {state})")
+                    #self.logger.info(f"Cleared system critical priority state (was {state})")
                     state_cleared = True
                 else:
                     self.logger.debug(f"System critical priority state is {self.system_critical_priority_state}, not {state}, no clearing needed")
             elif state in self.system_high_priority_states:
                 if self.system_high_priority_state == state:
                     self.system_high_priority_state = None
-                    self.logger.info(f"Cleared system high priority state (was {state})")
+                    #self.logger.info(f"Cleared system high priority state (was {state})")
                     state_cleared = True
                 else:
                     self.logger.debug(f"System high priority state is {self.system_high_priority_state}, not {state}, no clearing needed")
             elif state in self.system_medium_priority_states:
                 if self.system_medium_priority_state == state:
                     self.system_medium_priority_state = None
-                    self.logger.info(f"Cleared system medium priority state (was {state})")
+                    #self.logger.info(f"Cleared system medium priority state (was {state})")
                     state_cleared = True
                 else:
                     self.logger.debug(f"System medium priority state is {self.system_medium_priority_state}, not {state}, no clearing needed")
             elif state in self.system_low_priority_states:
                 if self.system_low_priority_state == state:
                     self.system_low_priority_state = None
-                    self.logger.info(f"Cleared system low priority state (was {state})")
+                    #self.logger.info(f"Cleared system low priority state (was {state})")
                     state_cleared = True
                 else:
                     self.logger.debug(f"System low priority state is {self.system_low_priority_state}, not {state}, no clearing needed")
             elif state in self.general_operational_states:
                 if self.general_operational_priority_state == state:
                     self.general_operational_priority_state = None
-                    self.logger.info(f"Cleared general operational priority state (was {state})")
+                    #self.logger.info(f"Cleared general operational priority state (was {state})")
                     state_cleared = True
-                else:
-                    self.logger.debug(f"General operational priority state is {self.general_operational_priority_state}, not {state}, no clearing needed")
+                #else:
+                #    self.logger.debug(f"General operational priority state is {self.general_operational_priority_state}, not {state}, no clearing needed")
             else:
-                self.logger.warning(f"Unknown or unhandled LED state in clear_led_state: {state}")
+                #self.logger.warning(f"Unknown or unhandled LED state in clear_led_state: {state}")
                 return
 
             # If no state was actually cleared, no need to recalculate

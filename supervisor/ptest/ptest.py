@@ -226,12 +226,12 @@ class ProductTest:
     def test_04_button(self):
         """Test 4: Button test"""
         print("\n=== Test 4: Button Check ===")
-        print("Please press the button within 5 seconds...")
+        print("Please press the button within 15 seconds...")
         print("Monitoring LED state for USER_EVENT_WHITE...")
         
         # Monitor LED state for 5 seconds, checking every 200ms
         start_time = time.time()
-        timeout = 5.0  # 5 seconds timeout
+        timeout = 15.0  # 5 seconds timeout
         check_interval = 0.2  # 200 milliseconds
         
         button_pressed = False
