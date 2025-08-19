@@ -519,18 +519,15 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
             _call_progress(80, "Data restoration phase complete.")
             # Force sync to flush NAND cache after data restoration
 
-            logging.info("Update zigbee default config ...")
-            if os.path.exists("/srv/homeassistant/bin/home_assistant_init.sh"):
-                if os.path.exists("/var/lib/homeassistant/homeassistant/configuration.yaml"):
-                    if os.path.exists("/var/lib/homeassistant/zha.conf"):
-                        os.remove("/var/lib/homeassistant/zha.conf")
-                    subprocess.run(["/srv/homeassistant/bin/home_assistant_init.sh"], capture_output=True, text=True)
-                else:
-                    logging.warning("No homeassistant configuration.yaml found, skipping zigbee default config update.")
+            logging.info("Update zigbee information ...")
+            if os.path.exists("/srv/homeassistant/bin/home_assistant_zigbee_fix.sh"):
+                if os.path.exists("/var/lib/homeassistant/zha.conf"):
+                    os.remove("/var/lib/homeassistant/zha.conf")
+                subprocess.run(["/srv/homeassistant/bin/home_assistant_zigbee_fix.sh"], capture_output=True, text=True)
             else:
-                logging.warning("No homeassistant init.sh found, skipping zigbee default config update.")
-            logging.info("Force sync executed after data restoration.")
+                logging.warning("No homeassistant zigbee fix.sh found, skipping zigbee default config update.")
 
+            logging.info("Force sync executed after data restoration.")
             force_sync()
             # 恢复网络连接
             try:
