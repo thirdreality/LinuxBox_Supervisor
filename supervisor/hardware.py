@@ -770,16 +770,16 @@ class GpioButton:
             press_duration = time.time() - self.press_start_time
             
             # 根据按键时间设置LED颜色，使用专用的高优先级用户事件状态
-            if press_duration >= 20 and last_action != 'red':
+            if press_duration >= 15 and last_action != 'red':
                 if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
                     self.supervisor.set_led_state(LedState.USER_EVENT_RED)  # 红灯
                 last_action = 'red'
-                self.logger.info("Timer: 20+ seconds - Red light (factory reset)")
-            elif 5 <= press_duration < 20 and last_action != 'green':
+                self.logger.info("Timer: 15+ seconds - Red light (factory reset)")
+            elif 5 <= press_duration < 15 and last_action != 'green':
                 if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
                     self.supervisor.set_led_state(LedState.USER_EVENT_GREEN)  # 绿灯
                 last_action = 'green'
-                self.logger.info("Timer: 5-20 seconds - Green light (Zigbee pairing)")
+                self.logger.info("Timer: 5-15 seconds - Green light (Zigbee pairing)")
             elif 0 <= press_duration < 5 and last_action != 'white':
                 if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
                     self.supervisor.set_led_state(LedState.USER_EVENT_WHITE)  # 白灯
