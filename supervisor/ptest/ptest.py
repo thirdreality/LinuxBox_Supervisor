@@ -242,7 +242,7 @@ class ProductTest:
                 if self.led and hasattr(self.led, 'get_led_state'):
                     current_state = self.led.get_led_state()
                     if current_state == LedState.USER_EVENT_WHITE:
-                        print("✅ Button press detected (LED is WHITE)!")
+                        print("Button press detected (LED is WHITE)!")
                         button_pressed = True
                         break
                 
@@ -547,9 +547,9 @@ class ProductTest:
         print(f"Overall Result: {passed}/{total} tests passed")
         
         if passed == total:
-            print("🎉 ALL TESTS PASSED!")
+            print("ALL TESTS PASSED!")
         else:
-            print("❌ SOME TESTS FAILED!")
+            print("SOME TESTS FAILED!")
         
         return passed == total
 
