@@ -791,13 +791,13 @@ class GpioButton:
     def _handle_button_release(self, press_duration):
         """处理按键释放事件"""
         # 根据按键时间执行相应操作
-        if press_duration > 20:
-            # 20秒以上：执行出厂重置
+        if press_duration > 15:
+            # 15秒以上：执行出厂重置
             if self.supervisor and hasattr(self.supervisor, 'perform_factory_reset'):
                 self.logger.info("Executing factory reset")
                 self.supervisor.perform_factory_reset()
-        elif 5 <= press_duration < 20:
-            # 5-20秒：Zigbee配对
+        elif 5 <= press_duration < 15:
+            # 5-15秒：Zigbee配对
             self.logger.info("Zigbee pairing action triggered")
             if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
                 self.supervisor.set_led_state(LedState.USER_EVENT_OFF)
