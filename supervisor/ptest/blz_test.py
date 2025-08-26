@@ -9,9 +9,10 @@ import time
 import binascii
 
 class AccurateBL702Test:
-    def __init__(self):
+    def __init__(self, verbose=False):
         self.ser = None
         self.tx_seq = 0  # TX sequence number
+        self.verbose = verbose
         
     def compute_crc(self, data):
         """Compute CRC-16 (same algorithm as firmware/logs)."""
@@ -77,24 +78,28 @@ class AccurateBL702Test:
         """Open serial port."""
         try:
             self.ser = serial.Serial('/dev/ttyAML3', 2000000, timeout=3)
-            print(f"Serial open: {self.ser.name}")
+            if self.verbose:
+                print(f"Serial open: {self.ser.name}")
             return True
         except Exception as e:
-            print(f"Open failed: {e}")
+            if self.verbose:
+                print(f"Open failed: {e}")
             return False
     
     def disconnect(self):
         """Close serial port."""
         if self.ser and self.ser.is_open:
             self.ser.close()
-            print("Serial closed")
+            if self.verbose:
+                print("Serial closed")
     
     def send_frame(self, frame):
         """Send a frame."""
         if not self.ser or not self.ser.is_open:
             return False
         
-        print(f"TX: {binascii.hexlify(frame).decode().upper()}")
+        if self.verbose:
+            print(f"TX: {binascii.hexlify(frame).decode().upper()}")
         self.ser.write(frame)
         self.ser.flush()
         return True
@@ -108,7 +113,8 @@ class AccurateBL702Test:
             if self.ser.in_waiting > 0:
                 data = self.ser.read(self.ser.in_waiting)
                 buffer.extend(data)
-                print(f"RX: {binascii.hexlify(data).decode().upper()}")
+                if self.verbose:
+                    print(f"RX: {binascii.hexlify(data).decode().upper()}")
                 
                 # Find a complete frame
                 while buffer:
@@ -129,11 +135,13 @@ class AccurateBL702Test:
                     if len(frame_data) == 0:
                         continue
                     
-                    print(f"Frame: {binascii.hexlify(raw_frame).decode().upper()}")
+                    if self.verbose:
+                        print(f"Frame: {binascii.hexlify(raw_frame).decode().upper()}")
                     
                     # Unescape
                     unescaped = self.unescape_frame(frame_data)
-                    print(f"Unescaped: {binascii.hexlify(unescaped).decode().upper()}")
+                    if self.verbose:
+                        print(f"Unescaped: {binascii.hexlify(unescaped).decode().upper()}")
                     
                     if len(unescaped) >= 6:
                         return unescaped
@@ -168,9 +176,11 @@ class AccurateBL702Test:
             if len(frame_body) == 0:
                 return None
 
-            print(f"Frame: {binascii.hexlify(raw_frame).decode().upper()}")
+            if self.verbose:
+                print(f"Frame: {binascii.hexlify(raw_frame).decode().upper()}")
             unescaped = self.unescape_frame(frame_body)
-            print(f"Unescaped: {binascii.hexlify(unescaped).decode().upper()}")
+            if self.verbose:
+                print(f"Unescaped: {binascii.hexlify(unescaped).decode().upper()}")
 
             if len(unescaped) < 6:
                 return None
@@ -183,15 +193,18 @@ class AccurateBL702Test:
             if frame_id in expected_frame_ids:
                 return unescaped
             else:
-                print(f"Ignore non-target frame_id=0x{frame_id:04X}")
+                if self.verbose:
+                    print(f"Ignore non-target frame_id=0x{frame_id:04X}")
                 return None
 
-        print(f"Waiting for frame_id in {', '.join(f'0x{x:04X}' for x in expected_frame_ids)} (timeout {timeout}s)...")
+        if self.verbose:
+            print(f"Waiting for frame_id in {', '.join(f'0x{x:04X}' for x in expected_frame_ids)} (timeout {timeout}s)...")
         while time.time() - start_time < timeout:
             if self.ser.in_waiting > 0:
                 chunk = self.ser.read(self.ser.in_waiting)
                 buffer.extend(chunk)
-                print(f"RX: {binascii.hexlify(chunk).decode().upper()}")
+                if self.verbose:
+                    print(f"RX: {binascii.hexlify(chunk).decode().upper()}")
 
                 while True:
                     fr = try_extract_one()
@@ -219,7 +232,8 @@ class AccurateBL702Test:
         escaped = self.escape_frame(ack_frame_with_crc)
         final_ack = bytes([0x42]) + escaped + bytes([0x4C])
         
-        print(f"TX ACK: {binascii.hexlify(final_ack).decode().upper()}")
+        if self.verbose:
+            print(f"TX ACK: {binascii.hexlify(final_ack).decode().upper()}")
         self.ser.write(final_ack)
         self.ser.flush()
     
@@ -231,19 +245,21 @@ class AccurateBL702Test:
         frmCtrl, seq, frame_id = struct.unpack('<BBH', frame_data[:4])
         payload = frame_data[4:-2]  # strip CRC
         
-        print(f"Frame parse:")
-        print(f"   frmCtrl: 0x{frmCtrl:02X}")
-        print(f"   seq: 0x{seq:02X}")
-        print(f"   frame_id: 0x{frame_id:04X}")
+        if self.verbose:
+            print(f"Frame parse:")
+            print(f"   frmCtrl: 0x{frmCtrl:02X}")
+            print(f"   seq: 0x{seq:02X}")
+            print(f"   frame_id: 0x{frame_id:04X}")
         
         if frame_id == 0x0010 and len(payload) >= 2:  # GET_VALUE response
             status = payload[0]
             value_length = payload[1]
             value = payload[2:2+value_length] if len(payload) >= 2+value_length else b''
             
-            print(f"   status: {status} ({'ok' if status == 0 else 'error'})")
-            print(f"   value_length: {value_length}")
-            print(f"   raw: {binascii.hexlify(value).decode().upper()}")
+            if self.verbose:
+                print(f"   status: {status} ({'ok' if status == 0 else 'error'})")
+                print(f"   value_length: {value_length}")
+                print(f"   raw: {binascii.hexlify(value).decode().upper()}")
             
             if status == 0:
                 return value
@@ -252,7 +268,8 @@ class AccurateBL702Test:
     
     def network_init(self):
         """Network initialization."""
-        print("\nNetwork init...")
+        if self.verbose:
+            print("\nNetwork init...")
         
         # Send NETWORK_INIT (0x0034)
         frame = self.build_frame(0x0034)
@@ -262,15 +279,18 @@ class AccurateBL702Test:
         # Wait for 0x0034 response; ignore 0x0035 callbacks
         response = self.wait_for_frame({0x0034}, timeout=5.0)
         if response:
-            print("Network init ok")
+            if self.verbose:
+                print("Network init ok")
             return True
         else:
-            print("Network init failed (no 0x0034)")
+            if self.verbose:
+                print("Network init failed (no 0x0034)")
             return False
     
     def get_mac_address(self):
         """Read MAC address."""
-        print("\nRead MAC address...")
+        if self.verbose:
+            print("\nRead MAC address...")
         
         # Build GET_VALUE for value_id = 0x20
         payload = struct.pack('<B', 0x20)
@@ -287,15 +307,18 @@ class AccurateBL702Test:
             if value and len(value) == 8:
                 # Example: raw 00005ae24c75e14c (LE) -> 4c:e1:75:4c:e2:5a:00:00
                 mac_str = ':'.join(f'{b:02x}' for b in reversed(value))
-                print(f"MAC: {mac_str}")
+                if self.verbose:
+                    print(f"MAC: {mac_str}")
                 return mac_str
         
-        print("Read MAC failed")
+        if self.verbose:
+            print("Read MAC failed")
         return None
     
     def get_app_version(self):
         """Read application version."""
-        print("\nRead application version...")
+        if self.verbose:
+            print("\nRead application version...")
         
         # Build GET_VALUE for value_id = 0x21
         payload = struct.pack('<B', 0x21)
@@ -312,19 +335,23 @@ class AccurateBL702Test:
             if value:
                 try:
                     version = value.decode('utf-8').rstrip('\x00')
-                    print(f"App version: {version}")
+                    if self.verbose:
+                        print(f"App version: {version}")
                     return version
                 except:
                     version_hex = binascii.hexlify(value).decode()
-                    print(f"App version (hex): {version_hex}")
+                    if self.verbose:
+                        print(f"App version (hex): {version_hex}")
                     return version_hex
         
-        print("Read app version failed")
+        if self.verbose:
+            print("Read app version failed")
         return None
 
     def get_stack_version(self):
         """Read stack version (build, major, minor, patch)."""
-        print("\nRead stack version...")
+        if self.verbose:
+            print("\nRead stack version...")
         payload = struct.pack('<B', 0x01)  # BLZ_VALUE_ID_STACK_VERSION
         frame = self.build_frame(0x0010, payload)
         if not self.send_frame(frame):
@@ -338,27 +365,32 @@ class AccurateBL702Test:
                 minor = value[3]
                 patch = value[4]
                 info = {"build": build, "major": major, "minor": minor, "patch": patch}
-                print(f"Stack version: build={build}, {major}.{minor}.{patch}")
+                if self.verbose:
+                    print(f"Stack version: build={build}, {major}.{minor}.{patch}")
                 return info
-        print("Read stack version failed")
+        if self.verbose:
+            print("Read stack version failed")
         return None
 
     def get_network_parameters(self):
         """Read network parameters (GET_NETWORK_PARAMETERS, frame_id=0x002B)."""
-        print("\nRead network parameters...")
+        if self.verbose:
+            print("\nRead network parameters...")
         frame = self.build_frame(0x002B)
         if not self.send_frame(frame):
             return None
         resp = self.wait_for_frame({0x002B}, timeout=5.0)
         if not resp:
-            print("Read network parameters failed (timeout)")
+            if self.verbose:
+                print("Read network parameters failed (timeout)")
             return None
 
         # Parse payload: status(1) node_type(1) ext_pan_id(8 LE) pan_id(2 LE)
         #                tx_power(1) channel(1) nwk_manager(2 LE) nwk_update_id(1) channel_mask(4 LE)
         payload = resp[4:-2]
         if len(payload) < 1 + 1 + 8 + 2 + 1 + 1 + 2 + 1 + 4:
-            print("Network parameters payload length error")
+            if self.verbose:
+                print("Network parameters payload length error")
             return None
         idx = 0
         status = payload[idx]; idx += 1
@@ -382,19 +414,217 @@ class AccurateBL702Test:
             "nwk_update_id": nwk_update_id,
             "channel_mask": channel_mask,
         }
-        print(
-            f"Network params: node_type={node_type}, ext_pan_id=0x{ext_pan_id:016X}, pan_id=0x{pan_id:04X}, "
-            f"tx_power={tx_power}, channel={channel}, nwk_manager=0x{nwk_manager:04X}, "
-            f"nwk_update_id={nwk_update_id}, channel_mask=0x{channel_mask:08X}"
-        )
+        if self.verbose:
+            print(
+                f"Network params: node_type={node_type}, ext_pan_id=0x{ext_pan_id:016X}, pan_id=0x{pan_id:04X}, "
+                f"tx_power={tx_power}, channel={channel}, nwk_manager=0x{nwk_manager:04X}, "
+                f"nwk_update_id={nwk_update_id}, channel_mask=0x{channel_mask:08X}"
+            )
         return info
+
+# New interface functions for ptest.py to call
+def get_blz_mac(uart_device="/dev/ttyAML3", baudrate=2000000, timeout=3.0, verbose=False):
+    """
+    Get BL702 MAC address
+    
+    Args:
+        uart_device (str): Serial device path
+        baudrate (int): Baud rate
+        timeout (float): Timeout in seconds
+        verbose (bool): Enable verbose logging
+        
+    Returns:
+        str: MAC address string or None if failed
+    """
+    try:
+        tester = AccurateBL702Test(verbose=verbose)
+        if not tester.connect():
+            return None
+        
+        try:
+            # Flush pending RX
+            time.sleep(0.1)
+            if tester.ser.in_waiting > 0:
+                tester.ser.read(tester.ser.in_waiting)
+            
+            # Network init
+            if not tester.network_init():
+                if verbose:
+                    print("Network init failed, continue...")
+            
+            time.sleep(0.5)
+            
+            # Read MAC
+            mac = tester.get_mac_address()
+            return mac
+            
+        finally:
+            tester.disconnect()
+    except Exception as e:
+        if verbose:
+            print(f"Failed to get BL702 MAC: {e}")
+        return None
+
+def get_blz_version(uart_device="/dev/ttyAML3", baudrate=2000000, timeout=3.0, verbose=False):
+    """
+    Get BL702 application version
+    
+    Args:
+        uart_device (str): Serial device path
+        baudrate (int): Baud rate
+        timeout (float): Timeout in seconds
+        verbose (bool): Enable verbose logging
+        
+    Returns:
+        str: Application version string or None if failed
+    """
+    try:
+        tester = AccurateBL702Test(verbose=verbose)
+        if not tester.connect():
+            return None
+        
+        try:
+            # Flush pending RX
+            time.sleep(0.1)
+            if tester.ser.in_waiting > 0:
+                tester.ser.read(tester.ser.in_waiting)
+            
+            # Network init
+            if not tester.network_init():
+                if verbose:
+                    print("Network init failed, continue...")
+            
+            time.sleep(0.5)
+            
+            # Read application version
+            version = tester.get_app_version()
+            return version
+            
+        finally:
+            tester.disconnect()
+    except Exception as e:
+        if verbose:
+            print(f"Failed to get BL702 version: {e}")
+        return None
+
+def get_blz_stack_version(uart_device="/dev/ttyAML3", baudrate=2000000, timeout=3.0, verbose=False):
+    """
+    Get BL702 stack version
+    
+    Args:
+        uart_device (str): Serial device path
+        baudrate (int): Baud rate
+        timeout (float): Timeout in seconds
+        verbose (bool): Enable verbose logging
+        
+    Returns:
+        dict: Stack version info or None if failed
+    """
+    try:
+        tester = AccurateBL702Test(verbose=verbose)
+        if not tester.connect():
+            return None
+        
+        try:
+            # Flush pending RX
+            time.sleep(0.1)
+            if tester.ser.in_waiting > 0:
+                tester.ser.read(tester.ser.in_waiting)
+            
+            # Network init
+            if not tester.network_init():
+                if verbose:
+                    print("Network init failed, continue...")
+            
+            time.sleep(0.5)
+            
+            # Read stack version
+            stack_ver = tester.get_stack_version()
+            return stack_ver
+            
+        finally:
+            tester.disconnect()
+    except Exception as e:
+        if verbose:
+            print(f"Failed to get BL702 stack version: {e}")
+        return None
+
+def get_blz_info(uart_device="/dev/ttyAML3", baudrate=2000000, timeout=3.0, verbose=False):
+    """
+    Get all BL702 information (MAC, app version, stack version)
+    
+    Args:
+        uart_device (str): Serial device path
+        baudrate (int): Baud rate
+        timeout (float): Timeout in seconds
+        verbose (bool): Enable verbose logging
+        
+    Returns:
+        dict: Dictionary containing BL702 information or None if failed
+    """
+    try:
+        tester = AccurateBL702Test(verbose=verbose)
+        if not tester.connect():
+            return None
+        
+        try:
+            # Flush pending RX
+            time.sleep(0.1)
+            if tester.ser.in_waiting > 0:
+                tester.ser.read(tester.ser.in_waiting)
+            
+            # Network init
+            if not tester.network_init():
+                if verbose:
+                    print("Network init failed, continue...")
+            
+            time.sleep(0.5)
+            
+            info = {}
+            
+            # Get MAC
+            try:
+                info['mac'] = tester.get_mac_address()
+            except Exception as e:
+                info['mac'] = None
+                if verbose:
+                    print(f"Failed to get MAC: {e}")
+            
+            time.sleep(0.5)
+            
+            # Get application version
+            try:
+                info['version'] = tester.get_app_version()
+            except Exception as e:
+                info['version'] = None
+                if verbose:
+                    print(f"Failed to get app version: {e}")
+            
+            time.sleep(0.5)
+            
+            # Get stack version
+            try:
+                info['stack_version'] = tester.get_stack_version()
+            except Exception as e:
+                info['stack_version'] = None
+                if verbose:
+                    print(f"Failed to get stack version: {e}")
+            
+            return info
+            
+        finally:
+            tester.disconnect()
+    except Exception as e:
+        if verbose:
+            print(f"Failed to get BL702 info: {e}")
+        return None
 
 def main():
     print("Accurate BL702 Communication Test")
     print("Based on real log analysis")
     print("=" * 50)
     
-    tester = AccurateBL702Test()
+    tester = AccurateBL702Test(verbose=True)
     
     try:
         # Open serial

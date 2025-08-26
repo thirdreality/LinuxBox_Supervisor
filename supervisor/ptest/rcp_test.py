@@ -190,6 +190,105 @@ def get_prop_c(ser: serial.Serial, prop_id: int, timeout=2.0) -> int:
         raise ValueError("prop c length < 1")
     return struct.unpack('<b', val[:1])[0]
 
+# New interface functions for ptest.py to call
+def get_rcp_version(uart_device="/dev/ttyAML6", baudrate=115200, timeout=2.0):
+    """
+    Get RCP version information
+    
+    Args:
+        uart_device (str): Serial device path
+        baudrate (int): Baud rate
+        timeout (float): Timeout in seconds
+        
+    Returns:
+        str: Version string or None if failed
+    """
+    try:
+        ser = serial.Serial(uart_device, baudrate, timeout=0.2)
+        try:
+            version = get_prop_U(ser, PROP_NCP_VERSION, timeout=timeout)
+            return version
+        finally:
+            ser.close()
+    except Exception as e:
+        print(f"Failed to get RCP version: {e}", file=sys.stderr)
+        return None
+
+def get_rcp_channel(uart_device="/dev/ttyAML6", baudrate=115200, timeout=2.0):
+    """
+    Get RCP channel information
+    
+    Args:
+        uart_device (str): Serial device path
+        baudrate (int): Baud rate
+        timeout (float): Timeout in seconds
+        
+    Returns:
+        int: Channel number or None if failed
+    """
+    try:
+        ser = serial.Serial(uart_device, baudrate, timeout=0.2)
+        try:
+            channel = get_prop_C(ser, PROP_PHY_CHAN, timeout=timeout)
+            return channel
+        finally:
+            ser.close()
+    except Exception as e:
+        print(f"Failed to get RCP channel: {e}", file=sys.stderr)
+        return None
+
+def get_rcp_info(uart_device="/dev/ttyAML6", baudrate=115200, timeout=2.0):
+    """
+    Get all RCP information (version, channel, panid, txpower)
+    
+    Args:
+        uart_device (str): Serial device path
+        baudrate (int): Baud rate
+        timeout (float): Timeout in seconds
+        
+    Returns:
+        dict: Dictionary containing RCP information or None if failed
+    """
+    try:
+        ser = serial.Serial(uart_device, baudrate, timeout=0.2)
+        try:
+            info = {}
+            
+            # Get version
+            try:
+                info['version'] = get_prop_U(ser, PROP_NCP_VERSION, timeout=timeout)
+            except Exception as e:
+                info['version'] = None
+                print(f"Failed to get version: {e}", file=sys.stderr)
+            
+            # Get channel
+            try:
+                info['channel'] = get_prop_C(ser, PROP_PHY_CHAN, timeout=timeout)
+            except Exception as e:
+                info['channel'] = None
+                print(f"Failed to get channel: {e}", file=sys.stderr)
+            
+            # Get panid
+            try:
+                info['panid'] = get_prop_S(ser, PROP_MAC_15_4_PANID, timeout=timeout)
+            except Exception as e:
+                info['panid'] = None
+                print(f"Failed to get panid: {e}", file=sys.stderr)
+            
+            # Get txpower
+            try:
+                info['txpower'] = get_prop_c(ser, PROP_PHY_TX_POWER, timeout=timeout)
+            except Exception as e:
+                info['txpower'] = None
+                print(f"Failed to get txpower: {e}", file=sys.stderr)
+            
+            return info
+        finally:
+            ser.close()
+    except Exception as e:
+        print(f"Failed to get RCP info: {e}", file=sys.stderr)
+        return None
+
 def main():
     ap = argparse.ArgumentParser(description="Read RCP basic info via Spinel over UART (HDLC)")
     ap.add_argument("-u", "--uart", default="/dev/ttyAML6", help="Serial device, e.g. /dev/ttyAML6")
