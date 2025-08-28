@@ -655,12 +655,42 @@ def _reset_blz_hardware():
     """
     如果脚本/srv/homeassistant/bin/home_assistant_blz_reset.sh存在，则执行该脚本。不输出任何日志。
     """
+    logging.info("Resetting blz hardware...")
     script_path = "/srv/homeassistant/bin/home_assistant_blz_reset.sh"
     if os.path.exists(script_path):
         try:
             subprocess.run([script_path], check=False)
         except Exception:
             pass
+
+
+def _restart_dongle():
+    """
+    Restart Zigbee dongle by resetting GPIO pins.
+    Zigbee reset: DB_RSTN1/GPIOZ_1
+    Zigbee boot: DB_BOOT1/GPIOZ_3
+    """
+    logging.info("Restarting Zigbee dongle...")
+    try:
+        # Reset Zigbee module GPIOZ_1/GPIOZ_3
+        time.sleep(0.2)
+        subprocess.run(["gpioset", "0", "3=0"], check=True)
+        time.sleep(0.2)
+        subprocess.run(["gpioset", "0", "1=1"], check=True)
+        time.sleep(0.2)
+        subprocess.run(["gpioset", "0", "1=0"], check=True)
+        time.sleep(0.2)
+        subprocess.run(["gpioset", "0", "1=1"], check=True)
+        logging.info("Zigbee dongle restart completed successfully")
+        
+    except subprocess.CalledProcessError as e:
+        error_msg = f"Error executing Zigbee gpioset command: {e}"
+        logging.error(error_msg)
+        raise RuntimeError(error_msg)
+    except Exception as e:
+        error_msg = f"Error restarting Zigbee dongle: {e}"
+        logging.error(error_msg)
+        raise RuntimeError(error_msg)
 
 def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
     """
@@ -893,7 +923,7 @@ def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):
         _call_progress(progress_callback, 20, "Checking if already in Z2M mode...")
         if _check_if_z2m_configured():
             logging.info("System is already configured for Zigbee2MQTT mode. Skipping configuration updates.")
-            _call_progress(progress_callback, 70, "Already in Z2M mode. Ensuring services are active.")
+            _call_progress(progress_callback, 60, "Already in Z2M mode. Ensuring services are active.")
         else:
             _call_progress(progress_callback, 25, "Not in Z2M mode or status unclear. Proceeding with configuration updates.")
             logging.info("Updating Home Assistant configurations for Z2M mode...")
@@ -910,7 +940,7 @@ def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):
             # Force sync to flush NAND cache
             force_sync()
 
-            _call_progress(progress_callback, 70, "Updating Z2M entity registry...")
+            _call_progress(progress_callback, 60, "Updating Z2M entity registry...")
             _update_zigbee2mqtt_entity_registry()
             logging.info("Z2M entity registry updated.")
             # Force sync to flush NAND cache
@@ -918,6 +948,26 @@ def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):
 
             # 新增：重置configuration.yaml
             _reset_zigbee2mqtt_configuration()
+
+        _call_progress(progress_callback, 70, "Process zigbee dongle ...")
+        # Delete HomeAssistant zigbee database file before final success
+        zigbee_db_path = "/var/lib/homeassistant/homeassistant/zigbee.db"
+        try:
+            if os.path.exists(zigbee_db_path):
+                os.remove(zigbee_db_path)
+                logging.info(f"Successfully deleted HomeAssistant zigbee database: {zigbee_db_path}")
+                # radio_type判断，复用_get_info_from_zha_conf
+                try:
+                    _, radio_type = _get_info_from_zha_conf()
+                except Exception:
+                    radio_type = None
+                if radio_type == "blz":
+                    _reset_blz_hardware()
+                    _restart_dongle()
+            else:
+                logging.info(f"HomeAssistant zigbee database not found, skipping deletion: {zigbee_db_path}")
+        except OSError as e:
+            logging.warning(f"Error deleting HomeAssistant zigbee database {zigbee_db_path}: {e}")
 
         _call_progress(progress_callback, 80, "Starting and enabling Z2M services (Mosquitto, Zigbee2MQTT)...")
         all_services_managed_successfully = True
@@ -940,24 +990,6 @@ def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):
             logging.warning("One or more Z2M services could not be properly started/enabled. Check logs.")
             # Decide if this is a partial success or failure for complete_callback
             # For now, continue and report overall success if other steps passed.
-
-        # Delete HomeAssistant zigbee database file before final success
-        zigbee_db_path = "/var/lib/homeassistant/homeassistant/zigbee.db"
-        try:
-            if os.path.exists(zigbee_db_path):
-                os.remove(zigbee_db_path)
-                logging.info(f"Successfully deleted HomeAssistant zigbee database: {zigbee_db_path}")
-                # radio_type判断，复用_get_info_from_zha_conf
-                try:
-                    _, radio_type = _get_info_from_zha_conf()
-                except Exception:
-                    radio_type = None
-                if radio_type == "blz":
-                    _reset_blz_hardware()
-            else:
-                logging.info(f"HomeAssistant zigbee database not found, skipping deletion: {zigbee_db_path}")
-        except OSError as e:
-            logging.warning(f"Error deleting HomeAssistant zigbee database {zigbee_db_path}: {e}")
 
         _call_progress(progress_callback, 100, "Successfully switched to Z2M mode (or confirmed existing Z2M mode).")
         logging.info("Successfully switched to Zigbee2MQTT mode.")
