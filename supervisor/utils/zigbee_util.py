@@ -1321,6 +1321,14 @@ def get_zigbee_info():
                     if 'version' in blz_info:
                         result["blz_info"]["version"] = blz_info['version']
                     
+                    # Add stack version
+                    if 'stack_version' in blz_info:
+                        result["blz_info"]["stack_version"] = blz_info['stack_version']
+                    
+                    # Add network parameters
+                    if 'network_parameters' in blz_info:
+                        result["blz_info"]["network_parameters"] = blz_info['network_parameters']
+                    
                     logging.info("Successfully retrieved BL702 information")
                 else:
                     result["blz_info"] = None

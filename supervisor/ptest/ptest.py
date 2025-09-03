@@ -446,7 +446,7 @@ class ProductTest:
             
             # Try to get Zigbee info using BL702 direct communication
             try:
-                blz_info = get_blz_info(verbose=True)
+                blz_info = get_blz_info(verbose=False)
                 if blz_info:
                     print("BL702 communication test results:")
                     
@@ -465,6 +465,29 @@ class ProductTest:
                     if 'stack_version' in blz_info and blz_info['stack_version']:
                         stack_ver = blz_info['stack_version']
                         print(f"BL702 Stack Version: build={stack_ver.get('build', 'N/A')}, {stack_ver.get('major', 'N/A')}.{stack_ver.get('minor', 'N/A')}.{stack_ver.get('patch', 'N/A')}")
+                    
+                    # Print network parameters if available
+                    if 'network_parameters' in blz_info and blz_info['network_parameters']:
+                        net_params = blz_info['network_parameters']
+                        print("BL702 Network Parameters:")
+                        if 'status' in net_params:
+                            print(f"  Status: {net_params['status']}")
+                        if 'node_type' in net_params:
+                            print(f"  Node Type: {net_params['node_type']}")
+                        if 'ext_pan_id' in net_params:
+                            print(f"  Extended PAN ID: {net_params['ext_pan_id']}")
+                        if 'pan_id' in net_params:
+                            print(f"  PAN ID: 0x{net_params['pan_id']:04X}")
+                        if 'tx_power' in net_params:
+                            print(f"  TX Power: {net_params['tx_power']} dBm")
+                        if 'channel' in net_params:
+                            print(f"  Channel: {net_params['channel']}")
+                        if 'nwk_manager' in net_params:
+                            print(f"  Network Manager: {net_params['nwk_manager']}")
+                        if 'nwk_update_id' in net_params:
+                            print(f"  Network Update ID: {net_params['nwk_update_id']}")
+                        if 'channel_mask' in net_params:
+                            print(f"  Channel Mask: {net_params['channel_mask']}")
                     
                     # Test result based on IEEE
                     if ieee:

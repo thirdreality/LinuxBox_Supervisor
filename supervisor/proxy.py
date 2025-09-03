@@ -294,9 +294,10 @@ class SupervisorProxy:
                         # Check if supervisor has the corresponding method
                         if self.supervisor and hasattr(self.supervisor, method_name):
                             # Dynamically call the corresponding method
-                            getattr(self.supervisor, method_name)(command_str)
+                            result = getattr(self.supervisor, method_name)(command_str)
                             self.logger.info(f"{cmd_type.capitalize()} command executed: {command_str}")
-                            return f"{cmd_type} command successfully executed"
+                            # Return the actual result instead of generic success message
+                            return result if result is not None else f"{cmd_type} command successfully executed"
                         else:
                             error_msg = f"Supervisor not available or missing {method_name} method"
                             self.logger.error(error_msg)

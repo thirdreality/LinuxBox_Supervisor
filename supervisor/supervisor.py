@@ -25,8 +25,20 @@ from .http_server import SupervisorHTTPServer
 from .proxy import SupervisorProxy
 from .cli import SupervisorClient
 from .sysinfo import SystemInfoUpdater, SystemInfo, OpenHabInfo
-from supervisor.utils.zigbee_util import get_ha_zigbee_mode, get_zigbee_info
-from supervisor.utils.thread_util import get_thread_info
+from supervisor.utils.zigbee_util import get_ha_zigbee_mode
+try:
+    from supervisor.utils.zigbee_util import get_zigbee_info
+except ImportError:
+    # Fallback if get_zigbee_info is not available
+    def get_zigbee_info():
+        return '{"error": "get_zigbee_info function not available"}'
+
+try:
+    from supervisor.utils.thread_util import get_thread_info
+except ImportError:
+    # Fallback if get_thread_info is not available
+    def get_thread_info():
+        return '{"error": "get_thread_info function not available"}'
 
 # Configure logging
 logging.basicConfig(
@@ -642,7 +654,17 @@ def main():
                 
             # For ptest, the response handling is done in the client
             if args.command != 'ptest':
-                print(f"{args.command.capitalize()} command sent successfully: {param}")
+                # Special handling for info commands - display JSON response
+                if param == 'info':
+                    try:
+                        # Try to parse and pretty print JSON response
+                        json_data = json.loads(response)
+                        print(json.dumps(json_data, indent=2, ensure_ascii=False))
+                    except (json.JSONDecodeError, TypeError):
+                        # If not valid JSON, print as is
+                        print(response)
+                else:
+                    print(f"{args.command.capitalize()} command sent successfully: {param}")
         except Exception as e:
             print(f"Error sending {args.command} command: {e}")
             sys.exit(1)               

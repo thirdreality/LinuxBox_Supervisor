@@ -86,8 +86,20 @@ class SupervisorClient:
         """Handle regular (non-streaming) commands"""
         # Use old protocol for backward compatibility
         client.sendall(json.dumps(payload).encode('utf-8'))
-        response = client.recv(4096).decode('utf-8')
-        logging.info(f"Server response: {response}")
+        
+        # Receive response - handle potentially large JSON responses
+        response_chunks = []
+        while True:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            response_chunks.append(chunk)
+            # For most commands, response should be relatively small
+            # Break after first chunk unless it's exactly 4096 bytes (indicating more data)
+            if len(chunk) < 4096:
+                break
+        
+        response = b''.join(response_chunks).decode('utf-8')
         return response
 
     def _handle_streaming_command(self, client, payload):

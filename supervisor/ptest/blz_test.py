@@ -610,6 +610,16 @@ def get_blz_info(uart_device="/dev/ttyAML3", baudrate=2000000, timeout=3.0, verb
                 if verbose:
                     print(f"Failed to get stack version: {e}")
             
+            time.sleep(0.5)
+            
+            # Get network parameters
+            try:
+                info['network_parameters'] = tester.get_network_parameters()
+            except Exception as e:
+                info['network_parameters'] = None
+                if verbose:
+                    print(f"Failed to get network parameters: {e}")
+            
             return info
             
         finally:
