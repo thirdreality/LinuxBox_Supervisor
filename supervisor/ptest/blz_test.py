@@ -584,9 +584,9 @@ def get_blz_info(uart_device="/dev/ttyAML3", baudrate=2000000, timeout=3.0, verb
             
             # Get MAC
             try:
-                info['mac'] = tester.get_mac_address()
+                info['IEEE'] = tester.get_mac_address()
             except Exception as e:
-                info['mac'] = None
+                info['IEEE'] = None
                 if verbose:
                     print(f"Failed to get MAC: {e}")
             

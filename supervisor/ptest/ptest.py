@@ -12,6 +12,8 @@ import re
 from ..hardware import GpioLed, LedState
 from ..sysinfo import _get_t3r_release_info, get_package_version
 from ..const import PTEST_WIFI_SSID, PTEST_WIFI_PASSWORD
+from .blz_test import get_blz_info
+from .rcp_test import get_rcp_info
 
 # Configure logging for ptest
 logging.basicConfig(
@@ -412,6 +414,7 @@ class ProductTest:
         
         zha_conf_path = "/var/lib/homeassistant/zha.conf"
         ha_running = False
+        zigbee2mqtt_running = False
         ieee = ""
         radio = ""
         
@@ -423,85 +426,198 @@ class ProductTest:
         except Exception as e:
             logger.error(f"Home Assistant check failed: {e}")
 
-        # Check if zha.conf exists
-        if not os.path.exists(zha_conf_path):
-            # Check if thirdreality-hacore is installed
-            if not self.check_package_installed("thirdreality-hacore"):
-                print("WARNING: thirdreality-hacore not installed")
-                print("test_result skip")
-                self.test_results['zigbee'] = False
-                return False
-            else:
-                print("ERROR: thirdreality-hacore installed but zha.conf missing")
-                print("test_result fail")
-                self.test_results['zigbee'] = False
-                return False
-
-        # Parse zha.conf
+        # Check if zigbee2mqtt is running
         try:
-            with open(zha_conf_path, 'r') as f:
-                content = f.read()
-                
-            # Extract Device IEEE
-            ieee_match = re.search(r'Device IEEE:\s*([0-9a-fA-F:]+)', content)
-            if ieee_match:
-                ieee = ieee_match.group(1)
-                print(f"ZIGBEE IEEE: {ieee}")
-            
-            # Extract Radio Type
-            radio_match = re.search(r'Radio Type:\s*(\w+)', content)
-            if radio_match:
-                radio = radio_match.group(1)
-                print(f"ZIGBEE RADIO: {radio}")
-                
+            zigbee2mqtt_running = self.check_service_status("zigbee2mqtt")
+            status = "active" if zigbee2mqtt_running else "inactive"
+            print(f"zigbee2mqtt: {status}")
         except Exception as e:
-            logger.error(f"Failed to parse zha.conf: {e}")
+            logger.error(f"zigbee2mqtt check failed: {e}")
 
-        # Determine pass/fail
-        if ieee and radio:
-            print("test_result pass")
-            self.test_results['zigbee'] = True
-            return True
-        else:
+        # Check if thirdreality-hacore is installed
+        hacore_installed = self.check_package_installed("thirdreality-hacore")
+        
+        # Logic 1: If thirdreality-hacore is not installed, or both services are not running
+        if not hacore_installed or (hacore_installed and not ha_running and not zigbee2mqtt_running):
+            if not hacore_installed:
+                print("thirdreality-hacore not installed, trying BL702 direct communication...")
+            else:
+                print("thirdreality-hacore installed but both services not running, trying BL702 direct communication...")
+            
+            # Try to get Zigbee info using BL702 direct communication
+            try:
+                blz_info = get_blz_info(verbose=True)
+                if blz_info:
+                    print("BL702 communication test results:")
+                    
+                    # Print IEEE address
+                    if 'IEEE' in blz_info and blz_info['IEEE']:
+                        print(f"ZIGBEE IEEE: {blz_info['IEEE']}")
+                        ieee = blz_info['IEEE']
+                    else:
+                        print("ZIGBEE IEEE: None")
+                    
+                    # Print application version if available
+                    if 'version' in blz_info and blz_info['version']:
+                        print(f"BL702 App Version: {blz_info['version']}")
+                    
+                    # Print stack version if available
+                    if 'stack_version' in blz_info and blz_info['stack_version']:
+                        stack_ver = blz_info['stack_version']
+                        print(f"BL702 Stack Version: build={stack_ver.get('build', 'N/A')}, {stack_ver.get('major', 'N/A')}.{stack_ver.get('minor', 'N/A')}.{stack_ver.get('patch', 'N/A')}")
+                    
+                    # Test result based on IEEE
+                    if ieee:
+                        print("test_result pass")
+                        self.test_results['zigbee'] = True
+                        return True
+                    else:
+                        print("test_result fail - IEEE address not available")
+                        self.test_results['zigbee'] = False
+                        return False
+                else:
+                    print("Failed to get BL702 information")
+                    print("test_result fail")
+                    self.test_results['zigbee'] = False
+                    return False
+            except Exception as e:
+                logger.error(f"BL702 communication failed: {e}")
+                print("test_result fail - BL702 communication error")
+                self.test_results['zigbee'] = False
+                return False
+        
+        # Logic 2: If thirdreality-hacore is installed but zha.conf doesn't exist
+        elif hacore_installed and not os.path.exists(zha_conf_path):
+            print("ERROR: thirdreality-hacore installed but zha.conf missing")
             print("test_result fail")
             self.test_results['zigbee'] = False
             return False
+        
+        # Logic 3: Default case - parse zha.conf
+        else:
+            # Parse zha.conf
+            try:
+                with open(zha_conf_path, 'r') as f:
+                    content = f.read()
+                    
+                # Extract Device IEEE
+                ieee_match = re.search(r'Device IEEE:\s*([0-9a-fA-F:]+)', content)
+                if ieee_match:
+                    ieee = ieee_match.group(1)
+                    print(f"ZIGBEE IEEE: {ieee}")
+                
+                # Extract Radio Type
+                radio_match = re.search(r'Radio Type:\s*(\w+)', content)
+                if radio_match:
+                    radio = radio_match.group(1)
+                    print(f"ZIGBEE RADIO: {radio}")
+                    
+            except Exception as e:
+                logger.error(f"Failed to parse zha.conf: {e}")
+
+            # Determine pass/fail
+            if ieee and radio:
+                print("test_result pass")
+                self.test_results['zigbee'] = True
+                return True
+            else:
+                print("test_result fail")
+                self.test_results['zigbee'] = False
+                return False
 
     def test_08_thread(self):
         """Test 8: Thread check"""
         print("\n=== Test 8: Thread Check ===")
         
-        # Check wpan0 interface
+        otbr_agent_running = False
+        
+        # Check if thirdreality-otbr-agent is installed
+        otbr_installed = self.check_package_installed("thirdreality-otbr-agent")
+        
+        # Check if otbr-agent service is running
         try:
-            result = self.run_command("ifconfig wpan0")
-            if result and result.returncode == 0:
-                if 'UP' in result.stdout and 'RUNNING' in result.stdout:
-                    print("test_result pass")
-                    self.test_results['thread'] = True
-                    return True
+            otbr_agent_running = self.check_service_status("otbr-agent.service")
+            status = "active" if otbr_agent_running else "inactive"
+            print(f"otbr-agent.service: {status}")
         except Exception as e:
-            logger.error(f"wpan0 check failed: {e}")
-
-        # Check if otbr-agent is installed
-        if not self.check_package_installed("thirdreality-otbr-agent"):
-            print("WARNING: thirdreality-otbr-agent not installed")
-            print("test_result skip")
-            self.test_results['thread'] = False
-            return False
-
-        # Check otbr-agent service
-        try:
-            if self.check_service_status("otbr-agent.service"):
-                print("ERROR: otbr-agent service running but thread interface failed")
+            logger.error(f"otbr-agent service check failed: {e}")
+        
+        # Logic 1: If thirdreality-otbr-agent is not installed, or installed but service not running
+        if not otbr_installed or (otbr_installed and not otbr_agent_running):
+            if not otbr_installed:
+                print("thirdreality-otbr-agent not installed, trying RCP direct communication...")
+            else:
+                print("thirdreality-otbr-agent installed but service not running, trying RCP direct communication...")
+            
+            # Try to get RCP info using direct communication
+            try:
+                rcp_info = get_rcp_info()
+                if rcp_info:
+                    print("RCP communication test results:")
+                    
+                    # Print all available information
+                    if 'version' in rcp_info and rcp_info['version']:
+                        version = rcp_info['version']
+                        print(f"RCP Version: {version}")
+                        
+                        # Check if version contains BL702 or BL706
+                        if 'BL702' in version or 'BL706' in version:
+                            print("test_result pass - Valid RCP version detected")
+                            
+                            # Print other info if available
+                            if 'channel' in rcp_info and rcp_info['channel'] is not None:
+                                print(f"RCP Channel: {rcp_info['channel']}")
+                            if 'panid' in rcp_info and rcp_info['panid'] is not None:
+                                print(f"RCP PANID: 0x{rcp_info['panid']:04X}")
+                            if 'txpower' in rcp_info and rcp_info['txpower'] is not None:
+                                print(f"RCP TxPower: {rcp_info['txpower']} dBm")
+                            
+                            self.test_results['thread'] = True
+                            return True
+                        else:
+                            print("test_result fail - RCP version does not contain BL702 or BL706")
+                            self.test_results['thread'] = False
+                            return False
+                    else:
+                        print("test_result fail - RCP version not available")
+                        self.test_results['thread'] = False
+                        return False
+                else:
+                    print("Failed to get RCP information")
+                    print("test_result fail")
+                    self.test_results['thread'] = False
+                    return False
+            except Exception as e:
+                logger.error(f"RCP communication failed: {e}")
+                print("test_result fail - RCP communication error")
+                self.test_results['thread'] = False
+                return False
+        
+        # Logic 2: Default case - check wpan0 interface (original logic)
+        else:
+            # Check wpan0 interface
+            try:
+                result = self.run_command("ifconfig wpan0")
+                if result and result.returncode == 0:
+                    if 'UP' in result.stdout and 'RUNNING' in result.stdout:
+                        print("test_result pass")
+                        self.test_results['thread'] = True
+                        return True
+                    else:
+                        print("ERROR: wpan0 interface not UP and RUNNING")
+                        print("test_result fail")
+                        self.test_results['thread'] = False
+                        return False
+                else:
+                    print("ERROR: wpan0 interface not found")
+                    print("test_result fail")
+                    self.test_results['thread'] = False
+                    return False
+            except Exception as e:
+                logger.error(f"wpan0 check failed: {e}")
                 print("test_result fail")
                 self.test_results['thread'] = False
                 return False
-        except Exception as e:
-            logger.error(f"otbr-agent service check failed: {e}")
-
-        print("test_result fail")
-        self.test_results['thread'] = False
-        return False
 
     def run_all_tests(self):
         """Run all product tests"""

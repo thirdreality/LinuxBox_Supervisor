@@ -15,6 +15,7 @@ import threading
 import time
 from supervisor.token_manager import TokenManager
 from .util import force_sync
+from supervisor.ptest.blz_test import get_blz_info
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -1266,3 +1267,76 @@ def run_zigbee_pairing(progress_callback=None, complete_callback=None, led_contr
             logging.info("Pairing initiation failed, state reset.")
 
 PERMIT_JOIN_DURATION = 254  # Unified permit join duration (seconds)
+
+def _check_service_running(service_name):
+    """Check if a systemd service is running."""
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", service_name], 
+            capture_output=True, 
+            text=True, 
+            check=False
+        )
+        return result.stdout.strip() == "active"
+    except Exception as e:
+        logging.error(f"Error checking service status for {service_name}: {e}")
+        return False
+
+def get_zigbee_info():
+    """
+    Get Zigbee information and return as JSON string.
+    
+    Returns:
+        str: JSON string containing Zigbee information
+    """
+    try:
+        # First determine the mode
+        mode = get_ha_zigbee_mode()
+        
+        # Check service status
+        ha_running = _check_service_running("home-assistant.service")
+        z2m_running = _check_service_running("zigbee2mqtt.service")
+        
+        result = {
+            "mode": mode,
+            "services": {
+                "home_assistant": ha_running,
+                "zigbee2mqtt": z2m_running
+            }
+        }
+        
+        # If both services are not running, try to get BL702 info directly
+        if not ha_running and not z2m_running:
+            logging.info("Both Home Assistant and Zigbee2MQTT services are not running, trying BL702 direct communication...")
+            try:
+                blz_info = get_blz_info(verbose=False)
+                if blz_info:
+                    result["blz_info"] = {}
+                    
+                    # Add IEEE address
+                    if 'IEEE' in blz_info:
+                        result["blz_info"]["IEEE"] = blz_info['IEEE']
+                    
+                    # Add application version
+                    if 'version' in blz_info:
+                        result["blz_info"]["version"] = blz_info['version']
+                    
+                    logging.info("Successfully retrieved BL702 information")
+                else:
+                    result["blz_info"] = None
+                    result["error"] = "Failed to get BL702 information"
+                    logging.warning("Failed to get BL702 information")
+            except Exception as e:
+                result["blz_info"] = None
+                result["error"] = f"BL702 communication error: {str(e)}"
+                logging.error(f"BL702 communication failed: {e}")
+        
+        return json.dumps(result, ensure_ascii=False, indent=2)
+        
+    except Exception as e:
+        error_result = {
+            "mode": "unknown",
+            "error": f"Failed to get Zigbee info: {str(e)}"
+        }
+        logging.error(f"Error in get_zigbee_info: {e}")
+        return json.dumps(error_result, ensure_ascii=False, indent=2)

@@ -25,7 +25,8 @@ from .http_server import SupervisorHTTPServer
 from .proxy import SupervisorProxy
 from .cli import SupervisorClient
 from .sysinfo import SystemInfoUpdater, SystemInfo, OpenHabInfo
-from supervisor.utils.zigbee_util import get_ha_zigbee_mode
+from supervisor.utils.zigbee_util import get_ha_zigbee_mode, get_zigbee_info
+from supervisor.utils.thread_util import get_thread_info
 
 # Configure logging
 logging.basicConfig(
@@ -115,7 +116,7 @@ class Supervisor:
                 return f"Zigbee pairing start failed: {e}"
         elif cmd_lower == "info":
             # 查询zigbee信息
-            return get_ha_zigbee_mode()
+            return get_zigbee_info()
         elif cmd_lower == "scan":
             try:
                 self.task_manager.start_zigbee_pairing(led_controller=self.led)
@@ -172,6 +173,9 @@ class Supervisor:
             # Thread support is always enabled, cannot be disabled
             logger.info("Thread support is always enabled, cannot be disabled")
             return "Thread support is always enabled"
+        elif cmd.lower() == "info":
+            # Get Thread information
+            return get_thread_info()
         elif cmd.lower() == "enable":
             try:
                 self.task_manager.start_thread_mode_enable()
