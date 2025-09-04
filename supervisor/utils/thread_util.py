@@ -69,22 +69,18 @@ def get_thread_info():
             try:
                 rcp_info = get_rcp_info()
                 if rcp_info:
-                    result["status"] = "success"
                     result["rcp_info"] = rcp_info
                     logger.info("Successfully retrieved RCP information")
                 else:
-                    result["status"] = "error"
                     result["error"] = "Failed to get RCP information"
                     result["rcp_info"] = None
                     logger.warning("Failed to get RCP information")
             except Exception as e:
-                result["status"] = "error"
                 result["error"] = f"RCP communication error: {str(e)}"
                 result["rcp_info"] = None
                 logger.error(f"RCP communication failed: {e}")
         else:
-            result["status"] = "service_running"
-            result["message"] = "otbr-agent.service is running, RCP port may be occupied"
+            result["error"] = "otbr-agent.service is running, RCP port may be occupied"
             logger.info("otbr-agent.service is running, skipping RCP direct communication")
         
         return json.dumps(result, ensure_ascii=False, indent=2)
