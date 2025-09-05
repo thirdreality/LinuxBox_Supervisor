@@ -41,6 +41,7 @@ BACKUP_EXCLUDE_PATTERNS = [
     "*.cache",         # Cache files
     "cache/",          # Cache directories
     "logs/",           # Log directories
+    "log/",            # Log directories (single log folder)
     "temp/",           # Temporary directories
     "tmp/",            # Temporary directories
     "__pycache__/",    # Python cache directories
