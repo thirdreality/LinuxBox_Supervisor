@@ -8,6 +8,7 @@ import glob
 import tempfile
 import shutil
 import json
+import fnmatch
 from datetime import datetime
 from .wifi_utils import get_current_wifi_info
 import base64
@@ -32,10 +33,108 @@ BACKUP_DIRS_CONFIG = [
     ("/etc/mosquitto", "mosquitto_config")
 ]
 
+# Files and directories to exclude from backup (patterns)
+BACKUP_EXCLUDE_PATTERNS = [
+    "*.log",           # All log files
+    "*.log.*",         # Rotated log files (e.g. .log.1, .log.gz)
+    "*.tmp",           # Temporary files
+    "*.cache",         # Cache files
+    "cache/",          # Cache directories
+    "logs/",           # Log directories
+    "temp/",           # Temporary directories
+    "tmp/",            # Temporary directories
+    "__pycache__/",    # Python cache directories
+    "*.pyc",           # Python compiled files
+    "*.pid",           # Process ID files
+    "*.sock",          # Socket files
+    "*.db-wal",        # SQLite WAL files
+    "*.db-shm",        # SQLite SHM files
+    "*.backup",        # Backup files
+    "*.bak"            # Backup files
+]
+
 # Configuration directory for restore records
 RESTORE_RECORD_DIR = "/usr/lib/thirdreality/conf"
 
 logger = logging.getLogger("Supervisor")
+
+def _should_exclude_file(file_path, exclude_patterns):
+    """
+    Check if a file should be excluded from backup
+    """
+    file_name = os.path.basename(file_path)
+    rel_path = file_path
+    
+    for pattern in exclude_patterns:
+        # Check filename match
+        if fnmatch.fnmatch(file_name, pattern):
+            return True
+        # Check relative path match
+        if fnmatch.fnmatch(rel_path, pattern):
+            return True
+        # Check if path contains directory pattern
+        if pattern.endswith('/') and ('/' + pattern.rstrip('/') + '/') in ('/' + rel_path + '/'):
+            return True
+    
+    return False
+
+def _clean_directory_for_backup(source_dir, dest_dir, exclude_patterns):
+    """
+    Copy directory contents to destination while excluding unwanted files
+    Returns the number of cleaned files and their size
+    """
+    cleaned_files_count = 0
+    cleaned_size = 0
+    
+    if not os.path.exists(source_dir):
+        return cleaned_files_count, cleaned_size
+    
+    for root, dirs, files in os.walk(source_dir):
+        # Calculate path relative to source directory
+        rel_root = os.path.relpath(root, source_dir)
+        if rel_root == '.':
+            rel_root = ''
+        
+        # Check if directories should be excluded
+        dirs_to_remove = []
+        for dir_name in dirs:
+            rel_dir_path = os.path.join(rel_root, dir_name) if rel_root else dir_name
+            if _should_exclude_file(rel_dir_path + '/', exclude_patterns):
+                dirs_to_remove.append(dir_name)
+                logger.info(f"Excluding directory from backup: {rel_dir_path}/")
+        
+        # Remove excluded directories from dirs list so os.walk won't traverse them
+        for dir_name in dirs_to_remove:
+            dirs.remove(dir_name)
+        
+        # Create target directory structure
+        target_root = os.path.join(dest_dir, rel_root) if rel_root else dest_dir
+        if not os.path.exists(target_root):
+            os.makedirs(target_root, exist_ok=True)
+        
+        # Process files
+        for file_name in files:
+            rel_file_path = os.path.join(rel_root, file_name) if rel_root else file_name
+            source_file = os.path.join(root, file_name)
+            
+            if _should_exclude_file(rel_file_path, exclude_patterns):
+                # Calculate size of excluded files
+                try:
+                    file_size = os.path.getsize(source_file)
+                    cleaned_size += file_size
+                    cleaned_files_count += 1
+                    logger.info(f"Excluding file from backup: {rel_file_path} ({file_size} bytes)")
+                except OSError:
+                    pass
+            else:
+                # Copy file
+                target_file = os.path.join(target_root, file_name)
+                try:
+                    shutil.copy2(source_file, target_file)
+                except Exception as e:
+                    logger.warning(f"Failed to copy file {source_file} to {target_file}: {e}")
+    
+    return cleaned_files_count, cleaned_size
 
 def _check_external_storage_available():
     """
@@ -165,24 +264,43 @@ def run_setting_backup(progress_callback=None, complete_callback=None):
             logging.error("No valid source directories found for backup. Aborting backup creation.")
             raise Exception("No valid source directories found for backup.")
 
-        # --- 新的打包流程 ---
+        # --- New packaging process (with file cleanup) ---
         import tempfile
         _call_progress(37, "Preparing temporary directory for backup.")
+        
+        total_cleaned_files = 0
+        total_cleaned_size = 0
+        
         with tempfile.TemporaryDirectory(prefix="setting_backup_") as temp_backup_dir:
-            # 1. 拷贝所有需要备份的目录到临时目录
+            # 1. Copy all directories to be backed up to temp directory (excluding unwanted files)
             for src_path, name in BACKUP_DIRS_CONFIG:
                 if os.path.exists(src_path):
                     dest_path = os.path.join(temp_backup_dir, name)
                     if os.path.isdir(src_path):
-                        shutil.copytree(src_path, dest_path, symlinks=True)
+                        # Use new cleanup function to copy directory
+                        cleaned_count, cleaned_size = _clean_directory_for_backup(src_path, dest_path, BACKUP_EXCLUDE_PATTERNS)
+                        total_cleaned_files += cleaned_count
+                        total_cleaned_size += cleaned_size
+                        logger.info(f"Directory {src_path} copied to backup with {cleaned_count} files excluded ({cleaned_size} bytes saved)")
                     elif os.path.isfile(src_path):
-                        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-                        shutil.copy2(src_path, dest_path)
-            # 2. 写入service_states.json
+                        # Check if single file should be excluded
+                        if not _should_exclude_file(os.path.basename(src_path), BACKUP_EXCLUDE_PATTERNS):
+                            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                            shutil.copy2(src_path, dest_path)
+                        else:
+                            file_size = os.path.getsize(src_path)
+                            total_cleaned_files += 1
+                            total_cleaned_size += file_size
+                            logger.info(f"File {src_path} excluded from backup ({file_size} bytes saved)")
+            
+            if total_cleaned_files > 0:
+                logger.info(f"Backup cleanup summary: {total_cleaned_files} files excluded, {total_cleaned_size / 1024 / 1024:.2f} MB saved")
+                _call_progress(39, f"File cleanup completed: {total_cleaned_files} files excluded, {total_cleaned_size / 1024 / 1024:.2f} MB saved")
+            # 2. Write service_states.json
             service_states_path = os.path.join(temp_backup_dir, "service_states.json")
             with open(service_states_path, 'w') as f:
                 json.dump(original_service_states, f, indent=2)
-            # 收集并写入network_states.json
+            # Collect and write network_states.json
             network_states = None
             try:
                 ssid, psk = get_current_wifi_info()
@@ -198,7 +316,7 @@ def run_setting_backup(progress_callback=None, complete_callback=None):
             except Exception as e:
                 logger.warning(f"Failed to collect network states: {e}")
             _call_progress(40, "All data copied to temp dir, creating tarball...")
-            # 3. 打包整个临时目录内容
+            # 3. Package entire temporary directory contents
             tar_command = ["tar", "-czf", backup_filepath, "-C", temp_backup_dir, "."]
             tar_process_result = subprocess.run(tar_command, capture_output=True, text=True)
             if tar_process_result.returncode != 0:
@@ -529,7 +647,7 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
 
             logging.info("Force sync executed after data restoration.")
             force_sync()
-            # 恢复网络连接
+            # Restore network connection
             try:
                 network_states_path = os.path.join(temp_extraction_dir, "network_states.json")
                 network_states = None
@@ -541,7 +659,7 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
                     encrypted_psk = network_states.get("psk")
                     if ssid and encrypted_psk:
                         psk = base64.b64decode(encrypted_psk.encode()).decode()
-                        # 检查当前连接
+                        # Check current connection
                         current_ssid, _ = get_current_wifi_info()
                         if current_ssid == ssid:
                             logger.info("Current SSID matches saved SSID, skipping network restore.")
@@ -690,7 +808,7 @@ def run_setting_updated(supervisor=None, progress_callback=None, complete_callba
         
         logger.info("Software update notification processed - all version information cleared")
         
-        # 调用SystemInfoUpdater更新软件状态和LED
+        # Call SystemInfoUpdater to update software status and LED
         if supervisor and hasattr(supervisor, 'sysinfo_update'):
             supervisor.sysinfo_update.update_software_status_and_led()
         else:
