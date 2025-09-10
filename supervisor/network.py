@@ -72,7 +72,7 @@ class NetworkMonitor:
     def _init_dbus(self):
         """Initialize D-Bus connection and NetworkManager proxy"""
         try:
-            self.logger.debug("Initializing NetworkManager D-Bus connection")
+            self.logger.info("NetworkMonitor: Initializing NetworkManager D-Bus connection")
             
             # 初始化D-Bus主循环
             dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
@@ -84,32 +84,32 @@ class NetworkMonitor:
             
             # 查找wlan0设备
             devices = nm_interface.GetDevices()
-            self.logger.debug(f"Found {len(devices)} NetworkManager devices")
+            self.logger.debug(f"NetworkMonitor: Found {len(devices)} NetworkManager devices")
             
             for device_path in devices:
                 device_proxy = self.bus.get_object(NM_DBUS_SERVICE, device_path)
                 device_props = dbus.Interface(device_proxy, "org.freedesktop.DBus.Properties")
                 device_iface = device_props.Get(NM_DBUS_INTERFACE_DEVICE, "Interface")
                 
-                self.logger.debug(f"Found device: {device_iface} at {device_path}")
+                self.logger.debug(f"NetworkMonitor: Found device: {device_iface} at {device_path}")
                 
                 if device_iface == "wlan0":
                     self.wlan0_device_path = device_path
                     self.wlan0_proxy = device_proxy
-                    self.logger.info(f"Successfully found wlan0 device at {device_path}")
+                    self.logger.info(f"NetworkMonitor: Successfully found wlan0 device at {device_path}")
                     break
             
             if not self.wlan0_proxy:
-                self.logger.warning("wlan0 interface not found in NetworkManager")
+                self.logger.warning("NetworkMonitor: wlan0 interface not found in NetworkManager")
                 return False
                 
             # 设置信号处理器
             self._setup_signal_handlers()
-            self.logger.info("NetworkManager D-Bus initialized successfully")
+            self.logger.info("NetworkMonitor: D-Bus initialized successfully")
             return True
             
         except Exception as e:
-            self.logger.error(f"Error initializing NetworkManager D-Bus: {e}")
+            self.logger.error(f"NetworkMonitor: Error initializing NetworkManager D-Bus: {e}")
             self.logger.error(traceback.format_exc())
             return False
     
@@ -151,7 +151,7 @@ class NetworkMonitor:
     def _handle_device_state_changed(self, new_state, old_state, reason):
         """Handle device state change signal"""
         with self._lock:
-            self.logger.info(f"Network device state changed: {old_state} -> {new_state} (reason: {reason})")
+            self.logger.info(f"NetworkMonitor: [SIGNAL-DEVICE]Network device state changed: {old_state} -> {new_state} (reason: {reason})")
             
             # Get MAC address (if not already obtained)
             if self.mac_address is None and is_interface_existing("wlan0"):
@@ -166,7 +166,7 @@ class NetworkMonitor:
             elif old_state == NM_DEVICE_STATE_ACTIVATED and new_state != NM_DEVICE_STATE_ACTIVATED:
                 self._schedule_disconnect_check()
             if new_state == NM_DEVICE_STATE_DISCONNECTED:
-                self.logger.info("Network disconnected.")
+                self.logger.info("[SIGNAL-DEVICE]Network disconnected.")
                 if self.supervisor:
                     self.supervisor.update_wifi_info("", "")
                     self.supervisor.onNetworkDisconnect()
@@ -176,18 +176,19 @@ class NetworkMonitor:
     
     def _handle_nm_state_changed(self, state):
         """Handle NetworkManager overall state changes"""
-        self.logger.info(f"NetworkManager state changed to: {state}")
+        self.logger.info(f"NetworkMonitor: [SIGNAL-NM]NetworkManager state changed to: {state}")
         # Can handle global network state changes as needed
     
     def _handle_properties_changed(self, interface_name, changed_properties, invalidated_properties):
         """Handle active connection property changes"""
         if "Ip4Config" in changed_properties:
             # IP configuration has changed, may need to update IP address
-            self.logger.debug("PropertiesChanged: Ip4Config changed.")
+            self.logger.info("NetworkMonitor: [SIGNAL-PROP]PropertiesChanged: Ip4Config changed.")
             self._update_connection_info()
     
     def _handle_connection_established(self):
         """Handle network connection establishment"""
+        self.logger.info("NetworkMonitor: _handle_connection_established() ...")
         with self._lock:
             if self.supervisor:
                 self.supervisor.clear_led_state(LedState.SYS_OFFLINE)
@@ -223,12 +224,14 @@ class NetworkMonitor:
     
     def _check_disconnect_status(self):
         """Check disconnect status"""
+        self.logger.info("NetworkMonitor: _check_disconnect_status() ...")
         with self._lock:
             self.check_timer_id = None
             if not is_network_connected():
                 self.disconnect_count += 1
                 if self.supervisor and hasattr(self.supervisor, 'wifi_status'):
                     self.supervisor.wifi_status.connected = False
+
                 if self.disconnect_count > 5 and self.connected:
                     self.connected = False
                     if self.supervisor:
@@ -319,11 +322,13 @@ class NetworkMonitor:
     def _periodic_check(self):
         """Periodic network status check (as backup mechanism)"""
         try:
+            self.logger.info("Performing periodic network check")
             wlan0_exists = is_interface_existing("wlan0")
             if not wlan0_exists:
                 if self.supervisor:
                     self.supervisor.set_led_state(LedState.STARTUP)
                 return True  # Continue periodic checks
+
             if self.mac_address is None:
                 self.mac_address = get_wlan0_mac()
                 if self.supervisor and hasattr(self.supervisor, 'wifi_status'):

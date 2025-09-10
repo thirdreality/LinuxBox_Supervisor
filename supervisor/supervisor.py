@@ -395,13 +395,13 @@ class Supervisor:
 
 
     def onNetworkFirstConnected(self):
-        logger.info("checking Network onNetworkFirstConnected() ...")
+        logger.info("Supervisor: Network onNetworkFirstConnected() ...")
 
     def onNetworkDisconnect(self):
-        logger.info("checking Network onNetworkDisconnect() ...")
+        logger.info("Supervisor: Network onNetworkDisconnect() ...")
 
     def onNetworkConnected(self):
-        logger.info("checking Network onNetworkConnected() ...")
+        logger.info("Supervisor: Network onNetworkConnected() ...")
 
     def update_wifi_info(self, ip_address, ssid):
         """Update WiFi information cache"""

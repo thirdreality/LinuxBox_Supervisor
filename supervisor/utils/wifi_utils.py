@@ -72,7 +72,6 @@ def get_wlan0_ip():
     
     if status == 0 and result:
         return result
-    logging.warning("Failed to get wlan0 IP address")
     return None
 
 
