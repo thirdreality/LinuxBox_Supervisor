@@ -63,6 +63,8 @@ class NetworkMonitor:
         
         # 状态跟踪
         self.mac_address = None
+        self.last_ip = None
+        self.last_ssid = None
         self.first_connected = False
         self.connected = False
         self.disconnect_count = 0
@@ -200,18 +202,22 @@ class NetworkMonitor:
                 self.disconnect_count = 0
                 
                 # Update connection info
-                ip_address = get_wlan0_ip()
-                ssid = get_active_connection_name()
-                self.supervisor.update_wifi_info(ip_address, ssid)
-                
+                current_ip = get_wlan0_ip()
+                current_ssid = get_active_connection_name()
+
+                if (current_ip != self.last_ip or current_ssid != self.last_ssid):
+                    self.supervisor.update_wifi_info(current_ip, current_ssid)
+                    self.last_ip = current_ip
+                    self.last_ssid = current_ssid                
+                    
                 if not self.first_connected:
                     self.first_connected = True
                     self.connected = True
-                    self.logger.info(f"First network connection established: {ssid} ({ip_address})")
+                    self.logger.info(f"First network connection established: {current_ssid} ({current_ip})")
                     self.supervisor.onNetworkFirstConnected()
                 elif not self.connected:
                     self.connected = True
-                    self.logger.info(f"Network connection re-established: {ssid} ({ip_address})")
+                    self.logger.info(f"Network connection re-established: {current_ssid} ({current_ip})")
                     self.supervisor.onNetworkConnected()
                 #self.logger.info(f"Network connected: SSID='{ssid}', IP='{ip_address}'")
     
@@ -224,7 +230,7 @@ class NetworkMonitor:
     
     def _check_disconnect_status(self):
         """Check disconnect status"""
-        self.logger.info("NetworkMonitor: _check_disconnect_status() ...")
+        self.logger.warning("NetworkMonitor: _check_disconnect_status() ...")
         with self._lock:
             self.check_timer_id = None
             if not is_network_connected():
@@ -333,14 +339,14 @@ class NetworkMonitor:
                 self.mac_address = get_wlan0_mac()
                 if self.supervisor and hasattr(self.supervisor, 'wifi_status'):
                     self.supervisor.wifi_status.mac_address = self.mac_address
+
             is_connected = is_network_connected()
-            current_ip = get_wlan0_ip()
-            current_ssid = get_active_connection_name()
+
             if is_connected:
-                if self.supervisor:
-                    self.supervisor.update_wifi_info(current_ip, current_ssid)
+                self.logger.info(f"NetworkMonitor: wlan0 is connected..")
                 self._handle_connection_established()
             else:
+                self.logger.info(f"NetworkMonitor Warning: wlan0 is not connected..")
                 self._check_disconnect_status()
         except Exception as e:
             self.logger.error(f"Error in periodic network check: {e}")
