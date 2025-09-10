@@ -26,6 +26,7 @@ from .proxy import SupervisorProxy
 from .cli import SupervisorClient
 from .sysinfo import SystemInfoUpdater, SystemInfo, OpenHabInfo
 from supervisor.utils.zigbee_util import get_ha_zigbee_mode
+from .const import VERSION, DEVICE_BUILD_NUMBER
 try:
     from supervisor.utils.zigbee_util import get_zigbee_info
 except ImportError:
@@ -395,13 +396,13 @@ class Supervisor:
 
 
     def onNetworkFirstConnected(self):
-        logger.info("Supervisor: Network onNetworkFirstConnected() ...")
+        logger.info("## Supervisor: Network onNetworkFirstConnected() ...")
 
     def onNetworkDisconnect(self):
-        logger.info("Supervisor: Network onNetworkDisconnect() ...")
+        logger.info("## Supervisor: Network onNetworkDisconnect() ...")
 
     def onNetworkConnected(self):
-        logger.info("Supervisor: Network onNetworkConnected() ...")
+        logger.info("## Supervisor: Network onNetworkConnected() ...")
 
     def update_wifi_info(self, ip_address, ssid):
         """Update WiFi information cache"""
@@ -410,10 +411,8 @@ class Supervisor:
 
         # Update WiFi status information
         if ip_changed:
-            logger.info(f"Update wifi info: {ip_address}")
             self.wifi_status.ip_address = ip_address
             self.wifi_status.ssid = ssid
-            logger.debug("WiFi info updated")
 
         # 只有从无IP到有IP的跃迁才触发
         if (not prev_ip or prev_ip in ["", "0.0.0.0"]) and (ip_address and ip_address not in ["", "0.0.0.0"]):
@@ -589,9 +588,15 @@ class Supervisor:
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Supervisor Service")
+    parser.add_argument('--version', '-v', action='store_true', help='Show version and exit')
     parser.add_argument('command', nargs='?', default='daemon', choices=['daemon', 'led', 'zigbee','thread','setting','ptest'], help="Command to run: daemon | led <color> | zigbee <parameter> | thread <parameter> | setting <parameter> | ptest <mode>")
     parser.add_argument('arg', nargs='?', default=None, help="Argument for command (e.g., color for led)")
     args = parser.parse_args()
+
+    # Handle --version early and exit
+    if getattr(args, 'version', False):
+        print(f"Supervisor {VERSION} ({DEVICE_BUILD_NUMBER})")
+        sys.exit(0)
 
     if args.command == 'daemon':
         supervisor = Supervisor()

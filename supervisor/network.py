@@ -67,7 +67,8 @@ class NetworkMonitor:
         self.last_ssid = None
         self.first_connected = False
         self.connected = False
-        self.disconnect_count = 0
+        self.last_connected = True
+        self.disconnect_tick = 0
         self.check_timer_id = None
         self._lock = threading.RLock()  # Protect state update
     
@@ -190,7 +191,6 @@ class NetworkMonitor:
     
     def _handle_connection_established(self):
         """Handle network connection establishment"""
-        self.logger.info("NetworkMonitor: _handle_connection_established() ...")
         with self._lock:
             if self.supervisor:
                 self.supervisor.clear_led_state(LedState.SYS_OFFLINE)
@@ -199,7 +199,7 @@ class NetworkMonitor:
                 if hasattr(self.supervisor, 'wifi_status'):
                     self.supervisor.wifi_status.connected = True
                 
-                self.disconnect_count = 0
+                self.disconnect_tick = 0
                 
                 # Update connection info
                 current_ip = get_wlan0_ip()
@@ -217,43 +217,57 @@ class NetworkMonitor:
                     self.supervisor.onNetworkFirstConnected()
                 elif not self.connected:
                     self.connected = True
-                    self.logger.info(f"Network connection re-established: {current_ssid} ({current_ip})")
+                    self.logger.info(f"NetworkMonitor: wireless network wlan0 is: {current_ssid} ({current_ip})")
                     self.supervisor.onNetworkConnected()
+                #else:
+                #    self.logger.info(f"NetworkMonitor: wireless network wlan0 is connected..") 
                 #self.logger.info(f"Network connected: SSID='{ssid}', IP='{ip_address}'")
+        
+    def _handle_disconnect_status(self):
+        """Check disconnect status"""
+        with self._lock:
+            self.check_timer_id = None
+            self.disconnect_tick += 1
+            self.logger.info(f"Network disconnected: ({self.disconnect_tick})")
+            if self.supervisor and hasattr(self.supervisor, 'wifi_status'):
+                self.supervisor.wifi_status.connected = False
+
+            self.connected = False
+            # if self.disconnect_tick > 5 and self.connected:
+            #     self.connected = False
+            #     if self.supervisor:
+            #         self.supervisor.update_wifi_info("", "")
+            #         self.supervisor.onNetworkDisconnect()
+                    
+            if self.supervisor:
+                if has_active_connection():
+                    self.supervisor.set_led_state(LedState.SYS_OFFLINE)
+                    # 14400 seconds， 4 Hours,  10 seconds = 1 tick, 1440 ticks = 4 hours
+                    if self.disconnect_tick == 1440:
+                        #reboot the device
+                        self.logger.warning(f"Network disconnected: ({self.disconnect_tick}), rebooting the device")
+                        self.supervisor.set_led_state(LedState.REBOOT)
+                        self.disconnect_tick = 0
+                        self.supervisor.perform_reboot()                    
+                else:
+                    self.supervisor.set_led_state(LedState.SYS_OFFLINE)
+            return False
+
     
     def _schedule_disconnect_check(self):
         """Schedule disconnect check"""
         with self._lock:
             if self.check_timer_id is not None:
                 GObject.source_remove(self.check_timer_id)
-            self.check_timer_id = GObject.timeout_add(5000, self._check_disconnect_status)
-    
-    def _check_disconnect_status(self):
-        """Check disconnect status"""
-        self.logger.warning("NetworkMonitor: _check_disconnect_status() ...")
-        with self._lock:
-            self.check_timer_id = None
-            if not is_network_connected():
-                self.disconnect_count += 1
-                if self.supervisor and hasattr(self.supervisor, 'wifi_status'):
-                    self.supervisor.wifi_status.connected = False
+            self.check_timer_id = GObject.timeout_add(5000, self._check_connection_status)
 
-                if self.disconnect_count > 5 and self.connected:
-                    self.connected = False
-                    if self.supervisor:
-                        self.supervisor.update_wifi_info("", "")
-                        self.supervisor.onNetworkDisconnect()
-                if self.supervisor:
-                    if has_active_connection():
-                        self.supervisor.set_led_state(LedState.SYS_OFFLINE)
-                    else:
-                        self.supervisor.set_led_state(LedState.SYS_OFFLINE)
-                return False
-            else:
-                self.logger.info("Network connection restored.")
-                self._handle_connection_established()
-                return False
-    
+    def _check_connection_status(self):
+        """Check connection status"""
+        if is_network_connected():
+            self._handle_connection_established()
+        else:
+            self._handle_disconnect_status()
+                    
     def _update_connection_info(self):
         """Update connection info"""
         if self.supervisor and is_network_connected():
@@ -265,7 +279,6 @@ class NetworkMonitor:
         """Update LED state based on device state"""
         if not self.supervisor:
             return
-            
         
         if device_state == NM_DEVICE_STATE_ACTIVATED:
             self.supervisor.clear_led_state(LedState.SYS_OFFLINE)
@@ -314,11 +327,13 @@ class NetworkMonitor:
             # Check network connection status
             is_connected = is_network_connected()
             self.logger.info(f"Initial network connection status: {is_connected}")
+
+            self.last_connected = None
             
             if is_connected:
                 self._handle_connection_established()
             else:
-                self._check_disconnect_status()
+                self._handle_disconnect_status()
         except Exception as e:
             self.logger.error(f"Error in initial network check: {e}")
             self.logger.error(traceback.format_exc())
@@ -328,7 +343,7 @@ class NetworkMonitor:
     def _periodic_check(self):
         """Periodic network status check (as backup mechanism)"""
         try:
-            self.logger.info("Performing periodic network check")
+            
             wlan0_exists = is_interface_existing("wlan0")
             if not wlan0_exists:
                 if self.supervisor:
@@ -342,12 +357,18 @@ class NetworkMonitor:
 
             is_connected = is_network_connected()
 
+            if is_connected != self.last_connected:
+                if is_connected:
+                    self.logger.info("Performing periodic network check: connected")
+                else:
+                    self.logger.warning("Performing periodic network check: disconnected")
+
             if is_connected:
-                self.logger.info(f"NetworkMonitor: wlan0 is connected..")
                 self._handle_connection_established()
             else:
-                self.logger.info(f"NetworkMonitor Warning: wlan0 is not connected..")
-                self._check_disconnect_status()
+                self._handle_disconnect_status()
+
+            self.last_connected = is_connected                
         except Exception as e:
             self.logger.error(f"Error in periodic network check: {e}")
             self.logger.error(traceback.format_exc())
