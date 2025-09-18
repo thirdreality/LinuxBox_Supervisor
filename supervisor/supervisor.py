@@ -130,6 +130,21 @@ class Supervisor:
         elif cmd_lower == "info":
             # 查询zigbee信息
             return get_zigbee_info()
+        elif cmd_lower == "reset":
+            try:
+                # 使用 GPIO 让 Zigbee 芯片重启
+                subprocess.run(["gpioset", "0", "3=0"], check=True)
+                time.sleep(0.2)
+                subprocess.run(["gpioset", "0", "1=1"], check=True)
+                time.sleep(0.2)
+                subprocess.run(["gpioset", "0", "1=0"], check=True)
+                time.sleep(0.2)
+                subprocess.run(["gpioset", "0", "1=1"], check=True)
+                logger.info("Zigbee reset sequence executed via GPIO")
+                return "Zigbee reset OK"
+            except Exception as e:
+                logger.error(f"Zigbee reset failed: {e}")
+                return f"Zigbee reset failed: {e}"
         elif cmd_lower == "scan":
             try:
                 self.task_manager.start_zigbee_pairing(led_controller=self.led)
@@ -206,6 +221,22 @@ class Supervisor:
             except Exception as e:
                 logger.error(f"Thread support disable fail: {e}")
                 return f"Thread support disable fail: {e}"
+        elif cmd.lower() == "reset":
+            try:
+                # 使用 GPIO 让 Thread 芯片重启
+                subprocess.run(["gpioset", "0", "29=0"], check=True)
+                time.sleep(0.2)
+                subprocess.run(["gpioset", "0", "27=1"], check=True)
+                time.sleep(0.2)
+                subprocess.run(["gpioset", "0", "27=0"], check=True)
+                time.sleep(0.2)
+                subprocess.run(["gpioset", "0", "27=1"], check=True)
+                time.sleep(0.5)
+                logger.info("Thread reset sequence executed via GPIO")
+                return "Thread reset OK"
+            except Exception as e:
+                logger.error(f"Thread reset failed: {e}")
+                return f"Thread reset failed: {e}"
         elif cmd.lower().startswith("channel_"):
             # Handle Thread channel switching: channel_11, channel_12, etc.
             try:
