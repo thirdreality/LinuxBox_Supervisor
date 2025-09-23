@@ -2,7 +2,7 @@
 
 """Constants."""
 
-VERSION = "v1.1.0"
+VERSION = "v1.2.0"
 
 VERSION_URL = "https://raw.githubusercontent.com/thirdreality/LinuxBox-Installer/refs/heads/main/version.json"
 DOWNLOAD_BASE_URL = "https://github.com/thirdreality/LinuxBox-Installer/releases/download"
