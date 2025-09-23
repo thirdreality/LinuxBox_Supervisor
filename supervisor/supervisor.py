@@ -133,6 +133,8 @@ class Supervisor:
         elif cmd_lower == "reset":
             try:
                 # 使用 GPIO 让 Zigbee 芯片重启
+                subprocess.run(["gpioset", "0", "3=1"], check=True)
+                time.sleep(0.2)
                 subprocess.run(["gpioset", "0", "3=0"], check=True)
                 time.sleep(0.2)
                 subprocess.run(["gpioset", "0", "1=1"], check=True)
@@ -224,6 +226,8 @@ class Supervisor:
         elif cmd.lower() == "reset":
             try:
                 # 使用 GPIO 让 Thread 芯片重启
+                subprocess.run(["gpioset", "0", "29=1"], check=True)
+                time.sleep(0.2)
                 subprocess.run(["gpioset", "0", "29=0"], check=True)
                 time.sleep(0.2)
                 subprocess.run(["gpioset", "0", "27=1"], check=True)

@@ -16,6 +16,7 @@ from .util import force_sync
 
 from ..const import BACKUP_STORAGE_MODE, BACKUP_INTERNAL_PATH, BACKUP_EXTERNAL_PATH
 from supervisor.sysinfo import SystemInfoUpdater
+import sqlite3
 
 SERVICES_TO_MANAGE = [
     "home-assistant.service",
@@ -235,6 +236,50 @@ def run_setting_backup(progress_callback=None, complete_callback=None):
             _call_progress(int(current_progress), f"Processed service {service}.")
 
         _call_progress(30, "Preparing to create backup archive.")
+
+        # Before copying data, shrink Home Assistant SQLite DB if too large
+        try:
+            ha_db_path = "/var/lib/homeassistant/homeassistant/home-assistant_v2.db"
+            size_threshold_bytes = 10 * 1024 * 1024  # 10MB
+            if os.path.exists(ha_db_path):
+                db_size = os.path.getsize(ha_db_path)
+                if db_size > size_threshold_bytes:
+                    logging.warning(f"Home Assistant DB size {db_size/1024/1024:.2f}MB exceeds 10MB. Purging DB before backup...")
+                    _call_progress(32, "Purging Home Assistant database before backup...")
+                    try:
+                        # Connect and cleanup
+                        conn = sqlite3.connect(ha_db_path, timeout=30)
+                        conn.execute("PRAGMA journal_mode=WAL;")
+                        conn.execute("PRAGMA busy_timeout=30000;")
+                        cur = conn.cursor()
+                        # Purge all rows as requested
+                        cur.execute("DELETE FROM events;")
+                        cur.execute("DELETE FROM states;")
+                        cur.execute("DELETE FROM statistics;")
+                        cur.execute("DELETE FROM statistics_short_term;")
+                        conn.commit()
+                        # Checkpoint WAL to reduce file size before VACUUM
+                        try:
+                            cur.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+                        except Exception:
+                            pass
+                        conn.commit()
+                        conn.close()
+                        # VACUUM may need free space; try normal first
+                        try:
+                            _call_progress(34, "VACUUM Home Assistant database...")
+                            conn2 = sqlite3.connect(ha_db_path, timeout=60)
+                            conn2.execute("VACUUM;")
+                            conn2.close()
+                        except Exception as e_vac:
+                            logging.warning(f"VACUUM failed: {e_vac}")
+                        logging.info("Home Assistant database cleanup finished.")
+                    except Exception as e_db:
+                        logging.warning(f"Failed to cleanup Home Assistant DB before backup: {e_db}")
+                else:
+                    logging.info("Home Assistant DB under threshold; skipping cleanup.")
+        except Exception as e:
+            logging.warning(f"Error during pre-backup DB cleanup stage: {e}")
         
         # For external storage, create backup directory if it doesn't exist
         if BACKUP_STORAGE_MODE == "external" and not os.path.exists(backup_base_path):

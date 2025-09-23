@@ -674,6 +674,7 @@ def _restart_dongle():
     logging.info("Restarting Zigbee dongle...")
     try:
         # Reset Zigbee module GPIOZ_1/GPIOZ_3
+        subprocess.run(["gpioset", "0", "3=1"], check=True)
         time.sleep(0.2)
         subprocess.run(["gpioset", "0", "3=0"], check=True)
         time.sleep(0.2)
