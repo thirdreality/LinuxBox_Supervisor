@@ -27,6 +27,7 @@ from .cli import SupervisorClient
 from .sysinfo import SystemInfoUpdater, SystemInfo, OpenHabInfo
 from supervisor.utils.zigbee_util import get_ha_zigbee_mode
 from .const import VERSION, DEVICE_BUILD_NUMBER
+from .zero_manager import ZeroconfManager
 try:
     from supervisor.utils.zigbee_util import get_zigbee_info
 except ImportError:
@@ -92,6 +93,14 @@ class Supervisor:
 
         # boot up time
         self.start_time = time.time()
+
+        # Zeroconf manager
+        self.zeroconf_manager = ZeroconfManager(
+            service_type="_linuxbox._tcp.local.",
+            service_name_template="hub-{mac}._linuxbox._tcp.local.",
+            service_port=8086,
+            properties={"version": VERSION, "build": DEVICE_BUILD_NUMBER}
+        )
     
 
     def set_led_state(self, state):
@@ -432,12 +441,34 @@ class Supervisor:
 
     def onNetworkFirstConnected(self):
         logger.info("## Supervisor: Network onNetworkFirstConnected() ...")
+        try:
+            logger.info(f"Attempting to start Zeroconf with IP: {self.wifi_status.ip_address}")
+            success = self.zeroconf_manager.start(self.wifi_status.ip_address)
+            if success:
+                logger.info("Zeroconf started successfully")
+            else:
+                logger.warning("Zeroconf start returned False")
+        except Exception as e:
+            logger.error(f"Failed to start Zeroconf on first connect: {e}", exc_info=True)
 
     def onNetworkDisconnect(self):
         logger.info("## Supervisor: Network onNetworkDisconnect() ...")
+        try:
+            self.zeroconf_manager.stop()
+        except Exception as e:
+            logger.warning(f"Failed to stop Zeroconf on disconnect: {e}")
 
     def onNetworkConnected(self):
         logger.info("## Supervisor: Network onNetworkConnected() ...")
+        try:
+            logger.info(f"Attempting to restart Zeroconf with IP: {self.wifi_status.ip_address}")
+            success = self.zeroconf_manager.start(self.wifi_status.ip_address)
+            if success:
+                logger.info("Zeroconf restarted successfully")
+            else:
+                logger.warning("Zeroconf restart returned False")
+        except Exception as e:
+            logger.error(f"Failed to (re)start Zeroconf on connect: {e}", exc_info=True)
 
     def update_wifi_info(self, ip_address, ssid):
         """Update WiFi information cache"""
@@ -454,7 +485,7 @@ class Supervisor:
             logger.debug(f"WiFi connected with IP {ip_address}, notifying GATT manager")
             self.gatt_manager.on_wifi_connected()
 
-        return True
+        return True   
 
     def update_system_uptime(self):
         """Update system uptime"""
@@ -561,6 +592,14 @@ class Supervisor:
         """Clean up resources"""
         logger.info("Cleaning up resources...")
         self.running.clear()
+
+        # Stop Zeroconf service
+        if hasattr(self, 'zeroconf_manager') and self.zeroconf_manager:
+            try:
+                self.zeroconf_manager.stop()
+                logger.info("Zeroconf service stopped during cleanup")
+            except Exception as e:
+                logger.warning(f"Failed to stop Zeroconf during cleanup: {e}")
 
         # Stop HTTP server
         self._stop_http_server()
