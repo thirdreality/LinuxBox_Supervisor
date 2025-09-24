@@ -20,7 +20,7 @@ class ZeroconfManager:
     Usage:
         zm = ZeroconfManager(
             service_type="_linuxbox._tcp.local.",
-            service_name_template="hub-{mac}._linuxbox._tcp.local.",
+            service_name_template="HUB-{mac}._linuxbox._tcp.local.",
             service_port=8086,
             properties={"version": "v1.0.0"}
         )
@@ -32,7 +32,7 @@ class ZeroconfManager:
     def __init__(
         self,
         service_type: str = "_linuxbox._tcp.local.",
-        service_name_template: str = "hub-{mac}._linuxbox._tcp.local.",
+        service_name_template: str = "HUB-{mac}._linuxbox._tcp.local.",
         service_port: int = 8086,
         properties: Optional[Dict[str, str]] = None,
     ) -> None:
@@ -142,7 +142,7 @@ class ZeroconfManager:
                 self._ip = None
 
     def _get_wlan0_mac(self) -> str:
-        """Get MAC address of wlan0 interface (last 8 characters)."""
+        """Get MAC address of wlan0 interface (last 8 characters, uppercase)."""
         try:
             result = subprocess.run(
                 ["cat", "/sys/class/net/wlan0/address"],
@@ -150,13 +150,13 @@ class ZeroconfManager:
                 text=True,
                 check=True
             )
-            mac = result.stdout.strip().replace(":", "").lower()
+            mac = result.stdout.strip().replace(":", "").upper()
             # Return last 8 characters of MAC address
             return mac[-8:] if len(mac) >= 8 else mac
         except (subprocess.CalledProcessError, FileNotFoundError):
             # Fallback to a default MAC if wlan0 not available
             logger.warning("Failed to get wlan0 MAC address, using default")
-            return "unknown"
+            return "UNKNOWN"
 
     @staticmethod
     def _is_valid_ipv4(ip: Optional[str]) -> bool:

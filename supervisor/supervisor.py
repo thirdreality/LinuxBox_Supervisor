@@ -97,7 +97,7 @@ class Supervisor:
         # Zeroconf manager
         self.zeroconf_manager = ZeroconfManager(
             service_type="_linuxbox._tcp.local.",
-            service_name_template="hub-{mac}._linuxbox._tcp.local.",
+            service_name_template="HUB-{mac}._linuxbox._tcp.local.",
             service_port=8086,
             properties={"version": VERSION, "build": DEVICE_BUILD_NUMBER}
         )
