@@ -762,8 +762,8 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
         _update_zha_entity_registry()
         logging.info("ZHA entity registry updated.")
 
-        _call_progress(progress_callback, 80, "Stopping and disabling conflicting services (zigbee2mqtt, mosquitto)...")
-        services_to_manage = [("zigbee2mqtt.service", "Zigbee2MQTT"), ("mosquitto.service", "Mosquitto")]
+        _call_progress(progress_callback, 80, "Stopping and disabling conflicting services (zigbee2mqtt)...")
+        services_to_manage = [("zigbee2mqtt.service", "Zigbee2MQTT")]
         all_services_managed_successfully = True
         for service_file, service_name in services_to_manage:
             try:

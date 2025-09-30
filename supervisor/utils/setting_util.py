@@ -956,6 +956,31 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
             progress_per_service_start = 15 / len(service_states_to_restore) if service_states_to_restore else 0
 
             for service, service_state in service_states_to_restore.items():
+                # Special handling: mosquitto must be enabled and started regardless of backup/original state
+                if service == "mosquitto.service":
+                    try:
+                        logging.info("Forcing mosquitto.service to be enabled after restore.")
+                        enable_result = subprocess.run(["systemctl", "enable", service], check=False, capture_output=True, text=True)
+                        if enable_result.returncode == 0:
+                            logging.info("mosquitto.service enabled successfully (post-restore).")
+                        else:
+                            logging.warning(f"Failed to enable mosquitto.service post-restore. RC: {enable_result.returncode}. Error: {enable_result.stderr.strip()}")
+                    except Exception as e_m_enable:
+                        logging.warning(f"Exception enabling mosquitto.service post-restore: {e_m_enable}")
+
+                    try:
+                        logging.info("Starting mosquitto.service after restore.")
+                        start_result = subprocess.run(["systemctl", "start", service], check=False, capture_output=True, text=True)
+                        if start_result.returncode == 0:
+                            logging.info("mosquitto.service started successfully (post-restore).")
+                        else:
+                            logging.warning(f"Failed to start mosquitto.service post-restore. RC: {start_result.returncode}. Error: {start_result.stderr.strip()}")
+                    except Exception as e_m_start:
+                        logging.warning(f"Exception starting mosquitto.service post-restore: {e_m_start}")
+
+                    current_progress_finally += progress_per_service_start
+                    _call_progress(int(min(current_progress_finally,100)), f"Processed service restoration for {service} (forced enable/start).")
+                    continue
                 # Handle both old format (boolean) and new format (dict) for backward compatibility
                 if isinstance(service_state, bool):
                     # Old format: only active status was stored
