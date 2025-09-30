@@ -234,6 +234,8 @@ class SupervisorHTTPServer:
                     self._handle_sys_command(post_data)
                 elif path == "/api/service/control":
                     self._handle_service_command(post_data)
+                elif path == "/api/setting/update":
+                    self._handle_setting_update(post_data)
                 # elif path == "/api/software/command":
                 #     self._handle_software_command(post_data)
                 # elif path == "/api/zigbee/command":
@@ -317,6 +319,23 @@ class SupervisorHTTPServer:
                         "Build Number": "1.0.0",
                         "Error": f"system info error: {e}"
                     }
+                # Always update service field based on running systemd services
+                try:
+                    service_map = {
+                        "home-assistant.service": "core",
+                        "matter-server.service": "matter",
+                        "zigbee2mqtt.service": "z2m",
+                        "otbr-agent.service": "otbr",
+                        "openhab.service": "hab",
+                    }
+                    selected = []
+                    for svc, val in service_map.items():
+                        if util.is_service_running(svc):
+                            selected.append(val)
+                    result["Services"] = ",".join(selected)
+                except Exception:
+                    # If any error occurs, ensure the field exists
+                    result["Services"] = ""
                 self._set_headers()
                 self.wfile.write(json.dumps(result).encode())
 
@@ -1077,6 +1096,55 @@ class SupervisorHTTPServer:
                         self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode())
                 except Exception as e:
                     self._logger.error(f"Error in _handle_service_command: {str(e)}")
+                    self._set_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode())
+
+            def _handle_setting_update(self, post_data):
+                """Handle setting update request with signature verification and long task progress"""
+                try:
+                    # Parse and verify
+                    params, signature, is_valid = self._parse_post_data(post_data)
+                    if 'type' not in params:
+                        self._send_error("type is required")
+                        return
+                    if 'param' not in params:
+                        self._send_error("param is required")
+                        return
+                    if not signature:
+                        self._send_error("Signature is required")
+                        return
+                    if not is_valid:
+                        self._logger.warning("Security verification failed: Invalid signature")
+                        self.send_response(401)
+                        self.send_header('Content-type', 'application/json')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"error": "Unauthorized: Invalid signature"}).encode())
+                        return
+
+                    update_type = params['type']
+                    # param 还是经过 url-encode 和 base64 的，沿用统一解析逻辑
+                    try:
+                        param_data_base64 = params['param']
+                        param_data_url_decoded = urllib.parse.unquote(param_data_base64)
+                        param_data_json = base64.b64decode(param_data_url_decoded).decode()
+                        self._logger.info(f"param_data (decoded): {param_data_json}")
+                        param_dict = json.loads(param_data_json)
+                    except Exception as e:
+                        self._logger.error(f"param decode failed: {e}")
+                        self._set_headers()
+                        self.wfile.write(json.dumps({"success": False, "error": "param decode error"}).encode())
+                        return
+
+                    # Dispatch different update types
+                    if update_type == 'z2m-mqtt':
+                        started = self._supervisor.task_manager.start_setting_update_z2m_mqtt(param_dict)
+                        self._set_headers()
+                        self.wfile.write(json.dumps({"success": bool(started), "task": "setting", "sub_task": "update_z2m_mqtt"}).encode())
+                    else:
+                        self._set_headers(status_code=400)
+                        self.wfile.write(json.dumps({"success": False, "error": f"Unknown update type: {update_type}"}).encode())
+                except Exception as e:
+                    self._logger.error(f"Error in _handle_setting_update: {str(e)}")
                     self._set_headers()
                     self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode())
 

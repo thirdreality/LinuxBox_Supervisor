@@ -121,6 +121,10 @@ class TaskManager:
     def start_setting_updated(self):
         return self._start_task("setting", "updated", setting_util.run_setting_updated, supervisor=self.supervisor)
 
+    def start_setting_update_z2m_mqtt(self, config: dict):
+        """Start long-running setting update task for z2m mqtt config"""
+        return self._start_task("setting", "update_z2m_mqtt", setting_util.run_setting_update_z2m_mqtt, config)
+
     def start_thread_mode_enable(self):
         return self._start_task("thread", "enable", thread_util.run_thread_enable)
 

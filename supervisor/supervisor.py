@@ -296,6 +296,21 @@ class Supervisor:
             except Exception as e:
                 logger.error(f"Setting updated fail: {e}")
                 return f"Setting updated fail: {e}"
+        elif cmd.lower() == "z2m-mqtt":
+            try:
+                default_config = {
+                    "base_topic": "zigbee2mqtt",
+                    "server": "mqtt://hm.3reality.co:1883",
+                    "user": "thirdreality",
+                    "password": "shushi0705",
+                    "client_id": "my_id_9527",
+                }
+                self.task_manager.start_setting_update_z2m_mqtt(default_config)
+                logger.info("Setting z2m-mqtt update task started")
+                return "Setting z2m-mqtt update task started"
+            except Exception as e:
+                logger.error(f"Setting z2m-mqtt fail: {e}")
+                return f"Setting z2m-mqtt fail: {e}"
         elif cmd.lower() == "wifi_notify":
             try:
                 threading.Timer(1, self.finish_wifi_provision).start()

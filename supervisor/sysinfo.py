@@ -253,8 +253,8 @@ class SystemInfoUpdater:
             ha_info.z2m = get_package_version("thirdreality-zigbee-mqtt")
             self.logger.info(f"thirdreality-zigbee-mqtt version: {ha_info.z2m}")
 
-            # Set installed status
-            ha_info.installed = bool(ha_info.core and ha_info.python)
+            # Set installed status: only if both hacore and zigbee-mqtt are missing, treat as not installed
+            ha_info.installed = bool(ha_info.core or ha_info.z2m)
 
             ha_info.enabled = ha_info.installed
             
@@ -353,7 +353,8 @@ class SystemInfoUpdater:
             ha_info.z2m = get_package_version("thirdreality-zigbee-mqtt")
             self.logger.info(f"thirdreality-zigbee-mqtt version: {ha_info.z2m}")
 
-            ha_info.installed = bool(ha_info.core and ha_info.python)
+            # Only when both hacore and zigbee-mqtt are not installed, treat as not installed
+            ha_info.installed = bool(ha_info.core or ha_info.z2m)
             ha_info.enabled = ha_info.installed
 
             # 设置LED

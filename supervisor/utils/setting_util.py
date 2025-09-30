@@ -154,6 +154,225 @@ def _check_external_storage_available():
         logging.error(f"Failed to check mount status: {e}")
         return False
 
+def run_setting_update_z2m_mqtt(config: dict, progress_callback=None, complete_callback=None):
+    """
+    更新 Zigbee2MQTT 的 MQTT 连接配置。
+
+    期望的 config 字段：
+      - base_topic
+      - server (例如 mqtt://localhost:1883)
+      - user
+      - password
+      - client_id
+
+    步骤：校验参数 → 停止 zigbee2mqtt → 备份并写入 /opt/zigbee2mqtt/data/configuration.yaml → 同步 → 启动 zigbee2mqtt
+    """
+    def _call_progress(percent: int, message: str):
+        try:
+            if progress_callback:
+                progress_callback(percent, message)
+        except Exception:
+            pass
+
+    try:
+        _call_progress(0, "Validating parameters")
+
+        required_keys = ["base_topic", "server", "user", "password", "client_id"]
+        missing = [k for k in required_keys if not config.get(k)]
+        if missing:
+            msg = f"Missing required fields: {','.join(missing)}"
+            logger.error(msg)
+            if complete_callback:
+                complete_callback(False, msg)
+            return
+
+        z2m_data_path = "/opt/zigbee2mqtt/data"
+        config_path = os.path.join(z2m_data_path, "configuration.yaml")
+
+        # 停止服务
+        _call_progress(10, "Stopping zigbee2mqtt service...")
+        try:
+            subprocess.run(["systemctl", "stop", "zigbee2mqtt.service"], check=False)
+        except Exception as e:
+            logger.warning(f"Failed to stop zigbee2mqtt: {e}")
+
+        # 确保目录存在
+        _call_progress(20, "Preparing configuration directory")
+        try:
+            os.makedirs(z2m_data_path, exist_ok=True)
+        except Exception as e:
+            msg = f"Failed to create {z2m_data_path}: {e}"
+            logger.error(msg)
+            if complete_callback:
+                complete_callback(False, msg)
+            return
+
+        # 备份旧配置
+        _call_progress(30, "Backing up existing configuration if present")
+        try:
+            if os.path.exists(config_path):
+                ts = datetime.now().strftime("%Y%m%d%H%M%S")
+                shutil.copy2(config_path, f"{config_path}.{ts}.bak")
+        except Exception as e:
+            logger.warning(f"Failed to backup existing configuration: {e}")
+
+        # 准备基础模板
+        default_template = "/lib/thirdreality/conf/configuration_blz.yaml.default"
+        if not os.path.exists(config_path):
+            _call_progress(40, "Installing default configuration as base")
+            try:
+                if os.path.exists(default_template):
+                    shutil.copy2(default_template, config_path)
+                else:
+                    # 如果默认模板不存在，至少创建一个最小文件
+                    with open(config_path, "w") as f:
+                        f.write("version: 4\n")
+            except Exception as e:
+                msg = f"Failed to install default configuration: {e}"
+                logger.error(msg)
+                if complete_callback:
+                    complete_callback(False, msg)
+                return
+
+        # 写入：仅替换 mqtt 块和 homeassistant.enabled
+        _call_progress(50, "Updating mqtt section and homeassistant.enabled")
+        try:
+            with open(config_path, "r") as f:
+                lines = f.read().splitlines()
+
+            def replace_block(lines, header_key, kv_map):
+                n = len(lines)
+                i = 0
+                found = False
+                header_index = -1
+                indent = ""
+                while i < n:
+                    line = lines[i]
+                    stripped = line.lstrip()
+                    if stripped.startswith(f"{header_key}:") and (len(stripped) == len(header_key)+1):
+                        found = True
+                        header_index = i
+                        indent = line[:len(line) - len(stripped)]
+                        break
+                    i += 1
+
+                if not found:
+                    # 追加一个新块到文件末尾，保持一个空行分隔
+                    if lines and lines[-1].strip() != "":
+                        lines.append("")
+                    lines.append(f"{header_key}:")
+                    indent = ""
+                    header_index = len(lines) - 1
+                    # 在末尾插入键值
+                    for k, v in kv_map.items():
+                        lines.append(f"  {k}: {v}")
+                    return lines
+
+                # 找到块边界：直到遇到非空行且缩进小于等于 header 的同级或更小缩进且不是空白
+                j = header_index + 1
+                block_lines = []
+                while j < n:
+                    lj = lines[j]
+                    if lj.strip() == "":
+                        block_lines.append(lj)
+                        j += 1
+                        continue
+                    # 如果缩进小于等于 header 的缩进，说明块结束
+                    if len(lj) - len(lj.lstrip()) <= len(indent):
+                        break
+                    block_lines.append(lj)
+                    j += 1
+
+                # 将块解析为字典形式（仅处理一级键: 值）
+                existing = {}
+                kv_indent = indent + "  "
+                new_block = []
+                keys_to_write = set(kv_map.keys())
+
+                # 先遍历原有行，替换我们关心的键，保留其他行
+                for bl in block_lines:
+                    if bl.strip() == "":
+                        new_block.append(bl)
+                        continue
+                    if not bl.startswith(kv_indent):
+                        new_block.append(bl)
+                        continue
+                    content = bl[len(kv_indent):]
+                    if ":" in content:
+                        k = content.split(":", 1)[0].strip()
+                        if k in kv_map:
+                            new_block.append(f"{kv_indent}{k}: {kv_map[k]}")
+                            if k in keys_to_write:
+                                keys_to_write.remove(k)
+                        else:
+                            new_block.append(bl)
+                    else:
+                        new_block.append(bl)
+
+                # 对缺失的键进行追加
+                for k in keys_to_write:
+                    new_block.append(f"{kv_indent}{k}: {kv_map[k]}")
+
+                # 重组
+                return lines[:header_index+1] + new_block + lines[j:]
+
+            # 更新 mqtt 块
+            lines = replace_block(
+                lines,
+                "mqtt",
+                {
+                    "base_topic": config['base_topic'],
+                    "server": config['server'],
+                    "user": config['user'],
+                    "password": config['password'],
+                    "client_id": config['client_id'],
+                }
+            )
+
+            # 更新 homeassistant.enabled
+            enable_ha = "localhost" in config['server']
+            lines = replace_block(
+                lines,
+                "homeassistant",
+                {"enabled": "true" if enable_ha else "false"}
+            )
+
+            with open(config_path, "w") as f:
+                f.write("\n".join(lines) + "\n")
+        except Exception as e:
+            msg = f"Failed to update configuration: {e}"
+            logger.error(msg, exc_info=True)
+            if complete_callback:
+                complete_callback(False, msg)
+            return
+
+        # 同步到存储
+        _call_progress(70, "Syncing data to storage")
+        try:
+            force_sync()
+        except Exception:
+            pass
+
+        # 启动服务
+        _call_progress(90, "Starting zigbee2mqtt service...")
+        try:
+            subprocess.run(["systemctl", "enable", "zigbee2mqtt.service"], check=False)
+            subprocess.run(["systemctl", "start", "zigbee2mqtt.service"], check=False)
+        except Exception as e:
+            logger.warning(f"Failed to start zigbee2mqtt: {e}")
+
+        _call_progress(100, "Zigbee2MQTT MQTT configuration updated")
+        if complete_callback:
+            complete_callback(True, "success")
+    except Exception as e:
+        msg = f"Unexpected error during z2m-mqtt update: {e}"
+        logger.error(msg, exc_info=True)
+        if complete_callback:
+            complete_callback(False, msg)
+    except Exception as e:
+        logging.error(f"Failed to check mount status: {e}")
+        return False
+
 def _get_backup_path():
     """
     Get backup path based on storage mode configuration
