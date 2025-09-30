@@ -307,7 +307,6 @@ class SupervisorHTTPServer:
                     # WiFi info
                     if hasattr(self._supervisor, 'wifi_status') and self._supervisor.wifi_status:
                         wifi_status = self._supervisor.wifi_status
-                        result["WIFI Connected"] = getattr(wifi_status, "connected", False)
                         result["SSID"] = getattr(wifi_status, "ssid", "")
                         result["Ip Address"] = getattr(wifi_status, "ip_address", "")
                         result["Mac Address"] = getattr(wifi_status, "mac_address", "")
