@@ -235,6 +235,7 @@ class SupervisorProxy:
                         'white': LedState.USER_EVENT_WHITE,
                         'cyan': LedState.USER_EVENT_CYAN,
                         'magenta': LedState.USER_EVENT_MAGENTA,
+                        'purple': LedState.USER_EVENT_MAGENTA,
                         'off': LedState.USER_EVENT_OFF
                     }
                     state = None

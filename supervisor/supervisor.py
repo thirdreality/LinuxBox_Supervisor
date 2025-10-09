@@ -702,7 +702,7 @@ def main():
         print(f"[Main]input color: {color}")
         if color is None:
             print("Usage: supervisor.py led <color>")
-            print("Support colors: [red|blue|yellow|green|white|cyan|magenta|off] or LED states: [reboot|startup|factory_reset|sys_normal_operation|sys_wifi_config_pending|sys_device_pairing|etc...]")
+            print("Support colors: [red|blue|yellow|green|white|cyan|magenta|purple|off] or LED states: [reboot|startup|factory_reset|sys_normal_operation|sys_wifi_config_pending|sys_device_pairing|etc...]")
             sys.exit(1)
         try:
             # Support simplified color name to USER_EVENT mapping
@@ -714,13 +714,14 @@ def main():
                 'white': LedState.USER_EVENT_WHITE,
                 'cyan': LedState.USER_EVENT_CYAN,
                 'magenta': LedState.USER_EVENT_MAGENTA,
+                'purple': LedState.USER_EVENT_MAGENTA,
                 'off': LedState.USER_EVENT_OFF
             }
             led_state = getattr(LedState, color.upper(), None)
             if led_state is None:
                 led_state = user_event_map.get(color.lower())
             if led_state is None:
-                print(f"[Main]Unknown color: {color}, support colors: [red|blue|yellow|green|white|cyan|magenta|off] or LED states: [reboot|startup|factory_reset|sys_normal_operation|etc...]")
+                print(f"[Main]Unknown color: {color}, support colors: [red|blue|yellow|green|white|cyan|magenta|purple|off] or LED states: [reboot|startup|factory_reset|sys_normal_operation|etc...]")
                 sys.exit(1)
             client = SupervisorClient()
             client.send_command("led", color.upper(), "Led command")

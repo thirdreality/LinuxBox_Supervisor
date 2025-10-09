@@ -3,6 +3,7 @@
 """Network Monitor for HubV3/LinuxBox"""
 
 import os
+import subprocess
 import time
 import logging
 import threading
@@ -243,6 +244,24 @@ class NetworkMonitor:
                 if has_active_connection():
                     self.supervisor.set_led_state(LedState.SYS_OFFLINE)
                     # 14400 seconds， 4 Hours,  10 seconds = 1 tick, 1440 ticks = 4 hours
+                    # 1800 seconds， 30 minutes, 10 seconds = 1 tick, 180 ticks = 30 minutes
+                    if self.disconnect_tick == 180:
+                        try:
+                            script_path = "/lib/thirdreality/resetupwifi.sh"
+                            if os.path.exists(script_path):
+                                self.logger.warning(f"Network disconnected: ({self.disconnect_tick}), triggering async {script_path}")
+                                def _run_resetupwifi():
+                                    try:
+                                        # Run asynchronously and detach outputs so failures won't affect main flow
+                                        with open(os.devnull, 'wb') as devnull:
+                                            subprocess.Popen([script_path], stdout=devnull, stderr=devnull)
+                                    except Exception as e:
+                                        self.logger.warning(f"resetupwifi.sh execution failed: {e}")
+                                threading.Thread(target=_run_resetupwifi, daemon=True).start()
+                            else:
+                                self.logger.info(f"resetupwifi.sh not found at {script_path}, skipping 30-minute action")
+                        except Exception as e:
+                            self.logger.warning(f"Error scheduling 30-minute resetupwifi action: {e}")
                     if self.disconnect_tick == 1440:
                         #reboot the device
                         self.logger.warning(f"Network disconnected: ({self.disconnect_tick}), rebooting the device")
