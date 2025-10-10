@@ -115,6 +115,30 @@ def is_service_running(service_name):
         logging.error(f"Error checking if service {service_name} is running: {e}")
         return False
 
+def is_service_present(service_name):
+    """
+    Return True if the system has this service installed/known to systemd, regardless of running state.
+    """
+    try:
+        # systemctl status returns non-zero for inactive services, so do not check=True
+        result = subprocess.run(["systemctl", "status", service_name], capture_output=True, text=True)
+        # The output contains Loaded: loaded or could be not-found. Use that to determine presence.
+        stdout = (result.stdout or "") + "\n" + (result.stderr or "")
+        lowered = stdout.lower()
+        if "loaded: loaded" in lowered:
+            return True
+        # Some distros show 'could not be found' or 'not-found' when unit does not exist
+        if "not-found" in lowered or "could not be found" in lowered or "no such file" in lowered:
+            return False
+        # Fallback: try list-unit-files which enumerates installed unit files
+        list_result = subprocess.run(["systemctl", "list-unit-files", service_name], capture_output=True, text=True)
+        if list_result.returncode == 0 and service_name in (list_result.stdout or ""):
+            return True
+        return False
+    except Exception as e:
+        logging.error(f"Error checking if service {service_name} is present: {e}")
+        return False
+
 def is_service_enabled(service_name):
     try:
         result = subprocess.run(["systemctl", "is-enabled", service_name], capture_output=True, text=True)

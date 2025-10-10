@@ -283,7 +283,8 @@ class SupervisorHTTPServer:
                         # Safely get storage_space
                         storage = system_info.storage_space if isinstance(system_info.storage_space, dict) else {"available": "", "total": ""}
                         result = {
-                            "Device Model": getattr(system_info, "model", "Unknown"),
+                            "Model Name": getattr(system_info, "pretty_name", "Unknown"),
+                            "Model ID": getattr(system_info, "model", "Unknown"),
                             "Device Name": getattr(system_info, "name", "Unknown"),
                             "Version": getattr(system_info, "version", "Unknown"),
                             "Build Number": getattr(system_info, "build_number", "Unknown"),
@@ -295,9 +296,9 @@ class SupervisorHTTPServer:
                     else:
                         # Default system info (unified style)
                         result = {
-                            "Device Model": "LinuxBox",
+                            "Model Name": "LinuxBox",
                             "Device Name": "3RHUB-Unknown",
-                            "Build Number": "1.0.0",
+                            "Build Number": "v1.0.0",
                             "Zigbee Support": False,
                             "Thread Support": False,
                             "Memory": "",
@@ -329,7 +330,7 @@ class SupervisorHTTPServer:
                     }
                     selected = []
                     for svc, val in service_map.items():
-                        if util.is_service_running(svc):
+                        if util.is_service_present(svc):
                             selected.append(val)
                     result["Services"] = ",".join(selected)
                 except Exception:

@@ -64,10 +64,12 @@ class SystemInfo:
     def __init__(self):
         release_info = _get_t3r_release_info()
 
-        self.model = release_info.get("PRETTY_NAME", DEVICE_MODEL_NAME)
+        self.model = release_info.get("MODLE", "3RLB01081MH")
+        self.name = "3RHUB-XXXX"
+        self.pretty_name = release_info.get("PRETTY_NAME", DEVICE_MODEL_NAME)
+                
         self.build_number = DEVICE_BUILD_NUMBER
         self.version = release_info.get("VERSION", "v0.0.1")
-        self.name = "3RHUB-XXXX"
         self.support_zigbee=True
         self.support_thread=True  # Fixed to always support thread        
         self.mode = "homeassistant-core"
