@@ -249,7 +249,7 @@ class NetworkMonitor:
                         try:
                             script_path = "/lib/thirdreality/resetupwifi.sh"
                             if os.path.exists(script_path):
-                                self.logger.warning(f"Network disconnected: ({self.disconnect_tick}), triggering async {script_path}")
+                                self.logger.warning(f"[!]Network disconnected: ({self.disconnect_tick}), triggering async {script_path}")
                                 def _run_resetupwifi():
                                     try:
                                         # Run asynchronously and detach outputs so failures won't affect main flow
@@ -262,7 +262,7 @@ class NetworkMonitor:
                                 self.logger.info(f"resetupwifi.sh not found at {script_path}, skipping 30-minute action")
                         except Exception as e:
                             self.logger.warning(f"Error scheduling 30-minute resetupwifi action: {e}")
-                    if self.disconnect_tick == 1440:
+                    elif self.disconnect_tick == 1440:
                         #reboot the device
                         self.logger.warning(f"Network disconnected: ({self.disconnect_tick}), rebooting the device")
                         self.supervisor.set_led_state(LedState.REBOOT)
