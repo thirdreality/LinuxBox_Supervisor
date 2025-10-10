@@ -88,8 +88,8 @@ class ZeroconfManager:
             # Merge properties and add zigbee2mqtt port if service is running
             properties: Dict[str, str] = dict(self._properties)
             try:
-                if util.is_service_running("zigbee2mqtt.service"):
-                    properties["zigbee2mqtt_port"] = "8099"
+                if util.is_service_enabled("zigbee2mqtt.service"):
+                    properties["z2m_port"] = "8099"
             except Exception as e:
                 logger.warning(f"Failed checking zigbee2mqtt service status: {e}")
 
