@@ -8,6 +8,7 @@ import subprocess
 from typing import Optional, Dict
 
 from zeroconf import Zeroconf, ServiceInfo
+from .utils import util
 
 
 logger = logging.getLogger("Supervisor")
@@ -84,13 +85,21 @@ class ZeroconfManager:
             service_name = self._service_name_template.format(mac=mac_address)
             logger.debug(f"Generated service name: {service_name} (MAC: {mac_address})")
 
+            # Merge properties and add zigbee2mqtt port if service is running
+            properties: Dict[str, str] = dict(self._properties)
+            try:
+                if util.is_service_running("zigbee2mqtt.service"):
+                    properties["zigbee2mqtt_port"] = "8099"
+            except Exception as e:
+                logger.warning(f"Failed checking zigbee2mqtt service status: {e}")
+
             try:
                 info = ServiceInfo(
                     type_=self._service_type,
                     name=service_name,
                     addresses=[addr_bytes],
                     port=self._service_port,
-                    properties=self._properties,
+                    properties=properties,
                     server=service_name,
                     weight=0,
                     priority=0,
