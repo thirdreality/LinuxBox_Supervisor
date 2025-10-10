@@ -21,7 +21,7 @@ from .utils.wifi_utils import (
     get_wlan0_mac,
     is_interface_existing,
     is_network_connected,
-    has_active_connection,
+    has_saved_connection,
     get_wlan0_ip,
     get_active_connection_name
 )
@@ -241,7 +241,7 @@ class NetworkMonitor:
             #         self.supervisor.onNetworkDisconnect()
                     
             if self.supervisor:
-                if has_active_connection():
+                if has_saved_connection():
                     self.supervisor.set_led_state(LedState.SYS_OFFLINE)
                     # 14400 seconds， 4 Hours,  10 seconds = 1 tick, 1440 ticks = 4 hours
                     # 1800 seconds， 30 minutes, 10 seconds = 1 tick, 180 ticks = 30 minutes

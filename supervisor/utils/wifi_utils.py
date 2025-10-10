@@ -129,30 +129,44 @@ def get_active_connection_name():
     return None
 
 
-def has_active_connection():
-    """
-    Check if there is an active network connection
     
-    Returns:
-        bool: True if there is an active connection, False otherwise
+
+
+def has_saved_connection():
     """
+    Check if there is any saved (historical) NetworkManager connection profile.
+
+    Returns:
+        bool: True if there is at least one saved connection, False otherwise
+    """
+    # Prefer nmcli; fallback to checking NM config directory
     try:
         result = subprocess.run(
-            ['nmcli', '-t', '-f', 'TYPE,STATE,NAME', 'connection', 'show', '--active'],
+            ['nmcli', '-t', '-f', 'NAME,TYPE', 'connection', 'show'],
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True
         )
-        return bool(result.stdout.strip())
+        # Consider any saved connection; optionally prioritize wifi
+        lines = [l for l in result.stdout.strip().split('\n') if l]
+        if any(lines):
+            return True
     except subprocess.CalledProcessError as e:
-        logging.error(f"Command 'nmcli' failed with exit code {e.returncode}")
-        logging.error(e.stderr)
-        return False
+        logging.warning(f"nmcli connection show failed: {e.returncode}, fallback to config dir")
     except Exception as e:
-        logging.error(f"An unexpected error occurred: {e}")
-        return False
+        logging.warning(f"nmcli connection show unexpected error: {e}")
 
+    # Fallback: check NetworkManager system-connections directory
+    config_dir = '/etc/NetworkManager/system-connections/'
+    try:
+        if os.path.isdir(config_dir):
+            for entry in os.scandir(config_dir):
+                if entry.is_file():
+                    return True
+    except Exception as e:
+        logging.warning(f"Failed to scan saved connections in {config_dir}: {e}")
+    return False
 def _get_info_nmcli():
     """Get WiFi info using nmcli"""
     try:
