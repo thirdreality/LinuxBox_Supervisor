@@ -141,14 +141,32 @@ class ZeroconfManager:
         Handle IP changes:
         - valid new IP: re-register on the new IP
         - invalid/empty IP: stop advertising
+        - empty IP: retry with delay
         """
         with self._lock:
             if ip_address and self._is_valid_ipv4(ip_address):
                 if ip_address != self._ip:
                     self.start(ip_address)
+            elif not ip_address or ip_address == "":
+                # IP is empty, retry after a short delay
+                logger.debug(f"IP address is empty, scheduling retry in 2 seconds")
+                threading.Timer(2.0, self._retry_with_current_ip).start()
             else:
                 self.stop()
                 self._ip = None
+
+    def _retry_with_current_ip(self) -> None:
+        """Retry getting IP address and starting Zeroconf"""
+        try:
+            from .utils.wifi_utils import get_wlan0_ip
+            current_ip = get_wlan0_ip()
+            if current_ip and self._is_valid_ipv4(current_ip):
+                logger.info(f"Retry: Got IP address {current_ip}, starting Zeroconf")
+                self.start(current_ip)
+            else:
+                logger.warning(f"Retry: Still no valid IP address (got: {current_ip})")
+        except Exception as e:
+            logger.error(f"Retry failed: {e}")
 
     def _get_wlan0_mac(self) -> str:
         """Get MAC address of wlan0 interface (last 8 characters, uppercase)."""

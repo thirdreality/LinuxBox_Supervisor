@@ -475,15 +475,8 @@ class Supervisor:
 
     def onNetworkConnected(self):
         logger.info("## Supervisor: Network onNetworkConnected() ...")
-        try:
-            logger.info(f"Attempting to restart Zeroconf with IP: {self.wifi_status.ip_address}")
-            success = self.zeroconf_manager.start(self.wifi_status.ip_address)
-            if success:
-                logger.info("Zeroconf restarted successfully")
-            else:
-                logger.warning("Zeroconf restart returned False")
-        except Exception as e:
-            logger.error(f"Failed to (re)start Zeroconf on connect: {e}", exc_info=True)
+        # Use update_ip method which handles retry logic internally
+        self.zeroconf_manager.update_ip(self.wifi_status.ip_address)
 
     def update_wifi_info(self, ip_address, ssid):
         """Update WiFi information cache"""
