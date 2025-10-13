@@ -136,10 +136,10 @@ class TaskManager:
 
     def _try_auto_connect_lte(self):
         """
-        尝试自动连接到 LTE 热点
+        Try to auto-connect to LTE hotspot
         
         Returns:
-            bool: True 如果成功连接，False 如果失败或配置不存在
+            bool: True if successfully connected, False if failed or config not found
         """
         import os
         import re
@@ -148,15 +148,17 @@ class TaskManager:
         LTE_CONFIG_FILE = "/etc/lte_3r.conf"
         
         try:
-            # 检查配置文件是否存在
+            # Check if configuration file exists
             if not os.path.exists(LTE_CONFIG_FILE):
                 self.logger.info(f"LTE config file {LTE_CONFIG_FILE} not found, skipping LTE auto-connect")
                 return False
             
-            # 读取并解析配置文件
+            # Read and parse configuration file
             self.logger.info(f"Found LTE config file, reading {LTE_CONFIG_FILE}")
             ssid_prefix = None
             psk = None
+            debug_enabled = False
+            debug_regex = None
             
             with open(LTE_CONFIG_FILE, 'r') as f:
                 for line in f:
@@ -169,20 +171,25 @@ class TaskManager:
                         key = key.strip()
                         value = value.strip()
                         
-                        # 支持 SSID 或 SID 两种写法
+                        # Support both SSID and SID format
                         if key == 'SSID' or key == 'SID':
                             ssid_prefix = value
                         elif key == 'PSK':
                             psk = value
+                        elif key == 'DEBUG':
+                            v = value.lower()
+                            debug_enabled = v in ('1', 'true', 'yes', 'on')
+                        elif key == 'DEBUG_REGEX':
+                            debug_regex = value
             
-            # 验证配置
+            # Validate configuration
             if not ssid_prefix or not psk:
                 self.logger.warning(f"Invalid LTE config: SSID={ssid_prefix}, PSK={'***' if psk else None}")
                 return False
             
             self.logger.info(f"LTE config loaded: SSID prefix='{ssid_prefix}', PSK=***")
             
-            # 执行 WiFi 扫描
+            # Execute WiFi scan
             self.logger.info("Rescanning WiFi networks...")
             try:
                 subprocess.run(['nmcli', 'device', 'wifi', 'rescan'], 
@@ -190,92 +197,143 @@ class TaskManager:
             except Exception as e:
                 self.logger.warning(f"WiFi rescan failed: {e}, continuing anyway...")
             
-            # 等待 3 秒让扫描完成
+            # Wait 3 seconds for scan to complete
             time.sleep(3)
             
-            # 获取 WiFi 列表
+            # Get WiFi list
             self.logger.info("Getting WiFi list...")
             result = subprocess.run(['nmcli', 'device', 'wifi', 'list'], 
                                   capture_output=True, text=True, check=True)
             
-            # 解析 WiFi 列表，查找匹配的 SSID
-            # SSID 格式：前缀 + 6位MAC (例如: LTE-AABBCC)
-            # MAC 格式：[0-9A-F]{6} 或 [0-9A-F]{2}:[0-9A-F]{2}:[0-9A-F]{2}
-            mac_pattern = r'[0-9A-Fa-f]{6}|[0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}'
+            # Parse WiFi list, find matching SSID
+            # SSID format: prefix + 6-digit MAC (e.g.: LTE-AABBCC)
+            # MAC format: [0-9A-F]{6} or [0-9A-F]{2}:[0-9A-F]{2}:[0-9A-F]{2}
+            if debug_enabled:
+                mac_pattern = debug_regex if debug_regex else r'S.*'
+                self.logger.warning(f"LTE debug mode enabled. Using debug pattern: '^{re.escape(ssid_prefix)}({mac_pattern})$'")
+            else:
+                mac_pattern = r'[0-9A-Fa-f]{6}|[0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}'
             ssid_pattern = re.compile(rf'^{re.escape(ssid_prefix)}({mac_pattern})$')
             
-            self.logger.info(f"Looking for SSID pattern: '{ssid_prefix}' + 6-digit MAC (e.g., '{ssid_prefix}AABBCC')")
+            self.logger.info(f"Looking for SSID pattern: '{ssid_prefix}' + {'debug regex' if debug_enabled else '6-digit MAC'}")
+            self.logger.info(f"Compiled regex pattern: ^{re.escape(ssid_prefix)}({mac_pattern})$")
+            
+            # Test a few examples
+            test_examples = [
+                (f"{ssid_prefix}S123", True) if debug_enabled else (f"{ssid_prefix}AABBCC", True),
+                (f"{ssid_prefix}SOMETHING", True) if debug_enabled else (f"{ssid_prefix}AA:BB:CC", True), 
+                (f"{ssid_prefix}Software", True if debug_enabled and re.compile(mac_pattern).match('Software') else False),
+                (f"{ssid_prefix}VPN", True if debug_enabled and re.compile(mac_pattern).match('VPN') else False)
+            ]
+            self.logger.info(f"Pattern matching test examples:")
+            for example, expected in test_examples:
+                match_result = bool(ssid_pattern.match(example))
+                self.logger.info(f"  '{example}' -> {match_result}")
             
             best_ap = None
             best_signal = -1
-            scanned_ssids = []  # 用于收集所有扫描到的SSID
-            non_matching_examples = []  # 收集前几个不匹配的例子
+            scanned_ssids = []  # Collect all scanned SSIDs
+            non_matching_examples = []  # Collect first few non-matching examples
             
             lines = result.stdout.strip().split('\n')
             self.logger.info(f"Found {len(lines) - 1} WiFi networks in scan results")
-            # 跳过表头
-            for line in lines[1:]:
+            
+            # Print first few lines of raw data for debugging
+            self.logger.info(f"First 3 lines of nmcli output:")
+            for i, line in enumerate(lines[:4]):
+                self.logger.info(f"  Line {i}: {line}")
+            
+            # Skip header line
+            parsed_count = 0
+            skipped_count = 0
+            
+            for line_num, line in enumerate(lines[1:], start=2):
                 parts = line.split()
                 if len(parts) < 8:
+                    skipped_count += 1
+                    self.logger.debug(f"Line {line_num} skipped (too few parts: {len(parts)}): {line[:80]}")
                     continue
                 
-                # 解析列: IN-USE BSSID SSID MODE CHAN RATE SIGNAL BARS SECURITY
-                # SSID 可能包含空格，需要特殊处理
-                # 第一列可能是 * 或空，第二列是 BSSID，第三列开始是 SSID
+                # Parse columns: IN-USE BSSID SSID MODE CHAN RATE SIGNAL BARS SECURITY
+                # SSID may contain spaces, needs special handling
+                # First column may be * or empty, second is BSSID, SSID starts from third
                 start_idx = 1 if parts[0] == '*' else 0
                 bssid = parts[start_idx]
                 
-                # 找到 MODE 列（应该是 "Infra"）来定位 SSID 的结束
+                # Find MODE column (should be "Infra") to locate SSID end
                 mode_idx = -1
                 for i, part in enumerate(parts[start_idx + 1:], start=start_idx + 1):
                     if part == 'Infra' or part == 'Adhoc':
                         mode_idx = i
+                        self.logger.debug(f"Line {line_num}: Found MODE '{part}' at index {i}, BSSID={bssid}")
                         break
                 
                 if mode_idx == -1:
+                    skipped_count += 1
+                    self.logger.debug(f"Line {line_num} skipped (no MODE found): {line[:80]}")
                     continue
                 
-                # SSID 是 BSSID 和 MODE 之间的所有部分
+                # SSID is all parts between BSSID and MODE
                 ssid_parts = parts[start_idx + 1:mode_idx]
                 if not ssid_parts or ssid_parts[0] == '--':
+                    skipped_count += 1
+                    self.logger.debug(f"Line {line_num}: SSID is empty or '--', skipping. BSSID={bssid}, ssid_parts={ssid_parts}")
                     continue
                 
                 ssid = ' '.join(ssid_parts)
-                scanned_ssids.append(ssid)  # 收集SSID用于调试
+                scanned_ssids.append(ssid)  # Collect SSID for debugging
                 
-                # 尝试获取信号强度（在 RATE 之后）
+                # Try to get signal strength (after RATE)
+                # Format: MODE CHAN RATE_NUM RATE_UNIT SIGNAL
+                # Example: Infra 1 405 Mbit/s 100
                 try:
-                    # 找到信号强度列（应该在 CHAN 和 RATE 之后）
-                    # 格式：CHAN RATE SIGNAL
-                    signal_idx = mode_idx + 3  # MODE + CHAN + RATE + SIGNAL
+                    # SIGNAL is at position 4 after MODE (MODE + CHAN + RATE_NUM + RATE_UNIT + SIGNAL)
+                    signal_idx = mode_idx + 4
                     if signal_idx < len(parts):
                         signal = int(parts[signal_idx])
+                        self.logger.debug(f"Line {line_num}: Parsed SSID='{ssid}', signal={signal}, mode_idx={mode_idx}, signal_idx={signal_idx}")
                     else:
+                        skipped_count += 1
+                        self.logger.debug(f"Line {line_num}: Signal index {signal_idx} out of range (parts length={len(parts)}), SSID='{ssid}'")
                         continue
-                except (ValueError, IndexError):
+                except (ValueError, IndexError) as e:
+                    skipped_count += 1
+                    self.logger.debug(f"Line {line_num} signal parse error: {e}, SSID='{ssid}', trying to parse '{parts[signal_idx] if signal_idx < len(parts) else 'N/A'}'")
                     continue
                 
-                # 检查 SSID 是否匹配
-                if ssid_pattern.match(ssid):
-                    self.logger.info(f"Found matching LTE AP: {ssid} (Signal: {signal})")
-                    if signal > best_signal:
-                        best_signal = signal
-                        best_ap = {'ssid': ssid, 'signal': signal, 'bssid': bssid}
+                parsed_count += 1
+                
+                # Check if SSID matches the full pattern
+                pattern_match = ssid_pattern.match(ssid)
+                
+                # Log first 10 scanned SSIDs for debugging
+                if parsed_count <= 10:
+                    starts_with_prefix = ssid.startswith(ssid_prefix)
+                    self.logger.info(f"#{parsed_count} SSID='{ssid}', signal={signal}, starts_with_prefix={starts_with_prefix}, pattern_match={bool(pattern_match)}")
+                
+                if pattern_match:
+                    # First match is the strongest signal (list already sorted)
+                    self.logger.info(f"✓ Found matching LTE AP: {ssid} (Signal: {signal}, BSSID: {bssid})")
+                    best_ap = {'ssid': ssid, 'signal': signal, 'bssid': bssid}
+                    # Found first match, can exit now
+                    break
                 else:
-                    # 收集前5个不匹配但以目标前缀开头的SSID作为示例
+                    # Collect first 5 non-matching SSIDs starting with target prefix as examples
                     if len(non_matching_examples) < 5 and ssid.startswith(ssid_prefix):
-                        non_matching_examples.append(f"'{ssid}' (需要格式: '{ssid_prefix}AABBCC')")
+                        non_matching_examples.append(f"'{ssid}' (expected format: '{ssid_prefix}AABBCC')")
             
-            # 打印所有扫描到的SSID用于调试
+            self.logger.info(f"Parsed {parsed_count} APs successfully, skipped {skipped_count} entries")
+            
+            # Print all scanned SSIDs for debugging
             if scanned_ssids:
                 self.logger.info(f"Scanned SSIDs: {', '.join(scanned_ssids[:10])}" + 
                                (f" ... and {len(scanned_ssids) - 10} more" if len(scanned_ssids) > 10 else ""))
             
-            # 如果没有找到匹配的 AP
+            # If no matching AP found
             if not best_ap:
                 self.logger.info(f"No LTE AP matching '{ssid_prefix}*' found")
                 
-                # 显示不匹配的例子，帮助用户理解为什么没有匹配
+                # Show non-matching examples to help user understand why no match
                 if non_matching_examples:
                     self.logger.info(f"Found SSIDs starting with '{ssid_prefix}' but not matching MAC pattern:")
                     for example in non_matching_examples:
@@ -286,13 +344,13 @@ class TaskManager:
             
             self.logger.info(f"Selected best LTE AP: {best_ap['ssid']} (Signal: {best_ap['signal']})")
             
-            # 设置 LED 为配网模式
+            # Set LED to provisioning mode
             from .hardware import LedState
             if hasattr(self.supervisor, 'set_led_state'):
                 self.supervisor.set_led_state(LedState.SYS_WIFI_CONFIG_PENDING)
                 self.logger.info("LED set to WiFi config pending state")
             
-            # 连接到选中的 AP
+            # Connect to selected AP
             self.logger.info(f"Connecting to {best_ap['ssid']}...")
             try:
                 connect_result = subprocess.run(
@@ -303,7 +361,7 @@ class TaskManager:
                 
                 self.logger.info(f"Successfully connected to {best_ap['ssid']}")
                 
-                # 连接成功，清除配网模式 LED
+                # Connection successful, clear provisioning mode LED
                 if hasattr(self.supervisor, 'clear_led_state'):
                     self.supervisor.clear_led_state(LedState.SYS_WIFI_CONFIG_PENDING)
                     self.logger.info("LED config pending state cleared")
@@ -339,12 +397,12 @@ class TaskManager:
                 if len(lines) <= 1:
                     self.logger.info("No network connections found.")
                     
-                    # 尝试自动连接 LTE 热点
+                    # Try to auto-connect to LTE hotspot
                     if self._try_auto_connect_lte():
                         self.logger.info("Successfully auto-connected to LTE hotspot, skipping WiFi provisioning")
                         return
                     
-                    # LTE 自动连接失败，启动 WiFi 配网
+                    # LTE auto-connect failed, start WiFi provisioning
                     self.logger.info("LTE auto-connect failed or not configured. Starting wifi provisioning task.")
                     self.start_perform_wifi_provision()
                 else:
