@@ -169,7 +169,8 @@ class TaskManager:
                         key = key.strip()
                         value = value.strip()
                         
-                        if key == 'SSID':
+                        # 支持 SSID 或 SID 两种写法
+                        if key == 'SSID' or key == 'SID':
                             ssid_prefix = value
                         elif key == 'PSK':
                             psk = value
@@ -203,10 +204,14 @@ class TaskManager:
             mac_pattern = r'[0-9A-Fa-f]{6}|[0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}'
             ssid_pattern = re.compile(rf'^{re.escape(ssid_prefix)}({mac_pattern})$')
             
+            self.logger.info(f"Looking for SSID pattern: '{ssid_prefix}' + 6-digit MAC (e.g., '{ssid_prefix}AABBCC')")
+            
             best_ap = None
             best_signal = -1
+            scanned_ssids = []  # 用于收集所有扫描到的SSID
             
             lines = result.stdout.strip().split('\n')
+            self.logger.info(f"Found {len(lines) - 1} WiFi networks in scan results")
             # 跳过表头
             for line in lines[1:]:
                 parts = line.split()
@@ -235,6 +240,7 @@ class TaskManager:
                     continue
                 
                 ssid = ' '.join(ssid_parts)
+                scanned_ssids.append(ssid)  # 收集SSID用于调试
                 
                 # 尝试获取信号强度（在 RATE 之后）
                 try:
@@ -254,6 +260,13 @@ class TaskManager:
                     if signal > best_signal:
                         best_signal = signal
                         best_ap = {'ssid': ssid, 'signal': signal, 'bssid': bssid}
+                else:
+                    self.logger.debug(f"SSID '{ssid}' does not match pattern '{ssid_prefix}*' (Signal: {signal})")
+            
+            # 打印所有扫描到的SSID用于调试
+            if scanned_ssids:
+                self.logger.info(f"Scanned SSIDs: {', '.join(scanned_ssids[:10])}" + 
+                               (f" ... and {len(scanned_ssids) - 10} more" if len(scanned_ssids) > 10 else ""))
             
             # 如果没有找到匹配的 AP
             if not best_ap:
