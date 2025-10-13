@@ -134,6 +134,175 @@ class TaskManager:
     def start_perform_wifi_provision(self):
         return self._start_task("wifi", "provision", self.supervisor.perform_wifi_provision)
 
+    def _try_auto_connect_lte(self):
+        """
+        尝试自动连接到 LTE 热点
+        
+        Returns:
+            bool: True 如果成功连接，False 如果失败或配置不存在
+        """
+        import os
+        import re
+        import time
+        
+        LTE_CONFIG_FILE = "/etc/lte_3r.conf"
+        
+        try:
+            # 检查配置文件是否存在
+            if not os.path.exists(LTE_CONFIG_FILE):
+                self.logger.info(f"LTE config file {LTE_CONFIG_FILE} not found, skipping LTE auto-connect")
+                return False
+            
+            # 读取并解析配置文件
+            self.logger.info(f"Found LTE config file, reading {LTE_CONFIG_FILE}")
+            ssid_prefix = None
+            psk = None
+            
+            with open(LTE_CONFIG_FILE, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        key = key.strip()
+                        value = value.strip()
+                        
+                        if key == 'SSID':
+                            ssid_prefix = value
+                        elif key == 'PSK':
+                            psk = value
+            
+            # 验证配置
+            if not ssid_prefix or not psk:
+                self.logger.warning(f"Invalid LTE config: SSID={ssid_prefix}, PSK={'***' if psk else None}")
+                return False
+            
+            self.logger.info(f"LTE config loaded: SSID prefix='{ssid_prefix}', PSK=***")
+            
+            # 执行 WiFi 扫描
+            self.logger.info("Rescanning WiFi networks...")
+            try:
+                subprocess.run(['nmcli', 'device', 'wifi', 'rescan'], 
+                             capture_output=True, text=True, check=False)
+            except Exception as e:
+                self.logger.warning(f"WiFi rescan failed: {e}, continuing anyway...")
+            
+            # 等待 3 秒让扫描完成
+            time.sleep(3)
+            
+            # 获取 WiFi 列表
+            self.logger.info("Getting WiFi list...")
+            result = subprocess.run(['nmcli', 'device', 'wifi', 'list'], 
+                                  capture_output=True, text=True, check=True)
+            
+            # 解析 WiFi 列表，查找匹配的 SSID
+            # SSID 格式：前缀 + 6位MAC (例如: LTE-AABBCC)
+            # MAC 格式：[0-9A-F]{6} 或 [0-9A-F]{2}:[0-9A-F]{2}:[0-9A-F]{2}
+            mac_pattern = r'[0-9A-Fa-f]{6}|[0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}'
+            ssid_pattern = re.compile(rf'^{re.escape(ssid_prefix)}({mac_pattern})$')
+            
+            best_ap = None
+            best_signal = -1
+            
+            lines = result.stdout.strip().split('\n')
+            # 跳过表头
+            for line in lines[1:]:
+                parts = line.split()
+                if len(parts) < 8:
+                    continue
+                
+                # 解析列: IN-USE BSSID SSID MODE CHAN RATE SIGNAL BARS SECURITY
+                # SSID 可能包含空格，需要特殊处理
+                # 第一列可能是 * 或空，第二列是 BSSID，第三列开始是 SSID
+                start_idx = 1 if parts[0] == '*' else 0
+                bssid = parts[start_idx]
+                
+                # 找到 MODE 列（应该是 "Infra"）来定位 SSID 的结束
+                mode_idx = -1
+                for i, part in enumerate(parts[start_idx + 1:], start=start_idx + 1):
+                    if part == 'Infra' or part == 'Adhoc':
+                        mode_idx = i
+                        break
+                
+                if mode_idx == -1:
+                    continue
+                
+                # SSID 是 BSSID 和 MODE 之间的所有部分
+                ssid_parts = parts[start_idx + 1:mode_idx]
+                if not ssid_parts or ssid_parts[0] == '--':
+                    continue
+                
+                ssid = ' '.join(ssid_parts)
+                
+                # 尝试获取信号强度（在 RATE 之后）
+                try:
+                    # 找到信号强度列（应该在 CHAN 和 RATE 之后）
+                    # 格式：CHAN RATE SIGNAL
+                    signal_idx = mode_idx + 3  # MODE + CHAN + RATE + SIGNAL
+                    if signal_idx < len(parts):
+                        signal = int(parts[signal_idx])
+                    else:
+                        continue
+                except (ValueError, IndexError):
+                    continue
+                
+                # 检查 SSID 是否匹配
+                if ssid_pattern.match(ssid):
+                    self.logger.info(f"Found matching LTE AP: {ssid} (Signal: {signal})")
+                    if signal > best_signal:
+                        best_signal = signal
+                        best_ap = {'ssid': ssid, 'signal': signal, 'bssid': bssid}
+            
+            # 如果没有找到匹配的 AP
+            if not best_ap:
+                self.logger.info(f"No LTE AP matching '{ssid_prefix}*' found")
+                return False
+            
+            self.logger.info(f"Selected best LTE AP: {best_ap['ssid']} (Signal: {best_ap['signal']})")
+            
+            # 设置 LED 为配网模式
+            from .hardware import LedState
+            if hasattr(self.supervisor, 'set_led_state'):
+                self.supervisor.set_led_state(LedState.SYS_WIFI_CONFIG_PENDING)
+                self.logger.info("LED set to WiFi config pending state")
+            
+            # 连接到选中的 AP
+            self.logger.info(f"Connecting to {best_ap['ssid']}...")
+            try:
+                connect_result = subprocess.run(
+                    ['nmcli', 'device', 'wifi', 'connect', best_ap['ssid'], 
+                     'password', psk],
+                    capture_output=True, text=True, check=True, timeout=30
+                )
+                
+                self.logger.info(f"Successfully connected to {best_ap['ssid']}")
+                
+                # 连接成功，清除配网模式 LED
+                if hasattr(self.supervisor, 'clear_led_state'):
+                    self.supervisor.clear_led_state(LedState.SYS_WIFI_CONFIG_PENDING)
+                    self.logger.info("LED config pending state cleared")
+                
+                return True
+                
+            except subprocess.TimeoutExpired:
+                self.logger.error(f"Timeout connecting to {best_ap['ssid']}")
+                return False
+            except subprocess.CalledProcessError as e:
+                self.logger.error(f"Failed to connect to {best_ap['ssid']}: {e.stderr}")
+                return False
+            
+        except FileNotFoundError as e:
+            self.logger.warning(f"Required command not found: {e}")
+            return False
+        except subprocess.CalledProcessError as e:
+            self.logger.error(f"Command failed during LTE auto-connect: {e}")
+            return False
+        except Exception as e:
+            self.logger.error(f"Unexpected error during LTE auto-connect: {e}")
+            return False
+
     def start_auto_wifi_provision(self):
         @util.threaded
         def task():
@@ -144,7 +313,15 @@ class TaskManager:
                 # The output contains a header line. If there are more than 1 line, connections exist.
                 lines = result.stdout.strip().split('\n')
                 if len(lines) <= 1:
-                    self.logger.info("No network connections found. Starting wifi provisioning task.")
+                    self.logger.info("No network connections found.")
+                    
+                    # 尝试自动连接 LTE 热点
+                    if self._try_auto_connect_lte():
+                        self.logger.info("Successfully auto-connected to LTE hotspot, skipping WiFi provisioning")
+                        return
+                    
+                    # LTE 自动连接失败，启动 WiFi 配网
+                    self.logger.info("LTE auto-connect failed or not configured. Starting wifi provisioning task.")
                     self.start_perform_wifi_provision()
                 else:
                     self.logger.info(f"Found {len(lines) - 1} existing network connections. Skipping provisioning.")
