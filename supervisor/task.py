@@ -209,6 +209,7 @@ class TaskManager:
             best_ap = None
             best_signal = -1
             scanned_ssids = []  # 用于收集所有扫描到的SSID
+            non_matching_examples = []  # 收集前几个不匹配的例子
             
             lines = result.stdout.strip().split('\n')
             self.logger.info(f"Found {len(lines) - 1} WiFi networks in scan results")
@@ -261,7 +262,9 @@ class TaskManager:
                         best_signal = signal
                         best_ap = {'ssid': ssid, 'signal': signal, 'bssid': bssid}
                 else:
-                    self.logger.debug(f"SSID '{ssid}' does not match pattern '{ssid_prefix}*' (Signal: {signal})")
+                    # 收集前5个不匹配但以目标前缀开头的SSID作为示例
+                    if len(non_matching_examples) < 5 and ssid.startswith(ssid_prefix):
+                        non_matching_examples.append(f"'{ssid}' (需要格式: '{ssid_prefix}AABBCC')")
             
             # 打印所有扫描到的SSID用于调试
             if scanned_ssids:
@@ -271,6 +274,14 @@ class TaskManager:
             # 如果没有找到匹配的 AP
             if not best_ap:
                 self.logger.info(f"No LTE AP matching '{ssid_prefix}*' found")
+                
+                # 显示不匹配的例子，帮助用户理解为什么没有匹配
+                if non_matching_examples:
+                    self.logger.info(f"Found SSIDs starting with '{ssid_prefix}' but not matching MAC pattern:")
+                    for example in non_matching_examples:
+                        self.logger.info(f"  - {example}")
+                    self.logger.info(f"Pattern requires: '{ssid_prefix}' followed by 6 hex digits (e.g., '{ssid_prefix}A1B2C3' or '{ssid_prefix}AA:BB:CC')")
+                
                 return False
             
             self.logger.info(f"Selected best LTE AP: {best_ap['ssid']} (Signal: {best_ap['signal']})")
