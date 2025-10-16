@@ -22,6 +22,21 @@ class SupervisorOTAServer:
         self.version_url = "https://raw.githubusercontent.com/thirdreality/LinuxBox-Installer/refs/heads/main/version.json"
         self.release_base_url = "https://github.com/thirdreality/LinuxBox-Installer/releases/download"
         self.check_interval = 3600  # 检查更新的间隔，默认1小时
+        # component -> debian package name mapping
+        self.component_to_package = {
+            "python3": "thirdreality-python3",
+            "hacore": "thirdreality-hacore",
+            "hacore-config": "thirdreality-hacore-config",
+            "otbr-agent": "thirdreality-otbr-agent",
+            "zigbee-mqtt": "thirdreality-zigbee-mqtt",
+        }
+
+    def _safe_rmtree(self, path):
+        try:
+            if path and os.path.isdir(path):
+                shutil.rmtree(path)
+        except Exception as e:
+            self.logger.warning(f"[ota] Failed to remove cache dir {path}: {e}")
 
     def start(self):
         """启动线程， 并且维护OTA状态"""
@@ -37,6 +52,7 @@ class SupervisorOTAServer:
         """OTA更新监控任务"""
         self.logger.info("Starting OTA update monitor...")
         
+        time.sleep(30)
         while self.supervisor and hasattr(self.supervisor, 'running') and self.supervisor.running.is_set():
             try:
                 self._check_and_install_updates()
@@ -79,12 +95,12 @@ class SupervisorOTAServer:
             if "homeassistant" in version_info:
                 ha_info = version_info["homeassistant"]
                 
-                # 安装顺序：hacore-config -> python3 -> hacore -> otbr-agent
+                # 安装顺序：python3 -> hacore -> otbr-agent -> zigbee-mqtt
                 components = [
-                    "hacore-config",
                     "python3",
                     "hacore",
-                    "otbr-agent"
+                    "otbr-agent",
+                    "zigbee-mqtt"
                 ]
                 
                 for component in components:
@@ -101,66 +117,11 @@ class SupervisorOTAServer:
                             else:
                                 download_url = f"{self.release_base_url}/{release}/{component}_{version}.deb"
                             
-                            # 下载并安装
-                            self._download_and_install(download_url, temp_dir, component)
-                            
-            
-            # 处理 zigbee2mqtt 部分
-            if "zigbee2mqtt" in version_info:
-                z2m_info = version_info["zigbee2mqtt"]
-                
-                # 检查是否有版本和发布信息
-                version = z2m_info.get("version")
-                release = z2m_info.get("release")
-                
-                if version and release:
-                    # 构建下载URL
-                    download_url = f"{self.release_base_url}/{release}/zigbee2mqtt_{version}.deb"
-                    
-                    # 更新OTA状态
-                    if hasattr(self.supervisor, 'ota_status'):
-                        self.supervisor.ota_status.status = "Updating zigbee2mqtt"
-                        self.supervisor.ota_status.progress = 50
-                    
-                    # 下载并安装
-                    success = self._download_and_install(download_url, temp_dir, "zigbee2mqtt")
-                    
-                    # 更新OTA状态
-                    if hasattr(self.supervisor, 'ota_status'):
-                        if success:
-                            self.supervisor.ota_status.status = "zigbee2mqtt updated"
-                        else:
-                            self.supervisor.ota_status.status = "zigbee2mqtt update failed"
-                        self.supervisor.ota_status.progress = 100
-            
-            # 处理 HomeKitBridge 部分
-            if "homekitbridge" in version_info:
-                hkb_info = version_info["homekitbridge"]
-                
-                # 检查是否有版本和发布信息
-                version = hkb_info.get("version")
-                release = hkb_info.get("release")
-                
-                if version and release:
-                    # 构建下载URL
-                    download_url = f"{self.release_base_url}/{release}/homekitbridge_{version}.deb"
-                    
-                    # 更新OTA状态
-                    if hasattr(self.supervisor, 'ota_status'):
-                        self.supervisor.ota_status.status = "Updating HomeKitBridge"
-                        self.supervisor.ota_status.progress = 50
-                    
-                    # 下载并安装
-                    success = self._download_and_install(download_url, temp_dir, "homekitbridge")
-                    
-                    # 更新OTA状态
-                    if hasattr(self.supervisor, 'ota_status'):
-                        if success:
-                            self.supervisor.ota_status.status = "HomeKitBridge updated"
-                        else:
-                            self.supervisor.ota_status.status = "HomeKitBridge update failed"
-                        self.supervisor.ota_status.progress = 100
-        
+                            self.logger.info(f"[ota]Download url: {download_url}")
+                            # 映射到实际包名
+                            package_name = self.component_to_package.get(component, component)
+                            # 下载并安装（带版本比较）
+                            self._download_and_install(download_url, component, package_name, version)
         finally:
             # 清理临时目录
             try:
@@ -169,27 +130,72 @@ class SupervisorOTAServer:
             except Exception as e:
                 self.logger.error(f"Failed to clean up temporary directory: {e}")
     
-    def _download_and_install(self, url, temp_dir, component):
-        """下载并安装组件"""
-        # 构建本地文件路径
-        local_file = os.path.join(temp_dir, f"{component}.deb")
-        
+    def get_installed_version(self, pkg_name):
         try:
-            # 下载文件
-            self.logger.info(f"Downloading {component} from {url}")
-            urllib.request.urlretrieve(url, local_file)
-            
-            # 安装文件
-            self.logger.info(f"Installing {component}")
-            result = subprocess.run(["dpkg", "-i", local_file], capture_output=True, text=True)
-            
-            if result.returncode == 0:
-                self.logger.info(f"Successfully installed {component}")
-                return True
+            res = subprocess.run(["dpkg-query", "-W", "-f=${Version}", pkg_name], capture_output=True, text=True)
+            if res.returncode == 0:
+                ver = (res.stdout or "").strip()
+                return ver if ver else None
+            return None
+        except Exception:
+            return None
+
+    def is_installed_version_less(self, installed, target):
+        # 使用 dpkg --compare-versions 做可靠比较
+        try:
+            cmp_res = subprocess.run(["dpkg", "--compare-versions", installed, "lt", target])
+            return cmp_res.returncode == 0
+        except Exception:
+            # 无法比较时，默认为需要升级
+            return True
+
+    def _download_and_install(self, url, component, package_name, target_version):
+        """下载并安装组件（含版本检查、缓存到/var/cache、postinst处理）"""
+
+        # 1) 版本检查
+        installed_version = self.get_installed_version(package_name)
+        if installed_version:
+            if self.is_installed_version_less(installed_version, target_version):
+                self.logger.info(f"[ota] {package_name}: installed {installed_version} < target {target_version}, will upgrade")
             else:
-                self.logger.error(f"Failed to install {component}: {result.stderr}")
-                return False
-                
-        except Exception as e:
-            self.logger.error(f"Error installing {component}: {e}")
+                self.logger.info(f"[ota] {package_name}: installed {installed_version} >= target {target_version}, skip")
+                return True
+        else:
+            self.logger.info(f"[ota] {package_name}: not installed, will skip {target_version}")
             return False
+
+        # 2) 下载到 /var/cache/apt/<component>/ 目录
+        cache_dir = os.path.join("/var/cache/apt", component)
+        local_file = None
+        try:
+            # ensure cache dir
+            os.makedirs(cache_dir, exist_ok=True)
+
+            # 2) download
+            local_file = os.path.join(cache_dir, f"{component}_{target_version}.deb")
+            self.logger.info(f"[ota] Downloading {component} from {url} -> {local_file}")
+            urllib.request.urlretrieve(url, local_file)
+
+            # 3) install
+            self.logger.info(f"[ota] Installing {package_name} from {local_file}")
+            # result = subprocess.run(["dpkg", "-i", local_file], capture_output=True, text=True)
+            # if result.returncode != 0:
+            #     self.logger.error(f"[ota] Failed to install {package_name}: {result.stderr}")
+            #     self._safe_rmtree(cache_dir)
+            #     return False
+        except Exception as e:
+            self.logger.error(f"[ota] Error processing {package_name}: {e}")
+            # self._safe_rmtree(cache_dir)
+            return False
+
+        # 4) postinst fix-dependency（可选）
+        # try:
+        #     postinst_file = f"/var/lib/dpkg/info/{package_name}.postinst"
+        #     if os.path.exists(postinst_file):
+        #         self.logger.info(f"[ota] Running postinst fix-dependency for {package_name}")
+        #         subprocess.run([postinst_file, "fix-dependency"], check=False)
+        # except Exception as e:
+        #     self.logger.warning(f"[ota] postinst execution error for {package_name}: {e}")
+
+        self.logger.info(f"[ota] {package_name} install/upgrade to {target_version} finished")
+        return True

@@ -89,7 +89,7 @@ class Supervisor:
         # self.gatt_server = None  # No longer needed
 
         self.network_monitor = NetworkMonitor(self)
-        # self.ota_server = SupervisorOTAServer(self)
+        self.ota_server = SupervisorOTAServer(self)
 
         # boot up time
         self.start_time = time.time()
@@ -613,6 +613,12 @@ class Supervisor:
         self._stop_http_server()
         # Stop GATT server
         self._stop_gatt_server()
+        # Stop OTA server
+        try:
+            if hasattr(self, 'ota_server') and self.ota_server:
+                self.ota_server.stop()
+        except Exception as e:
+            logger.warning(f"Failed to stop OTA server during cleanup: {e}")
         # Stop WiFi manager
         if hasattr(self, 'wifi_manager') and self.wifi_manager:
             self.wifi_manager.cleanup()
@@ -660,6 +666,13 @@ class Supervisor:
         self._start_gatt_server()
 
         self.sysinfo_update.start()
+
+        # Start OTA server
+        try:
+            if self.ota_server:
+                self.ota_server.start()
+        except Exception as e:
+            logger.error(f"Failed to start OTA server: {e}")
 
         self.led.set_led_off_state()
         logger.info("[LED]Switch to other mode...")
