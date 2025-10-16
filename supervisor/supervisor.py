@@ -288,6 +288,22 @@ class Supervisor:
             except Exception as e:
                 logger.error(f"Setting restore fail: {e}")
                 return f"Setting restore fail: {e}"
+        elif cmd.lower() == "local_backup":
+            try:
+                self.task_manager.start_setting_local_backup()
+                logger.info("Setting local backup finish")
+                return "Setting local backup finish"
+            except Exception as e:
+                logger.error(f"Setting local backup fail: {e}")
+                return f"Setting local backup fail: {e}"
+        elif cmd.lower() == "local_restore":
+            try:
+                self.task_manager.start_setting_local_restore()
+                logger.info("Setting local restore finish")
+                return "Setting local restore finish"
+            except Exception as e:
+                logger.error(f"Setting local restore fail: {e}")
+                return f"Setting local restore fail: {e}"
         elif cmd.lower() == "updated":
             try:
                 self.task_manager.start_setting_updated()

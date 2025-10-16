@@ -118,6 +118,12 @@ class TaskManager:
     def start_setting_restore(self, backup_file=None):
         return self._start_task("setting", "restore", setting_util.run_setting_restore, backup_file=backup_file)
 
+    def start_setting_local_backup(self):
+        return self._start_task("setting", "local_backup", setting_util.run_setting_local_backup)
+
+    def start_setting_local_restore(self, backup_file=None):
+        return self._start_task("setting", "local_restore", setting_util.run_setting_local_restore, backup_file=backup_file)
+
     def start_setting_updated(self):
         return self._start_task("setting", "updated", setting_util.run_setting_updated, supervisor=self.supervisor)
 

@@ -665,6 +665,19 @@ def run_setting_backup(progress_callback=None, complete_callback=None):
         _call_progress(100, "System settings backup completed successfully.")
 
 
+def run_setting_local_backup(progress_callback=None, complete_callback=None):
+    """
+    Run backup forcing internal storage (local) with minimal code duplication by
+    temporarily overriding BACKUP_STORAGE_MODE within this module's scope.
+    """
+    global BACKUP_STORAGE_MODE
+    prev_mode = BACKUP_STORAGE_MODE
+    try:
+        BACKUP_STORAGE_MODE = "internal"
+        return run_setting_backup(progress_callback=progress_callback, complete_callback=complete_callback)
+    finally:
+        BACKUP_STORAGE_MODE = prev_mode
+
 def _get_restore_record_path(backup_filename):
     """
     Generate restore record file path based on backup filename
@@ -1049,6 +1062,19 @@ def run_setting_restore(backup_file=None, progress_callback=None, complete_callb
             # or if an error occurred before original_service_states was populated.
             logging.info("No services were modified or an early exit occurred; skipping service restoration progress in 'finally' block.")
         logging.info("Restore function 'finally' block finished execution.")
+
+def run_setting_local_restore(backup_file=None, progress_callback=None, complete_callback=None):
+    """
+    Run restore forcing internal storage (local) with minimal code duplication by
+    temporarily overriding BACKUP_STORAGE_MODE within this module's scope.
+    """
+    global BACKUP_STORAGE_MODE
+    prev_mode = BACKUP_STORAGE_MODE
+    try:
+        BACKUP_STORAGE_MODE = "internal"
+        return run_setting_restore(backup_file=backup_file, progress_callback=progress_callback, complete_callback=complete_callback)
+    finally:
+        BACKUP_STORAGE_MODE = prev_mode
 
 def run_setting_updated(supervisor=None, progress_callback=None, complete_callback=None):
     """
