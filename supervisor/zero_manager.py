@@ -85,11 +85,11 @@ class ZeroconfManager:
             service_name = self._service_name_template.format(mac=mac_address)
             logger.debug(f"Generated service name: {service_name} (MAC: {mac_address})")
 
-            # Merge properties and add zigbee2mqtt port if service is running
+            # Merge properties and add zigbee2mqtt endpoint if service is running
             properties: Dict[str, str] = dict(self._properties)
             try:
                 if util.is_service_enabled("zigbee2mqtt.service"):
-                    properties["z2m_port"] = "8099"
+                    properties["z2m"] = f"http://{ip_address}:8099"
             except Exception as e:
                 logger.warning(f"Failed checking zigbee2mqtt service status: {e}")
 
