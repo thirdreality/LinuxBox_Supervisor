@@ -28,6 +28,7 @@ from .sysinfo import SystemInfoUpdater, SystemInfo, OpenHabInfo
 from supervisor.utils.zigbee_util import get_ha_zigbee_mode
 from .const import VERSION, DEVICE_BUILD_NUMBER
 from .zero_manager import ZeroconfManager
+from .storage_manager import StorageManager
 try:
     from supervisor.utils.zigbee_util import get_zigbee_info
 except ImportError:
@@ -89,7 +90,7 @@ class Supervisor:
         # self.gatt_server = None  # No longer needed
 
         self.network_monitor = NetworkMonitor(self)
-        self.ota_server = SupervisorOTAServer(self)
+        # self.ota_server = SupervisorOTAServer(self)  # 临时屏蔽OTA服务器
 
         # boot up time
         self.start_time = time.time()
@@ -101,6 +102,9 @@ class Supervisor:
             service_port=8086,
             properties={"version": VERSION, "build": DEVICE_BUILD_NUMBER}
         )
+        
+        # Storage manager
+        self.storage_manager = StorageManager(self)
     
 
     def set_led_state(self, state):
@@ -630,11 +634,11 @@ class Supervisor:
         # Stop GATT server
         self._stop_gatt_server()
         # Stop OTA server
-        try:
-            if hasattr(self, 'ota_server') and self.ota_server:
-                self.ota_server.stop()
-        except Exception as e:
-            logger.warning(f"Failed to stop OTA server during cleanup: {e}")
+        # try:
+        #     if hasattr(self, 'ota_server') and self.ota_server:
+        #         self.ota_server.stop()
+        # except Exception as e:
+        #     logger.warning(f"Failed to stop OTA server during cleanup: {e}")
         # Stop WiFi manager
         if hasattr(self, 'wifi_manager') and self.wifi_manager:
             self.wifi_manager.cleanup()
@@ -652,6 +656,13 @@ class Supervisor:
         if self.proxy:
             self.proxy.stop()
             self.proxy = None
+        
+        # Stop storage manager
+        if hasattr(self, 'storage_manager') and self.storage_manager:
+            try:
+                self.storage_manager.stop()
+            except Exception as e:
+                logger.warning(f"Failed to stop storage manager: {e}")
         
         logger.info("Cleanup finished.")
 
@@ -684,14 +695,21 @@ class Supervisor:
         self.sysinfo_update.start()
 
         # Start OTA server
-        try:
-            if self.ota_server:
-                self.ota_server.start()
-        except Exception as e:
-            logger.error(f"Failed to start OTA server: {e}")
+        # try:
+        #     if self.ota_server:
+        #         self.ota_server.start()
+        # except Exception as e:
+        #     logger.error(f"Failed to start OTA server: {e}")
 
         self.led.set_led_off_state()
         logger.info("[LED]Switch to other mode...")
+
+        # Start storage manager (启动存储空间管理服务，在最后启动)
+        try:
+            if self.storage_manager:
+                self.storage_manager.start()
+        except Exception as e:
+            logger.error(f"Failed to start storage manager: {e}")
 
         self.proxy.run()
 
