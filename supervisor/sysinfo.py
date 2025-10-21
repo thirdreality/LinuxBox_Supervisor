@@ -64,8 +64,13 @@ class SystemInfo:
     def __init__(self):
         release_info = _get_t3r_release_info()
 
-        self.model = release_info.get("MODLE", "3RLB01081MH")
+        # Device Model (for compatibility, use PRETTY_NAME)
+        self.model = release_info.get("PRETTY_NAME", DEVICE_MODEL_NAME)
+        # Model ID (the actual model number)
+        self.model_id = release_info.get("MODLE", "3RLB01081MH")
+        # Device Name (set by SystemInfoUpdater based on MAC)
         self.name = "3RHUB-XXXX"
+        # Pretty name (keep for reference)
         self.pretty_name = release_info.get("PRETTY_NAME", DEVICE_MODEL_NAME)
                 
         self.build_number = DEVICE_BUILD_NUMBER
@@ -77,6 +82,7 @@ class SystemInfo:
         self.storage_space = ""  # 存储空间大小，单位为GB
         self.hainfo = HomeAssistantInfo()
         self.openhabinfo = OpenHabInfo()
+        self.installed_services = []  # Cache of installed services (checked at startup)
 
 class ProcedureInfo:
     def __init__(self):
@@ -228,6 +234,9 @@ class SystemInfoUpdater:
                 sys_info.name = device_name
                 self.logger.info(f"Updated device name: {device_name}")
             
+            # Cache installed services info (checked once at startup)
+            self._cache_installed_services(sys_info)
+            
             # Ensure HomeAssistantInfo object exists
             if not hasattr(sys_info, 'hainfo'):
                 sys_info.hainfo = HomeAssistantInfo()
@@ -294,6 +303,31 @@ class SystemInfoUpdater:
             self.logger.error(f"Error updating system information: {e}")
         
         # Task completed, thread will exit
+    
+    def _cache_installed_services(self, sys_info):
+        """Cache installed services information at startup"""
+        from .utils import util
+        
+        self.logger.info("Caching installed services information...")
+        service_map = {
+            "home-assistant.service": "core",
+            "matter-server.service": "matter",
+            "zigbee2mqtt.service": "z2m",
+            "otbr-agent.service": "otbr",
+            "openhab.service": "hab",
+        }
+        
+        sys_info.installed_services = []
+        try:
+            for svc, val in service_map.items():
+                if util.is_service_present(svc):
+                    sys_info.installed_services.append(val)
+                    self.logger.debug(f"Service {svc} is installed")
+            
+            self.logger.info(f"Cached installed services: {', '.join(sys_info.installed_services) if sys_info.installed_services else 'none'}")
+        except Exception as e:
+            self.logger.error(f"Error caching installed services: {e}")
+            sys_info.installed_services = []
     
     def _check_auto_wifi_provision_needed(self):
         """Check if auto WiFi provision is needed after system startup is complete"""

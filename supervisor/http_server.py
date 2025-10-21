@@ -283,9 +283,9 @@ class SupervisorHTTPServer:
                         # Safely get storage_space
                         storage = system_info.storage_space if isinstance(system_info.storage_space, dict) else {"available": "", "total": ""}
                         result = {
-                            "Model Name": getattr(system_info, "pretty_name", "Unknown"),
-                            "Model ID": getattr(system_info, "model", "Unknown"),
+                            "Device Model": getattr(system_info, "model", "Unknown"),
                             "Device Name": getattr(system_info, "name", "Unknown"),
+                            "Model ID": getattr(system_info, "model_id", "Unknown"),
                             "Version": getattr(system_info, "version", "Unknown"),
                             "Build Number": getattr(system_info, "build_number", "Unknown"),
                             "Zigbee Support": getattr(system_info, "support_zigbee", False),
@@ -296,9 +296,10 @@ class SupervisorHTTPServer:
                     else:
                         # Default system info (unified style)
                         result = {
-                            "Model Name": "LinuxBox",
+                            "Device Model": "LinuxBox",
                             "Device Name": "3RHUB-Unknown",
-                            "Build Number": "v1.0.0",
+                            "Model ID": "3RLB01081MH",
+                            "Build Number": "1.0.0",
                             "Zigbee Support": False,
                             "Thread Support": False,
                             "Memory": "",
@@ -316,23 +317,16 @@ class SupervisorHTTPServer:
                     result = {
                         "Device Model": "LinuxBox",
                         "Device Name": "3RHUB-Unknown",
+                        "Model ID": "3RLB01081MH",
                         "Build Number": "1.0.0",
                         "Error": f"system info error: {e}"
                     }
-                # Always update service field based on running systemd services
+                # Use cached installed services info from system_info
                 try:
-                    service_map = {
-                        "home-assistant.service": "core",
-                        "matter-server.service": "matter",
-                        "zigbee2mqtt.service": "z2m",
-                        "otbr-agent.service": "otbr",
-                        "openhab.service": "hab",
-                    }
-                    selected = []
-                    for svc, val in service_map.items():
-                        if util.is_service_present(svc):
-                            selected.append(val)
-                    result["Services"] = ",".join(selected)
+                    if hasattr(self._supervisor, 'system_info') and hasattr(self._supervisor.system_info, 'installed_services'):
+                        result["Services"] = ",".join(self._supervisor.system_info.installed_services)
+                    else:
+                        result["Services"] = ""
                 except Exception:
                     # If any error occurs, ensure the field exists
                     result["Services"] = ""
