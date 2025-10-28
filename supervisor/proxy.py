@@ -222,10 +222,28 @@ class SupervisorProxy:
         """Handle request payload (dict) instead of JSON string"""
         self.logger.info(f"[Proxy HandleRequestData] Start handling request")
         try:
-            # Handle LED command (special handling, as it needs to convert to LedState enum)
+            # Handle LED command (support on/off/clear and colors)
             if "cmd-led" in payload:
                 state_str = payload["cmd-led"].strip().lower()
                 try:
+                    # Handle on/off/clear (keep enable/disable as synonyms)
+                    if state_str in ("on", "enable", "enabled"):
+                        if self.supervisor and hasattr(self.supervisor, 'led') and hasattr(self.supervisor.led, 'enable'):
+                            self.supervisor.led.enable()
+                            return "LED module enabled (on)"
+                        return "LED module enable failed"
+                    if state_str in ("off", "disable", "disabled"):
+                        if self.supervisor and hasattr(self.supervisor, 'led') and hasattr(self.supervisor.led, 'disable'):
+                            self.supervisor.led.disable()
+                            return "LED module disabled (off)"
+                        return "LED module disable failed"
+                    if state_str == "clear":
+                        # clear: 清空一次显示（例如用户事件），不改变 on/off 状态
+                        if self.supervisor and hasattr(self.supervisor, 'clear_led_state'):
+                            self.supervisor.set_led_state(LedState.USER_EVENT_OFF)
+                            return "LED cleared"
+                        return "LED clear failed"
+
                     # Support mapping of simple color names to USER_EVENT
                     user_event_map = {
                         'red': LedState.USER_EVENT_RED,
@@ -236,7 +254,6 @@ class SupervisorProxy:
                         'cyan': LedState.USER_EVENT_CYAN,
                         'magenta': LedState.USER_EVENT_MAGENTA,
                         'purple': LedState.USER_EVENT_MAGENTA,
-                        'off': LedState.USER_EVENT_OFF
                     }
                     state = None
                     try:

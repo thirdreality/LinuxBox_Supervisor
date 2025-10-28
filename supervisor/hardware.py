@@ -64,6 +64,10 @@ class GpioLed:
     def __init__(self, supervisor=None):
         self.supervisor = supervisor
         self.logger = logging.getLogger("Supervisor")
+        # LED enable/disable persistent config
+        self._config_dir = "/var/lib/thirdreality"
+        self._config_path = os.path.join(self._config_dir, "led.conf")
+        self._enabled = True  # default enable
         
         # Define LED configuration with chip and line numbers
         self.leds = {
@@ -101,6 +105,13 @@ class GpioLed:
         self.led_thread = None
         self.timer_thread = None
         # Store the current LED state using a six-tier priority system
+        # Load persisted enabled state (if any)
+        self._load_enabled_from_config()
+        if not self._enabled:
+            try:
+                self.off()
+            except Exception:
+                pass
         self.user_event_priority_state = None  # Tier 1 (Highest)
         self.system_critical_priority_state = LedState.STARTUP  # Tier 2
         self.system_high_priority_state = None  # Tier 3 (Firmware update operations)
@@ -246,8 +257,65 @@ class GpioLed:
     def set_led_off_state(self):
         self.set_led_state(LedState.STARTUP_OFF)
 
+    def _load_enabled_from_config(self):
+        try:
+            if os.path.exists(self._config_path):
+                with open(self._config_path, 'r', encoding='utf-8') as f:
+                    value = f.read().strip().lower()
+                    if value in ("disable", "disabled", "0", "false", "off"):
+                        self._enabled = False
+                    elif value in ("enable", "enabled", "1", "true", "on"):
+                        self._enabled = True
+                    else:
+                        # Unknown content, treat as default (enabled)
+                        self._enabled = True
+            else:
+                # default enable when no file
+                self._enabled = True
+        except Exception as e:
+            self.logger.warning(f"Failed to read LED config, fallback to enabled: {e}")
+            self._enabled = True
+
+    def _persist_enabled(self):
+        try:
+            if not self._enabled:
+                # Ensure directory exists, then write disabled status
+                os.makedirs(self._config_dir, exist_ok=True)
+                with open(self._config_path, 'w', encoding='utf-8') as f:
+                    f.write("disabled\n")
+            else:
+                # Enabled: 若文件已存在，则写入 enabled；若不存在则不创建
+                if os.path.exists(self._config_path):
+                    with open(self._config_path, 'w', encoding='utf-8') as f:
+                        f.write("enabled\n")
+        except Exception as e:
+            self.logger.warning(f"Failed to persist LED enabled state: {e}")
+
+    def enable(self):
+        self._enabled = True
+        self._persist_enabled()
+        # Re-apply current state
+        self.led_control_event.set()
+        self.logger.info("LED module enabled")
+
+    def disable(self):
+        self._enabled = False
+        self._persist_enabled()
+        # Turn off immediately and ignore further updates
+        try:
+            self.off()
+        except Exception:
+            pass
+        self.logger.info("LED module disabled: LEDs turned off and commands ignored")
+
+    def is_enabled(self):
+        return self._enabled
+
     def set_led_state(self, state):
         """Set the current LED state based on priority levels."""
+        # Ignore any state updates when disabled
+        if not self._enabled:
+            return
         with self.state_lock:
             old_current_led_state = self.current_led_state
             state_changed = False
@@ -378,6 +446,10 @@ class GpioLed:
     
     def process_led_state(self, state):
         """Process the LED state and set appropriate color"""   
+        # When disabled, always force LED off and ignore any state
+        if not self._enabled:
+            self.off()
+            return
         match state:
             case LedState.REBOOT:
                 self.white() # Solid white during the brief reboot trigger phase
@@ -470,6 +542,9 @@ class GpioLed:
     
     def clear_led_state(self, state):
         """Clear the priority level that the specified state belongs to."""
+        # Ignore any state updates when disabled
+        if not self._enabled:
+            return
         with self.state_lock:
             old_current_led_state = self.current_led_state
             state_changed = False

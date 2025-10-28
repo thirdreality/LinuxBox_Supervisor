@@ -738,37 +738,20 @@ def main():
             logger.error(f"Unhandled exception: {e}")
             supervisor.cleanup()
     elif args.command == 'led':
-        color = args.arg
-        print(f"[Main]input color: {color}")
-        if color is None:
-            print("Usage: supervisor.py led <color>")
-            print("Support colors: [red|blue|yellow|green|white|cyan|magenta|purple|off] or LED states: [reboot|startup|factory_reset|sys_normal_operation|sys_wifi_config_pending|sys_device_pairing|etc...]")
+        value = args.arg
+        print(f"[Main]input led arg: {value}")
+        if value is None:
+            print("Usage: supervisor.py led <arg>")
+            print("Supported: on|off|clear, colors [red|blue|yellow|green|white|cyan|magenta|purple], states [reboot|startup|factory_reset|sys_normal_operation|...]")
             sys.exit(1)
         try:
-            # Support simplified color name to USER_EVENT mapping
-            user_event_map = {
-                'red': LedState.USER_EVENT_RED,
-                'blue': LedState.USER_EVENT_BLUE,
-                'yellow': LedState.USER_EVENT_YELLOW,
-                'green': LedState.USER_EVENT_GREEN,
-                'white': LedState.USER_EVENT_WHITE,
-                'cyan': LedState.USER_EVENT_CYAN,
-                'magenta': LedState.USER_EVENT_MAGENTA,
-                'purple': LedState.USER_EVENT_MAGENTA,
-                'off': LedState.USER_EVENT_OFF
-            }
-            led_state = getattr(LedState, color.upper(), None)
-            if led_state is None:
-                led_state = user_event_map.get(color.lower())
-            if led_state is None:
-                print(f"[Main]Unknown color: {color}, support colors: [red|blue|yellow|green|white|cyan|magenta|purple|off] or LED states: [reboot|startup|factory_reset|sys_normal_operation|etc...]")
-                sys.exit(1)
             client = SupervisorClient()
-            client.send_command("led", color.upper(), "Led command")
-            #client.set_led_state(color.upper())
-            print(f"LED set to {color}")
+            # Pass-through; server端负责解析 enable/disable/clear/颜色/状态
+            resp = client.send_command("led", value, "Led command")
+            if resp:
+                print(resp)
         except Exception as e:
-            print(f"Error setting LED color: {e}")
+            print(f"Error sending LED command: {e}")
             sys.exit(1)
     elif args.command in ['ota', 'zigbee', 'thread', 'setting', 'ptest']:
         param = args.arg

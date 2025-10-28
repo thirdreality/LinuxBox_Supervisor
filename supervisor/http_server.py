@@ -907,6 +907,36 @@ class SupervisorHTTPServer:
                                 self._set_headers(status_code=400)
                                 self.wfile.write(json.dumps({"success": False, "error": "Invalid action for thread command or param format."}).encode())
 
+                    elif command == "led":
+                        # Fast LED control via HTTP: action on/off
+                        if action == "on":
+                            try:
+                                if hasattr(self._supervisor, 'led') and hasattr(self._supervisor.led, 'enable'):
+                                    self._supervisor.led.enable()
+                                    self._set_headers()
+                                    self.wfile.write(json.dumps({"success": True, "msg": "LED enabled (on)"}).encode())
+                                else:
+                                    self._set_headers(status_code=500)
+                                    self.wfile.write(json.dumps({"success": False, "error": "LED controller not available"}).encode())
+                            except Exception as e:
+                                self._set_headers(status_code=500)
+                                self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode())
+                        elif action == "off":
+                            try:
+                                if hasattr(self._supervisor, 'led') and hasattr(self._supervisor.led, 'disable'):
+                                    self._supervisor.led.disable()
+                                    self._set_headers()
+                                    self.wfile.write(json.dumps({"success": True, "msg": "LED disabled (off)"}).encode())
+                                else:
+                                    self._set_headers(status_code=500)
+                                    self.wfile.write(json.dumps({"success": False, "error": "LED controller not available"}).encode())
+                            except Exception as e:
+                                self._set_headers(status_code=500)
+                                self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode())
+                        else:
+                            self._set_headers(status_code=400)
+                            self.wfile.write(json.dumps({"success": False, "error": "Invalid action for led command. Use 'on' or 'off'."}).encode())
+
                     elif command == "setting":
                         # Determine backup directory based on configuration
                         if const.BACKUP_STORAGE_MODE == "internal":
