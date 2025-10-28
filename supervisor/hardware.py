@@ -313,8 +313,8 @@ class GpioLed:
 
     def set_led_state(self, state):
         """Set the current LED state based on priority levels."""
-        # Ignore any state updates when disabled
-        if not self._enabled:
+        # Ignore任何更新当禁用，但允许 STARTUP_OFF 以完成启动阶段的收尾清除
+        if not self._enabled and state != LedState.STARTUP_OFF:
             return
         with self.state_lock:
             old_current_led_state = self.current_led_state
@@ -446,8 +446,8 @@ class GpioLed:
     
     def process_led_state(self, state):
         """Process the LED state and set appropriate color"""   
-        # When disabled, always force LED off and ignore any state
-        if not self._enabled:
+        # Disabled时：强制关灯，但若是STARTUP_OFF则允许进入以完成开机序列收尾
+        if not self._enabled and state != LedState.STARTUP_OFF:
             self.off()
             return
         match state:
