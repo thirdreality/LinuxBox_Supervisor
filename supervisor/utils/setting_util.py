@@ -386,6 +386,50 @@ def _get_backup_path():
     else:
         raise Exception(f"Invalid backup storage mode: {BACKUP_STORAGE_MODE}")
 
+def _estimate_backup_size_bytes(paths_with_names, exclude_patterns):
+    """
+    Estimate total bytes needed for backup by summing files to include (after exclusions).
+    Args:
+        paths_with_names: list of tuples (src_path, name)
+        exclude_patterns: list of exclude patterns
+    Returns:
+        int total_bytes
+    """
+    total_bytes = 0
+    try:
+        for src_path, _name in paths_with_names:
+            if not os.path.exists(src_path):
+                continue
+            if os.path.isfile(src_path):
+                # Single file
+                file_name = os.path.basename(src_path)
+                if not _should_exclude_file(file_name, exclude_patterns):
+                    try:
+                        total_bytes += os.path.getsize(src_path)
+                    except Exception:
+                        pass
+            else:
+                # Directory walk
+                for root, dirs, files in os.walk(src_path):
+                    rel_root = os.path.relpath(root, src_path)
+                    if rel_root == '.':
+                        rel_root = ''
+                    # Exclude directories
+                    dirs[:] = [d for d in dirs if not _should_exclude_file(os.path.join(rel_root, d) + '/', exclude_patterns)]
+                    for file_name in files:
+                        rel_file_path = os.path.join(rel_root, file_name) if rel_root else file_name
+                        if _should_exclude_file(rel_file_path, exclude_patterns):
+                            continue
+                        file_path = os.path.join(root, file_name)
+                        try:
+                            total_bytes += os.path.getsize(file_path)
+                        except Exception:
+                            pass
+    except Exception:
+        # Best-effort; if estimation fails, return 0 so we don't block backup incorrectly
+        return 0
+    return total_bytes
+
 def run_setting_backup(progress_callback=None, complete_callback=None):
     """
     Backup system settings by stopping services, creating a tarball, managing backups, and restarting services.
@@ -454,52 +498,19 @@ def run_setting_backup(progress_callback=None, complete_callback=None):
             current_progress += progress_per_service_stop
             _call_progress(int(current_progress), f"Processed service {service}.")
 
+        # Sync data to disk after stopping all services, repeat 3 times
+        _call_progress(29, "Syncing filesystem after stopping services...")
+        try:
+            for i in range(3):
+                logging.info(f"Sync operation {i+1}/3")
+                subprocess.run(["sync"], check=False, capture_output=True, text=True)
+                time.sleep(1)
+            logging.info("Filesystem sync completed (3 times)")
+        except Exception as e:
+            logging.warning(f"Error during filesystem sync: {e}")
+
         _call_progress(30, "Preparing to create backup archive.")
 
-        # Before copying data, shrink Home Assistant SQLite DB if too large
-        try:
-            ha_db_path = "/var/lib/homeassistant/homeassistant/home-assistant_v2.db"
-            size_threshold_bytes = 10 * 1024 * 1024  # 10MB
-            if os.path.exists(ha_db_path):
-                db_size = os.path.getsize(ha_db_path)
-                if db_size > size_threshold_bytes:
-                    logging.warning(f"Home Assistant DB size {db_size/1024/1024:.2f}MB exceeds 10MB. Purging DB before backup...")
-                    _call_progress(32, "Purging Home Assistant database before backup...")
-                    try:
-                        # Connect and cleanup
-                        conn = sqlite3.connect(ha_db_path, timeout=30)
-                        conn.execute("PRAGMA journal_mode=WAL;")
-                        conn.execute("PRAGMA busy_timeout=30000;")
-                        cur = conn.cursor()
-                        # Purge all rows as requested
-                        cur.execute("DELETE FROM events;")
-                        cur.execute("DELETE FROM states;")
-                        cur.execute("DELETE FROM statistics;")
-                        cur.execute("DELETE FROM statistics_short_term;")
-                        conn.commit()
-                        # Checkpoint WAL to reduce file size before VACUUM
-                        try:
-                            cur.execute("PRAGMA wal_checkpoint(TRUNCATE);")
-                        except Exception:
-                            pass
-                        conn.commit()
-                        conn.close()
-                        # VACUUM may need free space; try normal first
-                        try:
-                            _call_progress(34, "VACUUM Home Assistant database...")
-                            conn2 = sqlite3.connect(ha_db_path, timeout=60)
-                            conn2.execute("VACUUM;")
-                            conn2.close()
-                        except Exception as e_vac:
-                            logging.warning(f"VACUUM failed: {e_vac}")
-                        logging.info("Home Assistant database cleanup finished.")
-                    except Exception as e_db:
-                        logging.warning(f"Failed to cleanup Home Assistant DB before backup: {e_db}")
-                else:
-                    logging.info("Home Assistant DB under threshold; skipping cleanup.")
-        except Exception as e:
-            logging.warning(f"Error during pre-backup DB cleanup stage: {e}")
-        
         # For external storage, create backup directory if it doesn't exist
         if BACKUP_STORAGE_MODE == "external" and not os.path.exists(backup_base_path):
             try:
@@ -536,13 +547,50 @@ def run_setting_backup(progress_callback=None, complete_callback=None):
         total_cleaned_files = 0
         total_cleaned_size = 0
         
-        with tempfile.TemporaryDirectory(prefix="setting_backup_") as temp_backup_dir:
+        # Prefer dedicated cache dir to avoid /tmp space constraint
+        temp_base_dir = "/var/cache/thirdreality"
+        try:
+            if not os.path.exists(temp_base_dir):
+                os.makedirs(temp_base_dir, exist_ok=True)
+        except Exception as e:
+            logging.warning(f"Failed to ensure temp base dir {temp_base_dir}: {e}. Falling back to default tmp.")
+            temp_base_dir = None
+
+        # Preflight: estimate required bytes and compare with available free space
+        try:
+            estimated_bytes = _estimate_backup_size_bytes(BACKUP_DIRS_CONFIG, BACKUP_EXCLUDE_PATTERNS)
+            # Add 64MB headroom for metadata/tar overhead
+            estimated_with_overhead = estimated_bytes + 64 * 1024 * 1024
+            check_dir = temp_base_dir if temp_base_dir else tempfile.gettempdir()
+            usage = shutil.disk_usage(check_dir)
+            free_bytes = usage.free
+            if estimated_with_overhead > 0 and free_bytes < estimated_with_overhead:
+                msg = (f"Insufficient space for backup temp dir: need ~{estimated_with_overhead/1024/1024:.1f} MB, "
+                       f"free {free_bytes/1024/1024:.1f} MB at {check_dir}")
+                logging.error(msg)
+                raise Exception(msg)
+        except Exception as e_space:
+            logging.error(f"Preflight space check failed: {e_space}")
+            if complete_callback:
+                complete_callback(False, str(e_space))
+            return
+
+        with tempfile.TemporaryDirectory(prefix="setting_backup_", dir=temp_base_dir) as temp_backup_dir:
             # 1. Copy all directories to be backed up to temp directory (excluding unwanted files)
             for src_path, name in BACKUP_DIRS_CONFIG:
                 if os.path.exists(src_path):
                     dest_path = os.path.join(temp_backup_dir, name)
                     if os.path.isdir(src_path):
                         # Use new cleanup function to copy directory
+                        # Runtime free-space check before heavy copy
+                        try:
+                            usage_now = shutil.disk_usage(temp_backup_dir)
+                            # Require at least 16MB free headroom to continue
+                            if usage_now.free < 16 * 1024 * 1024:
+                                raise Exception("Insufficient space during backup copy phase (dir)")
+                        except Exception as e:
+                            logging.error(str(e))
+                            raise
                         cleaned_count, cleaned_size = _clean_directory_for_backup(src_path, dest_path, BACKUP_EXCLUDE_PATTERNS)
                         total_cleaned_files += cleaned_count
                         total_cleaned_size += cleaned_size
@@ -550,6 +598,15 @@ def run_setting_backup(progress_callback=None, complete_callback=None):
                     elif os.path.isfile(src_path):
                         # Check if single file should be excluded
                         if not _should_exclude_file(os.path.basename(src_path), BACKUP_EXCLUDE_PATTERNS):
+                            # Runtime free-space check for file copy
+                            try:
+                                usage_now = shutil.disk_usage(temp_backup_dir)
+                                need = os.path.getsize(src_path) + 8 * 1024 * 1024  # +8MB margin
+                                if usage_now.free < need:
+                                    raise Exception("Insufficient space during backup copy phase (file)")
+                            except Exception as e:
+                                logging.error(str(e))
+                                raise
                             os.makedirs(os.path.dirname(dest_path), exist_ok=True)
                             shutil.copy2(src_path, dest_path)
                         else:
@@ -561,6 +618,51 @@ def run_setting_backup(progress_callback=None, complete_callback=None):
             if total_cleaned_files > 0:
                 logger.info(f"Backup cleanup summary: {total_cleaned_files} files excluded, {total_cleaned_size / 1024 / 1024:.2f} MB saved")
                 _call_progress(39, f"File cleanup completed: {total_cleaned_files} files excluded, {total_cleaned_size / 1024 / 1024:.2f} MB saved")
+            
+            # 1.5. Check and clean up Home Assistant database in temp directory if too large
+            try:
+                ha_db_in_temp = os.path.join(temp_backup_dir, "homeassistant_data", "homeassistant", "home-assistant_v2.db")
+                size_threshold_bytes = 100 * 1024 * 1024  # 100MB
+                if os.path.exists(ha_db_in_temp):
+                    db_size = os.path.getsize(ha_db_in_temp)
+                    if db_size > size_threshold_bytes:
+                        logging.warning(f"Home Assistant DB copy size {db_size/1024/1024:.2f}MB exceeds 100MB. Purging temporary DB copy...")
+                        _call_progress(39.5, "Purging Home Assistant database copy in temp directory...")
+                        try:
+                            # Connect and cleanup the copy in temp directory
+                            conn = sqlite3.connect(ha_db_in_temp, timeout=30)
+                            conn.execute("PRAGMA journal_mode=WAL;")
+                            conn.execute("PRAGMA busy_timeout=30000;")
+                            cur = conn.cursor()
+                            # Purge all rows from history tables
+                            cur.execute("DELETE FROM events;")
+                            cur.execute("DELETE FROM states;")
+                            cur.execute("DELETE FROM statistics;")
+                            cur.execute("DELETE FROM statistics_short_term;")
+                            conn.commit()
+                            # Checkpoint WAL to reduce file size before VACUUM
+                            try:
+                                cur.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+                            except Exception:
+                                pass
+                            conn.commit()
+                            conn.close()
+                            # VACUUM to shrink the temporary database
+                            try:
+                                _call_progress(39.7, "VACUUM temporary database copy...")
+                                conn2 = sqlite3.connect(ha_db_in_temp, timeout=60)
+                                conn2.execute("VACUUM;")
+                                conn2.close()
+                            except Exception as e_vac:
+                                logging.warning(f"VACUUM failed on temp DB: {e_vac}")
+                            logging.info("Temporary Home Assistant database cleanup finished.")
+                        except Exception as e_db:
+                            logging.warning(f"Failed to cleanup temporary Home Assistant DB: {e_db}")
+                    else:
+                        logging.info(f"Temporary Home Assistant DB copy under threshold ({db_size/1024/1024:.2f}MB); skipping cleanup.")
+            except Exception as e:
+                logging.warning(f"Error during temp DB cleanup stage: {e}")
+            
             # 2. Write service_states.json
             service_states_path = os.path.join(temp_backup_dir, "service_states.json")
             with open(service_states_path, 'w') as f:
@@ -582,6 +684,17 @@ def run_setting_backup(progress_callback=None, complete_callback=None):
                 logger.warning(f"Failed to collect network states: {e}")
             _call_progress(40, "All data copied to temp dir, creating tarball...")
             # 3. Package entire temporary directory contents
+            # Extra space check before tar (target filesystem)
+            try:
+                target_dir = os.path.dirname(backup_filepath) or "."
+                usage_target = shutil.disk_usage(target_dir)
+                # Tar size roughly <= source size; require at least estimated+32MB in target
+                need_target = max(estimated_bytes, 0) + 32 * 1024 * 1024
+                if usage_target.free < need_target:
+                    raise Exception("Insufficient space on target filesystem for backup archive")
+            except Exception as e:
+                logging.error(str(e))
+                raise
             tar_command = ["tar", "-czf", backup_filepath, "-C", temp_backup_dir, "."]
             tar_process_result = subprocess.run(tar_command, capture_output=True, text=True)
             if tar_process_result.returncode != 0:
@@ -595,26 +708,13 @@ def run_setting_backup(progress_callback=None, complete_callback=None):
             _call_progress(70, "Backup archive created.")
             backup_archive_created = True
 
-        _call_progress(75, "Managing backup files (rotation).")
+        _call_progress(75, "Indexing backup files (no deletion).")
         backup_files = sorted(
             glob.glob(os.path.join(backup_base_path, "setting_*.tar.gz")),
             key=os.path.getmtime
         )
-        
-        if len(backup_files) > max_backups:
-            files_to_delete_count = len(backup_files) - max_backups
-            logging.info(f"Found {len(backup_files)} backups (max {max_backups}). Deleting {files_to_delete_count} oldest one(s).")
-            for i in range(files_to_delete_count):
-                file_to_delete = backup_files[i]
-                try:
-                    logging.info(f"Deleting old backup: {file_to_delete}")
-                    os.remove(file_to_delete)
-                except OSError as e:
-                    logging.error(f"Failed to delete old backup {file_to_delete}: {e}")
-            _call_progress(80, f"Deleted {files_to_delete_count} old backup(s).")
-        else:
-            logging.info(f"Found {len(backup_files)} backups. No rotation needed (max {max_backups}).")
-        _call_progress(85, "Backup file management complete.")
+        logging.info(f"Found {len(backup_files)} backup file(s). No rotation or deletion will be performed.")
+        _call_progress(85, "Backup files indexed.")
 
     except Exception as e:
         logging.error(f"System settings backup failed critically: {e}", exc_info=True)
