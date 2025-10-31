@@ -168,6 +168,14 @@ class Supervisor:
             except Exception as e:
                 logger.error(f"Zigbee pairing start failed: {e}")
                 return f"Zigbee pairing start failed: {e}"
+        elif cmd_lower == "stop_scan":
+            try:
+                self.task_manager.start_zigbee_stop_pairing(led_controller=self.led)
+                logger.info("Zigbee pairing stop requested")
+                return "Zigbee pairing stop requested"
+            except Exception as e:
+                logger.error(f"Zigbee pairing stop failed: {e}")
+                return f"Zigbee pairing stop failed: {e}"                
         elif cmd_lower == "update":
             try:
                 #self.task_manager.start_zigbee_ota()

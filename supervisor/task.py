@@ -109,6 +109,9 @@ class TaskManager:
     def start_zigbee_pairing(self, led_controller=None):
         return self._start_task("zigbee", "pairing", zigbee_util.run_zigbee_pairing, led_controller=led_controller)
 
+    def start_zigbee_stop_pairing(self, led_controller=None):
+        return self._start_task("zigbee", "stop_pairing", zigbee_util.run_zigbee_stop_pairing, led_controller=led_controller)
+    
     def start_zigbee_ota_update(self):
         return self._start_task("zigbee", "ota", util.run_zigbee_ota_update)
 

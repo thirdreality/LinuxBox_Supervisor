@@ -19,6 +19,12 @@ from supervisor.ptest.blz_test import get_blz_info
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
+PERMIT_JOIN_DURATION = 254  # Unified permit join duration (seconds)
+
+# MQTT credentials for Zigbee2MQTT control
+MQTT_USERNAME = "thirdreality"
+MQTT_PASSWORD = "thirdreality"
+
 def _call_progress(progress_callback, percent, message):
     """Helper to log progress and call the callback if it exists."""
     logging.info(f"Progress ({percent}%): {message}")
@@ -1032,41 +1038,74 @@ def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):
 
 def get_ha_zigbee_mode(config_file="/var/lib/homeassistant/homeassistant/.storage/core.config_entries"):
     """
-    Check the current Zigbee mode of HomeAssistant.
-    - If "domain": "mqtt" is found, return 'z2m' 
-    - If "domain": "zha" is found, return 'zha'
-    - If neither is found, return 'none'
+    根据用户规则判断 Zigbee 模式：
+    1) 若 zigbee2mqtt.service 与 home-assistant.service 都不存在 => 'none'
+    2) 若 zigbee2mqtt.service 为 enabled，且 home-assistant.service 不存在或为 disabled => 'z2m'
+    3) 若 zigbee2mqtt.service 不存在或为 disabled，且 home-assistant.service 为 enabled => 读取 HomeAssistant 配置：
+       - 有 zha 关键字 => 'zha'
+       - 有 mqtt 关键字 => 'z2m'
+       - 都没有或文件不存在/不可读 => 'none'
     """
-    attempts = 0
-    max_attempts = 3
-    retry_delay_seconds = 0.5
 
-    while attempts < max_attempts:
+    def _is_service_enabled(service_name: str) -> bool:
         try:
-            with open(config_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                # Correctly get the entries list
-                entries = data.get('data', {}).get('entries', [])
-                has_zha = any(e.get('domain') == 'zha' for e in entries)
-                has_mqtt = any(e.get('domain') == 'mqtt' for e in entries)
-                if has_mqtt:
-                    return 'z2m'
-                elif has_zha:
-                    return 'zha'
-                else:
+            result = subprocess.run(
+                ["systemctl", "is-enabled", service_name],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return result.stdout.strip() == "enabled"
+        except FileNotFoundError:
+            logging.warning("systemctl not found when checking is-enabled.")
+            return False
+        except Exception as e:
+            logging.warning(f"Failed to check is-enabled for {service_name}: {e}")
+            return False
+
+    # 先判断服务是否存在
+    has_z2m_service = _service_exists("zigbee2mqtt.service")
+    has_ha_service = _service_exists("home-assistant.service")
+
+    if not has_z2m_service and not has_ha_service:
+        return 'none'
+
+    # zigbee2mqtt enabled 且 HA 不存在或 disabled => mqtt
+    if has_z2m_service and _is_service_enabled("zigbee2mqtt.service"):
+        if (not has_ha_service) or (has_ha_service and not _is_service_enabled("home-assistant.service")):
+            return 'z2m'
+
+    # z2m disabled 且 HA enabled => 检查 HA 配置
+    if (not _is_service_enabled("zigbee2mqtt.service")) and has_ha_service and _is_service_enabled("home-assistant.service"):
+        attempts = 0
+        max_attempts = 3
+        retry_delay_seconds = 0.5
+        while attempts < max_attempts:
+            try:
+                with open(config_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    entries = data.get('data', {}).get('entries', [])
+                    has_zha = any(e.get('domain') == 'zha' for e in entries)
+                    has_mqtt = any(e.get('domain') == 'mqtt' for e in entries)
+                    if has_zha:
+                        return 'zha'
+                    if has_mqtt:
+                        return 'z2m'
                     return 'none'
-        except (FileNotFoundError, IOError, json.JSONDecodeError) as e:
-            attempts += 1
-            logging.warning(f"Attempt {attempts}/{max_attempts} failed to read/parse {config_file}: {e}")
-            if attempts < max_attempts:
-                time.sleep(retry_delay_seconds)
-            else:
-                logging.error(f"All {max_attempts} attempts to read/parse {config_file} failed.")
+            except (FileNotFoundError, IOError, json.JSONDecodeError) as e:
+                attempts += 1
+                logging.warning(f"Attempt {attempts}/{max_attempts} failed to read/parse {config_file}: {e}")
+                if attempts < max_attempts:
+                    time.sleep(retry_delay_seconds)
+                else:
+                    logging.error(f"All {max_attempts} attempts to read/parse {config_file} failed.")
+                    return 'none'
+            except Exception as e:
+                logging.error(f"Unexpected error while reading HomeAssistant config_entries: {e}")
                 return 'none'
-        except Exception as e: # Catch any other unexpected errors
-            logging.error(f"An unexpected error occurred while reading HomeAssistant config_entries: {e}")
-            return 'none'
-    return 'none' # Should be unreachable if logic is correct, but as a fallback
+
+    # 其他情况均视为 none（未覆盖到的组合）
+    return 'none'
 
 def _start_pairing_led_timer(led_controller, duration):
     """Starts a timer in a daemon thread to manage the LED state for pairing."""
@@ -1117,10 +1156,10 @@ def run_mqtt_pairing(progress_callback=None, led_controller=None) -> bool:
             pairing_command = [
                 "/usr/bin/mosquitto_pub",
                 "-h", "localhost",
+                "-u", MQTT_USERNAME,
+                "-P", MQTT_PASSWORD,
                 "-t", "zigbee2mqtt/bridge/request/permit_join",
-                "-m", f'{{"time": {PERMIT_JOIN_DURATION}}}',
-                "-u", "thirdreality",
-                "-P", "thirdreality"
+                "-m", f'{{"value": true, "time": {PERMIT_JOIN_DURATION}}}',
             ]
             logging.info(f"Executing zigbee2mqtt pairing command: {' '.join(pairing_command)}")
             result = subprocess.run(pairing_command, check=True, capture_output=True, text=True)
@@ -1267,7 +1306,61 @@ def run_zigbee_pairing(progress_callback=None, complete_callback=None, led_contr
                 led_controller.set_led_state(LedState.SYS_DEVICE_PAIRED)
             logging.info("Pairing initiation failed, state reset.")
 
-PERMIT_JOIN_DURATION = 254  # Unified permit join duration (seconds)
+
+
+def run_zigbee_stop_pairing(progress_callback=None, complete_callback=None, led_controller=None) -> bool:
+    """
+    Stop Zigbee pairing (permit_join=false) only when Zigbee mode is MQTT.
+    It will also reset pairing state and LED immediately.
+    """
+    try:
+        _call_progress(progress_callback, 10, "Determining Zigbee mode...")
+        mode = get_ha_zigbee_mode()
+        logging.info(f"Current Zigbee mode is: {mode}")
+
+        if mode != 'z2m':
+            msg = "scan_stop ignored: Zigbee mode is not MQTT"
+            logging.warning(msg)
+            _call_progress(progress_callback, 100, msg)
+            if complete_callback:
+                complete_callback(False, msg)
+            return False
+
+        _call_progress(progress_callback, 40, "Sending permit_join=false to Zigbee2MQTT via MQTT...")
+        cmd = [
+            "/usr/bin/mosquitto_pub",
+            "-h", "localhost",
+            "-u", MQTT_USERNAME,
+            "-P", MQTT_PASSWORD,
+            "-t", "zigbee2mqtt/bridge/request/permit_join",
+            "-m", '{"value": false}',
+        ]
+        logging.info("Executing scan_stop command: %s", " ".join(cmd))
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+        # Reset pairing state and LED immediately
+        pairing_state.set_pairing(False)
+        if led_controller:
+            led_controller.set_led_state(LedState.SYS_DEVICE_PAIRED)
+
+        _call_progress(progress_callback, 100, "Permit join disabled (scan stopped).")
+        if complete_callback:
+            complete_callback(True, "permit_join_disabled")
+        return True
+    except subprocess.CalledProcessError as e:
+        err_msg = f"scan_stop failed: {e.stderr.strip() if e.stderr else str(e)}"
+        logging.error(err_msg)
+        _call_progress(progress_callback, 100, err_msg)
+        if complete_callback:
+            complete_callback(False, err_msg)
+        return False
+    except Exception as e:
+        err_msg = f"scan_stop unexpected error: {str(e)}"
+        logging.error(err_msg, exc_info=True)
+        _call_progress(progress_callback, 100, err_msg)
+        if complete_callback:
+            complete_callback(False, err_msg)
+        return False
 
 def _check_service_running(service_name):
     """Check if a systemd service is running."""
