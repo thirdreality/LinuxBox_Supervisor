@@ -245,7 +245,7 @@ class NetworkMonitor:
                     self.supervisor.set_led_state(LedState.SYS_OFFLINE)
                     # 14400 seconds， 4 Hours,  10 seconds = 1 tick, 1440 ticks = 4 hours
                     # 1800 seconds， 30 minutes, 10 seconds = 1 tick, 180 ticks = 30 minutes
-                    if self.disconnect_tick == 180:
+                    if self.disconnect_tick == 180 or self.disconnect_tick == 360 or self.disconnect_tick == 540:
                         try:
                             script_path = "/lib/thirdreality/resetupwifi.sh"
                             if os.path.exists(script_path):

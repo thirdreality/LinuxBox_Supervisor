@@ -3,6 +3,7 @@
 import threading
 import logging
 import subprocess
+import time
 from datetime import datetime
 import urllib.error
 from .wifi_utils import get_wlan0_ip
@@ -200,24 +201,44 @@ def perform_reboot():
         Safely stop necessary services and reboot the system.
         
         This function stops Docker service before rebooting to prevent data corruption.
+        Docker stop failure is ignored and reboot will proceed anyway.
         
         Returns:
-            bool: True if reboot command was executed successfully, False otherwise
+            bool: True if reboot command was executed (may not return if reboot succeeds)
         """
     try:
-        # Try to stop docker service if it exists
+        # Try to stop docker service if it exists (failure is ignored)
         try:
-            subprocess.run(["systemctl", "stop", "docker"], check=True)
-        except subprocess.CalledProcessError:
-            logging.info("Docker service not found or already stopped, proceeding with reboot")
+            subprocess.run(["systemctl", "stop", "docker"], check=False, timeout=1)
+        except Exception:
+            pass  # Docker stop failure is not critical
         
         # Ensure all data is flushed to disk before reboot
-        force_sync()
+        try:
+            force_sync()
+        except Exception:
+            pass  # Sync failure should not prevent reboot
         
-        subprocess.run(["reboot"], check=True)
+        # Execute reboot command (will not return if successful)
+        # Use check=False to ensure reboot is attempted even if command returns error
+        logging.info("Executing reboot command...")
+        subprocess.run(["reboot"], check=False)
+        
+        # If we reach here, reboot command may have failed, try alternative
+        # Give a moment for reboot to take effect
+        time.sleep(1)
+        
+        # Fallback: try systemctl reboot
+        subprocess.run(["systemctl", "reboot"], check=False)
+        
         return True
     except Exception as e:
         logging.error(f"Error performing reboot: {e}")
+        # Even if there's an error, try to reboot anyway
+        try:
+            subprocess.run(["reboot"], check=False)
+        except:
+            pass
         return False
 
 def perform_power_off():
