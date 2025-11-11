@@ -11,6 +11,10 @@ import json
 import sys
 import subprocess
 import threading
+import socket
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
 
 from .network import NetworkMonitor
 from .hardware import GpioButton, GpioLed, LedState,GpioHwController
@@ -18,6 +22,7 @@ from .utils.wifi_manager import WifiStatus, WifiManager
 from .ota.ota_server import SupervisorOTAServer
 from .task import TaskManager
 from .utils import util
+from .utils.wifi_utils import get_wlan0_mac, get_wlan0_ip, get_current_wifi_info
 
 from .ble.gatt_server import SupervisorGattServer
 from .ble.gatt_manager import GattServerManager
@@ -29,6 +34,10 @@ from supervisor.utils.zigbee_util import get_ha_zigbee_mode
 from .const import VERSION, DEVICE_BUILD_NUMBER
 from .zero_manager import ZeroconfManager
 from .storage_manager import StorageManager
+try:
+    import yaml
+except Exception:
+    yaml = None
 try:
     from supervisor.utils.zigbee_util import get_zigbee_info
 except ImportError:
@@ -105,6 +114,9 @@ class Supervisor:
         
         # Storage manager
         self.storage_manager = StorageManager(self)
+        
+        # Status reporter
+        self._status_report_thread = None
     
 
     def set_led_state(self, state):
@@ -581,6 +593,221 @@ class Supervisor:
         logging.info("Performing reboot...")
         util.perform_reboot()
 
+    # -------------------------
+    # Status report (every 2h)
+    # -------------------------
+    def _read_z2m_mqtt_host(self):
+        """
+        读取 /opt/zigbee2mqtt/data/configuration.yaml 的 mqtt.server 字段，返回主机名；失败返回 None
+        """
+        config_path = "/opt/zigbee2mqtt/data/configuration.yaml"
+        try:
+            if not os.path.exists(config_path):
+                logger.info("z2m configuration not found at /opt/zigbee2mqtt/data/configuration.yaml")
+                return None
+            with open(config_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            # 首选使用 yaml 解析
+            if yaml:
+                try:
+                    data = yaml.safe_load(content) or {}
+                    mqtt_cfg = data.get("mqtt") or {}
+                    server = mqtt_cfg.get("server") or ""
+                    logger.info(f"z2m configuration loaded via yaml, mqtt.server='{server}'")
+                except Exception:
+                    server = ""
+            else:
+                # 简单解析回退：查找以 'server:' 开头的行
+                server = ""
+                for line in content.splitlines():
+                    line_stripped = line.strip()
+                    if line_stripped.lower().startswith("server:"):
+                        # server: mqtt://host:port
+                        parts = line_stripped.split(":", 1)
+                        if len(parts) == 2:
+                            server = parts[1].strip()
+                        break
+                logger.info(f"z2m configuration loaded via fallback, mqtt.server='{server}'")
+            if not server:
+                logger.info("z2m configuration found but mqtt.server is empty")
+                return None
+            # 允许 server 形如 mqtt://host:port 或 tcp:// 或 ws://
+            parsed = urlparse(server)
+            hostname = parsed.hostname
+            # 若无法解析（例如直接写了 host:port），做一次兜底
+            if not hostname:
+                # 去掉可能的前缀
+                s = server
+                if "://" in s:
+                    s = s.split("://", 1)[1]
+                hostname = s.split("/")[0].split(":")[0].strip()
+            logger.info(f"Parsed mqtt host from configuration: '{hostname}'")
+            return hostname or None
+        except Exception as e:
+            logger.warning(f"Failed to read z2m configuration: {e}")
+            return None
+
+    def _build_status_payload(self):
+        """
+        构建上报的 JSON 负载
+        """
+        sys_info = self.system_info
+        # 在构建前尽量补齐 IP 与 SSID
+        try:
+            if not self.wifi_status.ip_address:
+                ip = get_wlan0_ip()
+                if ip:
+                    self.wifi_status.ip_address = ip
+            if not self.wifi_status.ssid:
+                ssid, _ = get_current_wifi_info()
+                if ssid:
+                    self.wifi_status.ssid = ssid
+        except Exception:
+            pass
+        payload = {
+            "Model Name": sys_info.model,
+            "Model ID": sys_info.model_id,
+            "Device Name": sys_info.name,
+            "Version": sys_info.version,
+            "Build Number": getattr(sys_info, "build_number", DEVICE_BUILD_NUMBER),
+            "SSID": self.wifi_status.ssid or "",
+            "Ip Address": self.wifi_status.ip_address or "",
+            "Mac Address": (get_wlan0_mac() or "").lower(),
+            "Services": "z2m",
+        }
+        return payload
+
+    def _post_status(self, host):
+        """
+        发送状态上报；使用 https
+        """
+        payload = self._build_status_payload()
+        body = json.dumps(payload).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "*/*",
+            "User-Agent": "LinuxBoxSupervisor/1.0",
+            "Host": host,
+        }
+        paths = [f"https://{host}/api/hub/v1/status/report"]
+        last_err = None
+        for url in paths:
+            try:
+                logger.info(f"Posting status to {url}")
+                try:
+                    logger.info(f"Status payload: {json.dumps(payload, ensure_ascii=False)}")
+                except Exception:
+                    logger.info("Status payload: <failed to serialize>")
+                req = Request(url=url, data=body, headers=headers, method="POST")
+                with urlopen(req, timeout=10) as resp:
+                    resp_body = resp.read().decode("utf-8", errors="ignore")
+                    return resp.status, resp_body
+            except Exception as e:
+                # 若是 HTTPError，尝试读取响应体便于排错
+                try:
+                    if isinstance(e, HTTPError) and getattr(e, "read", None):
+                        err_body = e.read().decode("utf-8", errors="ignore")
+                        # 将HTTP 4xx/5xx带业务JSON的情况视作“正常响应”上报给上层解析，而非错误
+                        logger.info(f"Post to {url} returned HTTP {e.code}, body={err_body}")
+                        return e.code, err_body
+                    else:
+                        logger.warning(f"Post to {url} failed: {e}")
+                except Exception:
+                    logger.warning(f"Post to {url} failed: {e}")
+                last_err = e
+                continue
+        raise last_err if last_err else RuntimeError("Unknown request failure")
+
+    def _handle_pending_commands(self, resp_json: dict):
+        """
+        处理返回中的 pendingCommands，如果包含 reboot 则执行重启
+        """
+        try:
+            data = resp_json.get("data") or {}
+            pending = data.get("pendingCommands") or []
+            for item in pending:
+                cmd = (item.get("command") or "").strip().lower()
+                if cmd == "reboot":
+                    logger.warning("Received pending command: reboot, executing reboot")
+                    # 给出一点延迟以返回 HTTP
+                    threading.Timer(3.0, self.perform_reboot).start()
+        except Exception as e:
+            logger.warning(f"Handle pendingCommands failed: {e}")
+
+    def _status_report_loop(self):
+        """
+        每2小时循环一次：检测配置、判断 host、不是 localhost 则上报
+        """
+        logger.info("Status report thread started")
+        # 首次启动给予网络初始化的等待时间，最多等待60秒，提前获取IP/SSID
+        try:
+            logger.info("Status reporter initial delay: waiting up to 60s for network info...")
+            waited = 0
+            while self.running.is_set() and waited < 60:
+                ip_now = self.wifi_status.ip_address
+                if ip_now and ip_now not in ("", "0.0.0.0"):
+                    break
+                time.sleep(1)
+                waited += 1
+            # 补一次查询
+            if not self.wifi_status.ip_address:
+                ip = get_wlan0_ip()
+                if ip:
+                    self.wifi_status.ip_address = ip
+            if not self.wifi_status.ssid:
+                ssid, _ = get_current_wifi_info()
+                if ssid:
+                    self.wifi_status.ssid = ssid
+            logger.info(f"Status reporter initial check finished: ip={self.wifi_status.ip_address or ''}, ssid={self.wifi_status.ssid or ''}")
+        except Exception as e:
+            logger.debug(f"Initial network wait failed: {e}")
+        while self.running.is_set():
+            try:
+                host = self._read_z2m_mqtt_host()
+                if host and host not in ("localhost", "127.0.0.1", "::1"):
+                    try:
+                        status, body = self._post_status(host)
+                        logger.info(f"Status reported to {host}, status={status}")
+                        # 解析返回并处理 pendingCommands
+                        try:
+                            resp_json = json.loads(body)
+                            self._handle_pending_commands(resp_json)
+                        except Exception as e:
+                            logger.debug(f"Parse response failed: {e}")
+                    except Exception as e:
+                        logger.warning(f"Report status to {host} failed: {e}")
+                else:
+                    if host:
+                        logger.info(f"Skip status report: mqtt host is local ({host}), reporting disabled for localhost")
+                    else:
+                        logger.info("Skip status report: z2m configuration not found or mqtt.server empty")
+            except Exception as e:
+                logger.warning(f"Status report iteration error: {e}")
+            logger.info("Next status report in 2 hours")
+            # 间隔2小时
+            for _ in range(720):  # 720 * 10s = 7200s = 2h
+                if not self.running.is_set():
+                    break
+                time.sleep(10)
+        logger.info("Status report thread stopped")
+
+    def _start_status_reporter(self):
+        """
+        若存在配置文件则启动守护线程；若不存在则不启动
+        """
+        try:
+            if self._status_report_thread and self._status_report_thread.is_alive():
+                return
+            # 仅当配置文件存在时启动
+            if not os.path.exists("/opt/zigbee2mqtt/data/configuration.yaml"):
+                logger.info("z2m configuration not found, status reporter not started")
+                return
+            self._status_report_thread = threading.Thread(target=self._status_report_loop, daemon=True)
+            self._status_report_thread.start()
+            logger.info("Status reporter started")
+        except Exception as e:
+            logger.warning(f"Failed to start status reporter: {e}")
+
     def perform_factory_reset(self):
         logging.info("Performing factory reset...")
         self.set_led_state(LedState.USER_EVENT_OFF)
@@ -665,6 +892,14 @@ class Supervisor:
             self.proxy.stop()
             self.proxy = None
         
+        # Stop status reporter
+        try:
+            if self._status_report_thread and self._status_report_thread.is_alive():
+                # 线程基于 self.running 结束，这里不 join 阻塞
+                logger.info("Status reporter stopping...")
+        except Exception:
+            pass
+        
         # Stop storage manager
         if hasattr(self, 'storage_manager') and self.storage_manager:
             try:
@@ -701,6 +936,8 @@ class Supervisor:
         self._start_gatt_server()
 
         self.sysinfo_update.start()
+        # 启动状态上报
+        self._start_status_reporter()
 
         # Start OTA server
         # try:
