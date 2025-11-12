@@ -588,6 +588,8 @@ class Supervisor:
     def on_system_ready_check_wifi_provision(self):
         logger.info("System is ready, checking auto wifi provision...")
         self.task_manager.start_auto_wifi_provision()
+        # 启动状态上报
+        self._start_status_reporter()
 
     def perform_reboot(self):
         logging.info("Performing reboot...")
@@ -647,6 +649,40 @@ class Supervisor:
             logger.warning(f"Failed to read z2m configuration: {e}")
             return None
 
+    def _get_cpu_load_15min(self):
+        """Get CPU load 15min only"""
+        try:
+            with open('/proc/loadavg', 'r') as f:
+                load = f.read().strip().split()
+                return float(load[2])  # load_15min
+        except Exception as e:
+            logger.error(f"Error getting CPU load: {e}")
+            return 0.0
+    
+    def _get_memory_usage(self):
+        """Get memory usage in format: usedMB/totalMB"""
+        try:
+            with open('/proc/meminfo', 'r') as f:
+                mem_info = {}
+                for line in f:
+                    if 'MemTotal' in line or 'MemFree' in line:
+                        key, value = line.split(':', 1)
+                        value = value.strip().split()[0]  # Remove unit, keep only number
+                        mem_info[key.strip()] = int(value)
+                
+                if 'MemTotal' in mem_info and 'MemFree' in mem_info:
+                    total_kb = mem_info['MemTotal']
+                    free_kb = mem_info['MemFree']
+                    # Convert to MB (round to nearest integer)
+                    total_mb = round(total_kb / 1024)
+                    free_mb = round(free_kb / 1024)
+                    return f"{free_mb}MB/{total_mb}MB"
+                else:
+                    return ""
+        except Exception as e:
+            logger.error(f"Error getting memory usage: {e}")
+            return ""
+
     def _build_status_payload(self):
         """
         构建上报的 JSON 负载
@@ -664,16 +700,42 @@ class Supervisor:
                     self.wifi_status.ssid = ssid
         except Exception:
             pass
+        
+        # 计算 uptime（秒）
+        uptime_seconds = int(time.time() - self.start_time)
+        
+        # 获取 CPU load (只使用 load_15min)
+        cpu_load_15min = self._get_cpu_load_15min()
+        
+        # 获取内存使用情况（格式：usedMB/totalMB）
+        memory_str = self._get_memory_usage()
+        
+        # 获取存储信息（使用 http_server.py 的格式）
+        storage = sys_info.storage_space if isinstance(sys_info.storage_space, dict) else {"available": "", "total": ""}
+        storage_str = f"{storage.get('available', '')}/{storage.get('total', '')}" if storage.get('available') and storage.get('total') else ""
+        
+        # 获取已安装的服务列表，过滤掉 "hab"（因为从未正式安装过）
+        try:
+            if hasattr(sys_info, 'installed_services'):
+                services_list = [s for s in sys_info.installed_services ]
+                services_str = ",".join(services_list) if services_list else ""
+            else:
+                services_str = ""
+        except Exception:
+            services_str = ""
+        
         payload = {
-            "Model Name": sys_info.model,
             "Model ID": sys_info.model_id,
             "Device Name": sys_info.name,
             "Version": sys_info.version,
-            "Build Number": getattr(sys_info, "build_number", DEVICE_BUILD_NUMBER),
+            "uptime": uptime_seconds,
             "SSID": self.wifi_status.ssid or "",
             "Ip Address": self.wifi_status.ip_address or "",
             "Mac Address": (get_wlan0_mac() or "").lower(),
-            "Services": "z2m",
+            "Services": services_str,
+            "Memory": memory_str,
+            "Storage": storage_str,
+            "cpu": cpu_load_15min,
         }
         return payload
 
@@ -936,8 +998,6 @@ class Supervisor:
         self._start_gatt_server()
 
         self.sysinfo_update.start()
-        # 启动状态上报
-        self._start_status_reporter()
 
         # Start OTA server
         # try:
