@@ -43,7 +43,7 @@ class LedState(Enum):
     SYS_EVENT_OFF = "sys_event_off" #系统操作完成
 
     # 系统级状态（中优先级）
-    SYS_WIFI_CONFIG_PENDING = "sys_wifi_config_pending"  # 配网模式（待配网）: 黄色慢闪（0.5Hz）
+    SYS_WIFI_CONFIG_PENDING = "sys_wifi_config_pending"  # 配网模式（待配网）: 黄色快闪（1.5Hz）
     SYS_WIFI_CONFIGURING = "sys_wifi_configuring"  # 配网中（进行连接）: 黄色快闪（3Hz）
     SYS_WIFI_CONFIG_SUCCESS = "sys_wifi_config_success"  # 配网成功: 黄色常亮1秒后转正常运行
     SYS_WIFI_CONFIG_STOPPED = "sys_wifi_config_stopped" # 配网停止: 
@@ -56,7 +56,7 @@ class LedState(Enum):
     SYS_SYSTEM_CORRUPTED = "sys_system_corrupted"  # 系统未安装（如系统损坏）: 红色慢闪（0.5Hz）
     
     SYS_ERROR_CONDITION = "sys_error_condition"  # 异常/错误提示: 红色慢闪(0.5Hz）
-    SYS_OFFLINE = "sys_offline"  # 离线: 黄色快闪（3Hz）    
+    SYS_OFFLINE = "sys_offline"  # 离线: 黄色慢闪（0.5Hz）    
     SYS_NORMAL_OPERATION = "sys_normal_operation"  # 正常运行: 蓝色常亮
 
 # -----------------------------------------------------------------------------
@@ -474,7 +474,7 @@ class GpioLed:
                 self.magenta()
             case LedState.STARTUP:
                 self.white()
-            case LedState.SYS_WIFI_CONFIG_PENDING: # Yellow slow flash (1Hz)
+            case LedState.SYS_WIFI_CONFIG_PENDING: # Yellow fast flash (1.5Hz)
                 if self.step_counter % 2 == 0:
                     self.yellow()
                 else:
@@ -501,12 +501,12 @@ class GpioLed:
                 self.green()
             case LedState.SYS_NORMAL_OPERATION: # Blue solid
                 self.blue()
-            case LedState.SYS_ERROR_CONDITION: # Red slow flash (1Hz)
+            case LedState.SYS_ERROR_CONDITION: # Red slow flash (0.5Hz)
                 if self.step_counter % 2 == 0:
                     self.red()
                 else:
                     self.off()
-            case LedState.SYS_OFFLINE: # Yellow fast flash (3Hz)
+            case LedState.SYS_OFFLINE: # Yellow slow flash (0.5Hz)
                 if self.step_counter % 2 == 0:
                     self.yellow()
                 else:
@@ -647,9 +647,9 @@ class GpioLed:
         calculated_reset_delay = None 
         match led_state:
             case LedState.SYS_WIFI_CONFIG_PENDING:
-                calculated_reset_delay = 1    # 0.5Hz
+                calculated_reset_delay = 1 / 3  # ~1.5Hz
             case LedState.SYS_WIFI_CONFIGURING:
-                calculated_reset_delay = 0.166  # 3Hz
+                calculated_reset_delay = 1 / 6  # ~3Hz
             case LedState.SYS_WIFI_CONFIG_SUCCESS: 
                 calculated_reset_delay = 0.5 
             case LedState.SYS_DEVICE_PAIRING:
@@ -661,7 +661,7 @@ class GpioLed:
             case LedState.SYS_ERROR_CONDITION:
                 calculated_reset_delay = 1.0    # 0.5Hz
             case LedState.SYS_OFFLINE:
-                calculated_reset_delay = 0.166  # 3Hz
+                calculated_reset_delay = 1.0  # 0.5Hz
             case LedState.SYS_FIRMWARE_UPDATING:
                 calculated_reset_delay = 1.0 # 0.5Hz pulse
             case LedState.SYS_SYSTEM_CORRUPTED:

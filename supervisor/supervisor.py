@@ -505,6 +505,8 @@ class Supervisor:
                 logger.warning("Zeroconf start returned False")
         except Exception as e:
             logger.error(f"Failed to start Zeroconf on first connect: {e}", exc_info=True)
+        # Network is up, safe to launch status reporting
+        self._start_status_reporter()
 
     def onNetworkDisconnect(self):
         logger.info("## Supervisor: Network onNetworkDisconnect() ...")
@@ -588,8 +590,6 @@ class Supervisor:
     def on_system_ready_check_wifi_provision(self):
         logger.info("System is ready, checking auto wifi provision...")
         self.task_manager.start_auto_wifi_provision()
-        # 启动状态上报
-        self._start_status_reporter()
 
     def perform_reboot(self):
         logging.info("Performing reboot...")
