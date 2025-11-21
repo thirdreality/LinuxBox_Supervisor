@@ -53,7 +53,7 @@ class LedState(Enum):
     SYS_DEVICE_PAIRED = "sys_device_paired"  # 添加子设备（扫描停止）: 绿色常亮
 
     # 系统级运行态
-    SYS_SYSTEM_CORRUPTED = "sys_system_corrupted"  # 系统未安装（如系统损坏）: 红色慢闪（0.5Hz）
+    SYS_SYSTEM_CORRUPTED = "sys_system_corrupted"  # 系统未安装（如系统损坏）: 青色慢闪（0.5Hz）
     
     SYS_ERROR_CONDITION = "sys_error_condition"  # 异常/错误提示: 红色慢闪(0.5Hz）
     SYS_OFFLINE = "sys_offline"  # 离线: 黄色慢闪（0.5Hz）    
@@ -516,9 +516,9 @@ class GpioLed:
                     self.green()
                 else: # Off for 1s
                     self.off()
-            case LedState.SYS_SYSTEM_CORRUPTED: # Red slow flash (1Hz)
+            case LedState.SYS_SYSTEM_CORRUPTED: # Cyan slow flash (0.5Hz)
                 if self.step_counter % 2 == 0:
-                    self.red()
+                    self.cyan()
                 else:
                     self.off()
             case LedState.FACTORY_RESET: # Example: Red very fast blink
