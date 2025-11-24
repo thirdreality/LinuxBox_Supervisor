@@ -226,22 +226,24 @@ class SupervisorProxy:
             if "cmd-led" in payload:
                 state_str = payload["cmd-led"].strip().lower()
                 try:
-                    # Handle on/off/clear (keep enable/disable as synonyms)
+                    # Handle on/off/clear/disable commands
                     if state_str in ("on", "enable", "enabled"):
                         if self.supervisor and hasattr(self.supervisor, 'led') and hasattr(self.supervisor.led, 'enable'):
                             self.supervisor.led.enable()
                             return "LED module enabled (on)"
                         return "LED module enable failed"
-                    if state_str in ("off", "disable", "disabled"):
+                    # "disable"/"disabled" for disabling LED module (persistent)
+                    if state_str in ("disable", "disabled", "module_off"):
                         if self.supervisor and hasattr(self.supervisor, 'led') and hasattr(self.supervisor.led, 'disable'):
                             self.supervisor.led.disable()
-                            return "LED module disabled (off)"
+                            return "LED module disabled"
                         return "LED module disable failed"
-                    if state_str == "clear":
-                        # clear: 清空一次显示（例如用户事件），不改变 on/off 状态
-                        if self.supervisor and hasattr(self.supervisor, 'clear_led_state'):
+                    # "off" and "clear" for clearing user event state (USER_EVENT_OFF)
+                    if state_str in ("off", "clear"):
+                        # Clear user event state, does not change module enable/disable status
+                        if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
                             self.supervisor.set_led_state(LedState.USER_EVENT_OFF)
-                            return "LED cleared"
+                            return "LED user event cleared (off)"
                         return "LED clear failed"
 
                     # Support mapping of simple color names to USER_EVENT
