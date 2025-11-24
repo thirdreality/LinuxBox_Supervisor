@@ -331,7 +331,7 @@ class GpioLed:
                 if state == LedState.STARTUP_OFF:
                     # Only clear STARTUP flag; never set STARTUP_OFF as an active critical state
                     if self.system_critical_priority_state == LedState.STARTUP:
-                    self.system_critical_priority_state = None
+                        self.system_critical_priority_state = None
                     # If current is not STARTUP, ignore STARTUP_OFF
                 else:
                     if self.system_critical_priority_state != state:
