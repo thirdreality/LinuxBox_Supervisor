@@ -29,7 +29,7 @@ from .ble.gatt_manager import GattServerManager
 from .http_server import SupervisorHTTPServer  
 from .proxy import SupervisorProxy
 from .cli import SupervisorClient
-from .sysinfo import SystemInfoUpdater, SystemInfo, OpenHabInfo, get_package_version
+from .sysinfo import SystemInfoUpdater, SystemInfo, OpenHabInfo
 from supervisor.utils.zigbee_util import get_ha_zigbee_mode
 from .const import VERSION, DEVICE_BUILD_NUMBER
 from .zero_manager import ZeroconfManager
@@ -544,15 +544,6 @@ class Supervisor:
 
     def _start_http_server(self):
         """Start HTTP server"""
-        # Check package installation status
-        z2m_installed = bool(get_package_version("thirdreality-zigbee-mqtt"))
-        hacore_installed = bool(get_package_version("thirdreality-hacore"))
-        
-        # If only zigbee-mqtt is installed and hacore is not installed, skip starting HTTP server
-        if z2m_installed and not hacore_installed:
-            logger.info("HTTP server skipped: only thirdreality-zigbee-mqtt is installed, thirdreality-hacore is not installed")
-            return False
-        
         if not self.http_server:
             try:
                 self.http_server = SupervisorHTTPServer(self, port=8086)

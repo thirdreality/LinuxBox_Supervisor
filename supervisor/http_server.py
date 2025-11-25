@@ -784,15 +784,6 @@ class SupervisorHTTPServer:
                         self.wfile.write(json.dumps({"success": True}).encode())
                         threading.Timer(3.0, self._supervisor.perform_factory_reset).start()
 
-                    elif command == "stop_wifi_provision":
-                        # Directly call supervisor stop Wi-Fi provisioning method
-                        self._logger.info("HTTP Server: Received stop_wifi_provision command.")
-                        success = self._supervisor.finish_wifi_provision() # This method already runs in a thread
-                        self._set_headers()
-                        # The success here indicates the command was received and initiated, 
-                        # not necessarily that Wi-Fi provisioning has fully stopped yet.
-                        self.wfile.write(json.dumps({"success": success, "message": "Wi-Fi provisioning stop initiated."}).encode())
-
                     elif command == "zigbee":
                         if action == "scan":
                             self._logger.info("[Zigbee] Attempting to start pairing scan")
@@ -803,6 +794,11 @@ class SupervisorHTTPServer:
                                 self._set_headers(status_code=500)
                                 self.wfile.write(json.dumps({"success": False, "error": "Failed to start Zigbee pairing."}).encode())
                         elif action == "zha":
+                            # Check if home-assistant.service exists
+                            if not util.is_service_present("home-assistant.service"):
+                                self._set_headers(status_code=400)
+                                self.wfile.write(json.dumps({"success": False, "error": "ZHA mode is not supported: home-assistant.service is not installed"}).encode())
+                                return
                             self._logger.info("[Zigbee] Attempting to switch mode to: zha")
                             if self._supervisor.start_zigbee_switch_zha():
                                 self._set_headers()
@@ -811,6 +807,11 @@ class SupervisorHTTPServer:
                                 self._set_headers(status_code=500)
                                 self.wfile.write(json.dumps({"success": False, "error": "Failed to start switch to ZHA mode."}).encode())
                         elif action == "z2m":
+                            # Check if zigbee2mqtt.service exists
+                            if not util.is_service_present("zigbee2mqtt.service"):
+                                self._set_headers(status_code=400)
+                                self.wfile.write(json.dumps({"success": False, "error": "Z2M mode is not supported: zigbee2mqtt.service is not installed"}).encode())
+                                return
                             self._logger.info(f"[Zigbee] Attempting to switch mode to: z2m")
                             if self._supervisor.start_zigbee_switch_z2m():
                                 self._set_headers()
@@ -865,6 +866,11 @@ class SupervisorHTTPServer:
                                 self.wfile.write(json.dumps({"success": False, "error": "Invalid action for zigbee command or param format."}).encode())
 
                     elif command == "thread":
+                        # Check if otbr-agent.service exists
+                        if not util.is_service_present("otbr-agent.service"):
+                            self._set_headers(status_code=400)
+                            self.wfile.write(json.dumps({"success": False, "error": "Thread channel switch is not supported: otbr-agent.service is not installed"}).encode())
+                            return
                         if action and action.startswith("channel_"):
                             # Handle Thread channel setting via action parameter
                             try:
@@ -1162,6 +1168,11 @@ class SupervisorHTTPServer:
 
                     # Dispatch different update types
                     if update_type == 'z2m-mqtt':
+                        # Check if zigbee2mqtt.service exists
+                        if not util.is_service_present("zigbee2mqtt.service"):
+                            self._set_headers(status_code=400)
+                            self.wfile.write(json.dumps({"success": False, "error": "z2m-mqtt update is not supported: zigbee2mqtt.service is not installed"}).encode())
+                            return
                         started = self._supervisor.task_manager.start_setting_update_z2m_mqtt(param_dict)
                         self._set_headers()
                         self.wfile.write(json.dumps({"success": bool(started), "task": "setting", "sub_task": "update_z2m_mqtt"}).encode())
