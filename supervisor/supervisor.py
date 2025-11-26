@@ -1063,7 +1063,7 @@ def main():
         if param is None:
             print(f"Usage: supervisor.py {args.command} <parameter>")
             if args.command == 'ptest':
-                print("Available modes: start")
+                print("Available modes: start, finish")
             sys.exit(1)
             
         try:

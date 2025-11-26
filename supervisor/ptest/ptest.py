@@ -704,5 +704,169 @@ def run_product_test(supervisor=None):
         logger.error(f"Product test failed: {e}")
         return False
 
+def finish_product_test(supervisor=None):
+    """
+    Finish product test: modify zigbee2mqtt config, delete all nmcli connections, sync and reboot
+    """
+    try:
+        logger.info("Starting product test finish procedure...")
+        
+        # Step 1: Modify zigbee2mqtt configuration.yaml if it exists
+        config_path = "/opt/zigbee2mqtt/data/configuration.yaml"
+        if os.path.exists(config_path):
+            logger.info(f"Found configuration file at {config_path}, modifying frontend.enabled to false...")
+            try:
+                # Try to use yaml module if available
+                try:
+                    import yaml
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        config = yaml.safe_load(f) or {}
+                    
+                    # Ensure frontend section exists
+                    if 'frontend' not in config:
+                        config['frontend'] = {}
+                    
+                    # Set enabled to false
+                    config['frontend']['enabled'] = False
+                    
+                    # Write back to file
+                    with open(config_path, 'w', encoding='utf-8') as f:
+                        yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+                    
+                    logger.info("Successfully modified frontend.enabled to false")
+                except ImportError:
+                    # Fallback: use simple text replacement if yaml module not available
+                    logger.warning("yaml module not available, using text replacement method")
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    
+                    # Replace enabled: true with enabled: false in frontend section
+                    import re
+                    pattern = r'(frontend:\s*\n\s*enabled:\s*)true'
+                    replacement = r'\1false'
+                    content = re.sub(pattern, replacement, content)
+                    
+                    with open(config_path, 'w', encoding='utf-8') as f:
+                        f.write(content)
+                    
+                    logger.info("Successfully modified frontend.enabled to false (using text replacement)")
+            except Exception as e:
+                logger.error(f"Failed to modify configuration.yaml: {e}")
+                return False
+        else:
+            logger.info(f"Configuration file not found at {config_path}, skipping...")
+        
+        # Step 2: Disable and stop serial-getty@ttyAML0.service
+        logger.info("Disabling and stopping serial-getty@ttyAML0.service...")
+        try:
+            # Disable the service
+            disable_result = subprocess.run(
+                ["systemctl", "disable", "serial-getty@ttyAML0.service"],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if disable_result.returncode == 0:
+                logger.info("Successfully disabled serial-getty@ttyAML0.service")
+            else:
+                logger.warning(f"Failed to disable serial-getty@ttyAML0.service: {disable_result.stderr}")
+            
+            # Stop the service
+            stop_result = subprocess.run(
+                ["systemctl", "stop", "serial-getty@ttyAML0.service"],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if stop_result.returncode == 0:
+                logger.info("Successfully stopped serial-getty@ttyAML0.service")
+            else:
+                logger.warning(f"Failed to stop serial-getty@ttyAML0.service: {stop_result.stderr}")
+        except Exception as e:
+            logger.error(f"Failed to disable/stop serial-getty@ttyAML0.service: {e}")
+            # Don't return False here, continue with other steps
+        
+        # Step 3: Delete all nmcli connections
+        logger.info("Deleting all nmcli connections...")
+        try:
+            # Get list of all connection names using tab-separated format
+            result = subprocess.run(
+                ["nmcli", "-t", "-f", "NAME", "connection", "show"],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
+            if result.returncode == 0:
+                connections = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
+                connections_deleted = 0
+                
+                for conn_name in connections:
+                    if conn_name:
+                        try:
+                            # Delete the connection
+                            del_result = subprocess.run(
+                                ["nmcli", "connection", "delete", conn_name],
+                                capture_output=True,
+                                text=True,
+                                timeout=10
+                            )
+                            if del_result.returncode == 0:
+                                logger.info(f"Deleted connection: {conn_name}")
+                                connections_deleted += 1
+                            else:
+                                logger.warning(f"Failed to delete connection {conn_name}: {del_result.stderr}")
+                        except Exception as e:
+                            logger.error(f"Error deleting connection {conn_name}: {e}")
+                
+                logger.info(f"Deleted {connections_deleted} connection(s) out of {len(connections)} total")
+            else:
+                logger.warning(f"Failed to list connections: {result.stderr}")
+        except Exception as e:
+            logger.error(f"Failed to delete nmcli connections: {e}")
+            return False
+        
+        # Step 4: Sync three times, then delay 1 second and reboot
+        logger.info("Executing sync (3 times)...")
+        try:
+            from ..utils import util
+            # Use force_sync which already does 3 syncs
+            util.force_sync()
+            logger.info("Sync completed (3 times)")
+        except Exception as e:
+            logger.error(f"Failed to sync: {e}")
+            # Try manual sync as fallback
+            try:
+                for _ in range(3):
+                    subprocess.run(["sync"], check=True, timeout=10)
+                logger.info("Sync completed (3 times, fallback method)")
+            except Exception as e2:
+                logger.error(f"Fallback sync also failed: {e2}")
+                return False
+        
+        # Delay 1 second before reboot
+        logger.info("Waiting 1 second before reboot...")
+        time.sleep(1)
+        
+        # Reboot
+        logger.info("Initiating system reboot...")
+        try:
+            from ..utils import util
+            util.perform_reboot()
+        except Exception as e:
+            logger.error(f"Failed to reboot: {e}")
+            # Fallback: try direct reboot command
+            try:
+                subprocess.run(["reboot"], check=False, timeout=1)
+            except Exception:
+                pass
+        
+        logger.info("Product test finish procedure completed")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Product test finish failed: {e}")
+        return False
+
 if __name__ == "__main__":
     run_product_test()

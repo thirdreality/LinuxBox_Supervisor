@@ -208,8 +208,34 @@ class SupervisorProxy:
                     
                     # Send completion signal
                     self._send_stream_chunk(conn, 'end', 'Product test completed')
+                elif ptest_mode == "finish":
+                    # Send start signal
+                    self._send_stream_chunk(conn, 'start', 'Starting product test finish procedure...')
+                    
+                    # Import and run finish with real-time output capture
+                    from .ptest.ptest import finish_product_test
+                    
+                    # Override logger to capture output
+                    import logging
+                    original_logger_info = logging.Logger.info
+                    def streaming_logger_info(self_logger, msg, *args, **kwargs):
+                        output = str(msg) % args if args else str(msg)
+                        original_logger_info(self_logger, msg, *args, **kwargs)
+                        self._send_stream_chunk(conn, 'output', output)
+                    
+                    # Temporarily replace logger.info
+                    logging.Logger.info = streaming_logger_info
+                    
+                    try:
+                        result = finish_product_test(supervisor=self.supervisor)
+                        self._send_stream_chunk(conn, 'result', result)
+                    finally:
+                        logging.Logger.info = original_logger_info
+                    
+                    # Send completion signal
+                    self._send_stream_chunk(conn, 'end', 'Product test finish procedure completed (system will reboot)')
                 else:
-                    self._send_stream_chunk(conn, 'error', f'Unknown ptest mode: {ptest_mode}')
+                    self._send_stream_chunk(conn, 'error', f'Unknown ptest mode: {ptest_mode}. Supported modes: start, finish')
             else:
                 self._send_stream_chunk(conn, 'error', 'Unsupported streaming command')
                 
@@ -232,18 +258,18 @@ class SupervisorProxy:
                             self.supervisor.led.enable()
                             return "LED module enabled (on)"
                         return "LED module enable failed"
-                    # "disable"/"disabled" for disabling LED module (persistent)
-                    if state_str in ("disable", "disabled", "module_off"):
+                    # "disable"/"disabled"/"off" for disabling LED module (persistent)
+                    if state_str in ("disable", "disabled", "module_off", "off"):
                         if self.supervisor and hasattr(self.supervisor, 'led') and hasattr(self.supervisor.led, 'disable'):
                             self.supervisor.led.disable()
-                            return "LED module disabled"
+                            return "LED module disabled (off)"
                         return "LED module disable failed"
-                    # "off" and "clear" for clearing user event state (USER_EVENT_OFF)
-                    if state_str in ("off", "clear"):
+                    # "clear" for clearing user event state (USER_EVENT_OFF)
+                    if state_str in ("clear",):
                         # Clear user event state, does not change module enable/disable status
                         if self.supervisor and hasattr(self.supervisor, 'set_led_state'):
                             self.supervisor.set_led_state(LedState.USER_EVENT_OFF)
-                            return "LED user event cleared (off)"
+                            return "LED user event cleared"
                         return "LED clear failed"
 
                     # Support mapping of simple color names to USER_EVENT
@@ -290,8 +316,22 @@ class SupervisorProxy:
                         error_msg = f"Error running product test: {e}"
                         self.logger.error(error_msg)
                         return error_msg
+                elif ptest_mode == "finish":
+                    try:
+                        from .ptest.ptest import finish_product_test
+                        # Run in a separate thread to avoid blocking
+                        import threading
+                        def run_finish():
+                            finish_product_test(supervisor=self.supervisor)
+                        thread = threading.Thread(target=run_finish, daemon=True)
+                        thread.start()
+                        return "Product test finish procedure started (will reboot after completion)"
+                    except Exception as e:
+                        error_msg = f"Error starting product test finish: {e}"
+                        self.logger.error(error_msg)
+                        return error_msg
                 else:
-                    error_msg = f"Invalid ptest mode: {ptest_mode}"
+                    error_msg = f"Invalid ptest mode: {ptest_mode}. Supported modes: start, finish"
                     self.logger.error(error_msg)
                     return error_msg
             

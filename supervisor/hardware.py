@@ -30,7 +30,7 @@ class LedState(Enum):
     USER_EVENT_WHITE = "white"   # 白灯
     USER_EVENT_CYAN = "cyan"     # 青灯 (绿+蓝)
     USER_EVENT_MAGENTA = "magenta" # 洋红灯 (红+蓝)
-    USER_EVENT_OFF = "off"  
+    USER_EVENT_OFF = "clear"  
 
     # 系统级状态（次高优先级）
     REBOOT = "reboot" # 白灯
@@ -43,9 +43,9 @@ class LedState(Enum):
     SYS_EVENT_OFF = "sys_event_off" #系统操作完成
 
     # 系统级状态（中优先级）
-    SYS_WIFI_CONFIG_PENDING = "sys_wifi_config_pending"  # 配网模式（待配网）: 黄色快闪（1.5Hz）
-    SYS_WIFI_CONFIGURING = "sys_wifi_configuring"  # 配网中（进行连接）: 黄色快闪（3Hz）
-    SYS_WIFI_CONFIG_SUCCESS = "sys_wifi_config_success"  # 配网成功: 黄色常亮1秒后转正常运行
+    SYS_WIFI_CONFIG_PENDING = "sys_wifi_config_pending"  # 配网模式（待配网）: 紫色快闪（1.5Hz）
+    SYS_WIFI_CONFIGURING = "sys_wifi_configuring"  # 配网中（进行连接）: 紫色快闪（3Hz）
+    SYS_WIFI_CONFIG_SUCCESS = "sys_wifi_config_success"  # 配网成功: 紫色常亮1秒后转正常运行
     SYS_WIFI_CONFIG_STOPPED = "sys_wifi_config_stopped" # 配网停止: 
 
     # 系统级状态（次低优先级）
@@ -474,18 +474,18 @@ class GpioLed:
                 self.magenta()
             case LedState.STARTUP:
                 self.white()
-            case LedState.SYS_WIFI_CONFIG_PENDING: # Yellow fast flash (1.5Hz)
+            case LedState.SYS_WIFI_CONFIG_PENDING: # Purple fast flash (1.5Hz)
                 if self.step_counter % 2 == 0:
-                    self.yellow()
+                    self.purple()
                 else:
                     self.off()
-            case LedState.SYS_WIFI_CONFIGURING: # Yellow fast flash (3Hz)
+            case LedState.SYS_WIFI_CONFIGURING: # Purple fast flash (3Hz)
                 if self.step_counter % 2 == 0:
-                    self.yellow()
+                    self.purple()
                 else:
                     self.off()
-            case LedState.SYS_WIFI_CONFIG_SUCCESS: # Yellow solid for 1 sec
-                self.yellow()
+            case LedState.SYS_WIFI_CONFIG_SUCCESS: # Purple solid for 1 sec
+                self.purple()
                 if self.step_counter >= 1: # After 1 second (2 steps of 0.5s timer_delay)
                     self.logger.info("WIFI_CONFIG_SUCCESS: Display time ended, transitioning to NORMAL_OPERATION.")
                     self.set_led_state(LedState.SYS_WIFI_CONFIG_STOPPED)

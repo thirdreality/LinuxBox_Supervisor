@@ -214,6 +214,29 @@ class SupervisorHTTPServer:
             
             def do_POST(self):
                 """Handle POST request"""
+                # Check if serial-getty@ttyAML0.service is disabled
+                # If disabled, reject all POST requests
+                try:
+                    result = subprocess.run(
+                        ["systemctl", "is-enabled", "serial-getty@ttyAML0.service"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    is_disabled = result.returncode != 0 or result.stdout.strip() != "enabled"
+                    
+                    if is_disabled:
+                        self._logger.warning("serial-getty@ttyAML0.service is disabled, rejecting POST request")
+                        self._set_headers(status_code=403)
+                        self.wfile.write(json.dumps({
+                            "success": False,
+                            "error": "Action is not supported now."
+                        }).encode())
+                        return
+                except Exception as e:
+                    self._logger.warning(f"Failed to check serial-getty@ttyAML0.service status: {e}, allowing POST request")
+                    # If check fails, allow the request (backward compatibility)
+                
                 parsed_path = urlparse(self.path)
                 path = parsed_path.path
                 
