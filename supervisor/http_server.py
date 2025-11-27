@@ -214,8 +214,8 @@ class SupervisorHTTPServer:
             
             def do_POST(self):
                 """Handle POST request"""
-                # Check if serial-getty@ttyAML0.service is disabled
-                # If disabled, reject all POST requests
+                # Check if serial-getty@ttyAML0.service is masked or disabled
+                # If masked/disabled, reject all POST requests
                 try:
                     result = subprocess.run(
                         ["systemctl", "is-enabled", "serial-getty@ttyAML0.service"],
@@ -223,10 +223,17 @@ class SupervisorHTTPServer:
                         text=True,
                         timeout=5
                     )
-                    is_disabled = result.returncode != 0 or result.stdout.strip() != "enabled"
+                    enabled_status = result.stdout.strip()
+                    # Check if service is masked, disabled, or not enabled
+                    # enabled-status can be: enabled, enabled-runtime, disabled, masked, static, indirect, generated, transient, alias, linked-runtime, linked, invalid
+                    is_disabled = (
+                        result.returncode != 0 or 
+                        enabled_status in ["disabled", "masked"] or
+                        enabled_status not in ["enabled", "enabled-runtime"]
+                    )
                     
                     if is_disabled:
-                        self._logger.warning("serial-getty@ttyAML0.service is disabled, rejecting POST request")
+                        self._logger.warning(f"serial-getty@ttyAML0.service status is '{enabled_status}', rejecting POST request")
                         self._set_headers(status_code=403)
                         self.wfile.write(json.dumps({
                             "success": False,

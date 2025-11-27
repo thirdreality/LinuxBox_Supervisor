@@ -234,8 +234,28 @@ class SupervisorProxy:
                     
                     # Send completion signal
                     self._send_stream_chunk(conn, 'end', 'Product test finish procedure completed (system will reboot)')
+                elif ptest_mode == "restore":
+                    # Send start signal
+                    self._send_stream_chunk(conn, 'start', 'Starting product test restore procedure...')
+                    
+                    from .ptest.ptest import restore_product_test
+                    import logging
+                    original_logger_info = logging.Logger.info
+                    def streaming_logger_info(self_logger, msg, *args, **kwargs):
+                        output = str(msg) % args if args else str(msg)
+                        original_logger_info(self_logger, msg, *args, **kwargs)
+                        self._send_stream_chunk(conn, 'output', output)
+                    
+                    logging.Logger.info = streaming_logger_info
+                    try:
+                        result = restore_product_test(supervisor=self.supervisor)
+                        self._send_stream_chunk(conn, 'result', result)
+                    finally:
+                        logging.Logger.info = original_logger_info
+                    
+                    self._send_stream_chunk(conn, 'end', 'Product test restore procedure completed')
                 else:
-                    self._send_stream_chunk(conn, 'error', f'Unknown ptest mode: {ptest_mode}. Supported modes: start, finish')
+                    self._send_stream_chunk(conn, 'error', f'Unknown ptest mode: {ptest_mode}. Supported modes: start, finish, restore')
             else:
                 self._send_stream_chunk(conn, 'error', 'Unsupported streaming command')
                 
@@ -330,8 +350,21 @@ class SupervisorProxy:
                         error_msg = f"Error starting product test finish: {e}"
                         self.logger.error(error_msg)
                         return error_msg
+                elif ptest_mode == "restore":
+                    try:
+                        from .ptest.ptest import restore_product_test
+                        import threading
+                        def run_restore():
+                            restore_product_test(supervisor=self.supervisor)
+                        thread = threading.Thread(target=run_restore, daemon=True)
+                        thread.start()
+                        return "Product test restore procedure started"
+                    except Exception as e:
+                        error_msg = f"Error starting product test restore: {e}"
+                        self.logger.error(error_msg)
+                        return error_msg
                 else:
-                    error_msg = f"Invalid ptest mode: {ptest_mode}. Supported modes: start, finish"
+                    error_msg = f"Invalid ptest mode: {ptest_mode}. Supported modes: start, finish, restore"
                     self.logger.error(error_msg)
                     return error_msg
             

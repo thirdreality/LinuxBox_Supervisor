@@ -9,6 +9,8 @@ import time
 import subprocess
 import logging
 import re
+import tarfile
+from datetime import datetime
 from ..hardware import GpioLed, LedState
 from ..sysinfo import _get_t3r_release_info, get_package_version
 from ..const import PTEST_WIFI_SSID, PTEST_WIFI_PASSWORD
@@ -704,6 +706,37 @@ def run_product_test(supervisor=None):
         logger.error(f"Product test failed: {e}")
         return False
 
+def _backup_zigbee2mqtt_data(base_path="/opt/zigbee2mqtt/data"):
+    """
+    Backup zigbee2mqtt data directory (excluding log folder) into a timestamped tar.gz file.
+    """
+    try:
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup_name = f"zigbee2mqtt_config_{timestamp}.tar.gz"
+        backup_path = os.path.join(base_path, backup_name)
+
+        logger.info(f"Creating zigbee2mqtt backup at {backup_path} (excluding 'log/' directory)...")
+        with tarfile.open(backup_path, "w:gz") as tar:
+            for root, dirs, files in os.walk(base_path):
+                rel_root = os.path.relpath(root, base_path)
+                # Skip log directory and its contents
+                if rel_root == "log" or rel_root.startswith(f"log{os.sep}"):
+                    dirs[:] = []
+                    continue
+
+                for file_name in files:
+                    abs_path = os.path.join(root, file_name)
+                    rel_path = os.path.relpath(abs_path, base_path)
+                    # Skip the backup file itself if tar walks over it
+                    if rel_path == backup_name:
+                        continue
+                    tar.add(abs_path, arcname=rel_path)
+        logger.info(f"zigbee2mqtt backup created successfully: {backup_path}")
+        return backup_path
+    except Exception as e:
+        logger.error(f"Failed to backup zigbee2mqtt data: {e}")
+        return None
+
 def finish_product_test(supervisor=None):
     """
     Finish product test: modify zigbee2mqtt config, delete all nmcli connections, sync and reboot
@@ -714,7 +747,13 @@ def finish_product_test(supervisor=None):
         # Step 1: Modify zigbee2mqtt configuration.yaml if it exists
         config_path = "/opt/zigbee2mqtt/data/configuration.yaml"
         if os.path.exists(config_path):
-            logger.info(f"Found configuration file at {config_path}, modifying frontend.enabled to false...")
+            logger.info(f"Found configuration file at {config_path}, preparing to modify frontend.enabled to false...")
+            # Backup data directory (excluding log) before making changes
+            backup_result = _backup_zigbee2mqtt_data(os.path.dirname(config_path))
+            if backup_result:
+                logger.info(f"Configuration backup stored at {backup_result}")
+            else:
+                logger.warning("Failed to create zigbee2mqtt backup before modification")
             try:
                 # Try to use yaml module if available
                 try:
@@ -756,22 +795,10 @@ def finish_product_test(supervisor=None):
         else:
             logger.info(f"Configuration file not found at {config_path}, skipping...")
         
-        # Step 2: Disable and stop serial-getty@ttyAML0.service
-        logger.info("Disabling and stopping serial-getty@ttyAML0.service...")
+        # Step 2: Mask and stop serial-getty@ttyAML0.service
+        logger.info("Masking and stopping serial-getty@ttyAML0.service...")
         try:
-            # Disable the service
-            disable_result = subprocess.run(
-                ["systemctl", "disable", "serial-getty@ttyAML0.service"],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            if disable_result.returncode == 0:
-                logger.info("Successfully disabled serial-getty@ttyAML0.service")
-            else:
-                logger.warning(f"Failed to disable serial-getty@ttyAML0.service: {disable_result.stderr}")
-            
-            # Stop the service
+            # Stop the service first
             stop_result = subprocess.run(
                 ["systemctl", "stop", "serial-getty@ttyAML0.service"],
                 capture_output=True,
@@ -782,8 +809,30 @@ def finish_product_test(supervisor=None):
                 logger.info("Successfully stopped serial-getty@ttyAML0.service")
             else:
                 logger.warning(f"Failed to stop serial-getty@ttyAML0.service: {stop_result.stderr}")
+            
+            # Mask the service to prevent it from being started
+            # Mask is stronger than disable - it prevents both manual and automatic starts
+            mask_result = subprocess.run(
+                ["systemctl", "mask", "serial-getty@ttyAML0.service"],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if mask_result.returncode == 0:
+                logger.info("Successfully masked serial-getty@ttyAML0.service")
+            else:
+                logger.warning(f"Failed to mask serial-getty@ttyAML0.service: {mask_result.stderr}")
+                # Try disable as fallback
+                disable_result = subprocess.run(
+                    ["systemctl", "disable", "serial-getty@ttyAML0.service"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                if disable_result.returncode == 0:
+                    logger.info("Successfully disabled serial-getty@ttyAML0.service (fallback)")
         except Exception as e:
-            logger.error(f"Failed to disable/stop serial-getty@ttyAML0.service: {e}")
+            logger.error(f"Failed to mask/stop serial-getty@ttyAML0.service: {e}")
             # Don't return False here, continue with other steps
         
         # Step 3: Delete all nmcli connections
@@ -866,6 +915,42 @@ def finish_product_test(supervisor=None):
         
     except Exception as e:
         logger.error(f"Product test finish failed: {e}")
+        return False
+
+def restore_product_test(supervisor=None):
+    """
+    Restore product test environment: unmask/enable/start serial-getty@ttyAML0.service
+    """
+    try:
+        logger.info("Starting product test restore procedure (serial console)...")
+        commands = [
+            (["systemctl", "unmask", "serial-getty@ttyAML0.service"], "unmask"),
+            (["systemctl", "enable", "serial-getty@ttyAML0.service"], "enable"),
+            (["systemctl", "start", "serial-getty@ttyAML0.service"], "start"),
+        ]
+
+        overall_success = True
+        for cmd, desc in commands:
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                if result.returncode == 0:
+                    logger.info(f"Successfully executed {desc} for serial-getty@ttyAML0.service")
+                else:
+                    logger.warning(f"Failed to {desc} serial-getty@ttyAML0.service: {result.stderr.strip()}")
+                    overall_success = False
+            except Exception as cmd_error:
+                logger.error(f"Error executing {desc} for serial-getty@ttyAML0.service: {cmd_error}")
+                overall_success = False
+
+        logger.info("Product test restore procedure completed")
+        return overall_success
+    except Exception as e:
+        logger.error(f"Product test restore failed: {e}")
         return False
 
 if __name__ == "__main__":
