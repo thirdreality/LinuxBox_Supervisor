@@ -212,38 +212,20 @@ class SupervisorHTTPServer:
                     self.end_headers()
                     self.wfile.write(json.dumps({"error": "Internal Server Error"}).encode())
             
+            def _is_reboot_command(self, path, post_data):
+                """Check if the POST request is a reboot system command"""
+                if path != "/api/system/command":
+                    return False
+                try:
+                    params, _, _ = self._parse_post_data(post_data)
+                    command = params.get("command", "")
+                    return command == "reboot"
+                except Exception as e:
+                    self._logger.warning(f"Failed to parse POST data for reboot check: {e}")
+                    return False
+
             def do_POST(self):
                 """Handle POST request"""
-                # Check if serial-getty@ttyAML0.service is masked or disabled
-                # If masked/disabled, reject all POST requests
-                try:
-                    result = subprocess.run(
-                        ["systemctl", "is-enabled", "serial-getty@ttyAML0.service"],
-                        capture_output=True,
-                        text=True,
-                        timeout=5
-                    )
-                    enabled_status = result.stdout.strip()
-                    # Check if service is masked, disabled, or not enabled
-                    # enabled-status can be: enabled, enabled-runtime, disabled, masked, static, indirect, generated, transient, alias, linked-runtime, linked, invalid
-                    is_disabled = (
-                        result.returncode != 0 or 
-                        enabled_status in ["disabled", "masked"] or
-                        enabled_status not in ["enabled", "enabled-runtime"]
-                    )
-                    
-                    if is_disabled:
-                        self._logger.warning(f"serial-getty@ttyAML0.service status is '{enabled_status}', rejecting POST request")
-                        self._set_headers(status_code=403)
-                        self.wfile.write(json.dumps({
-                            "success": False,
-                            "error": "Action is not supported now."
-                        }).encode())
-                        return
-                except Exception as e:
-                    self._logger.warning(f"Failed to check serial-getty@ttyAML0.service status: {e}, allowing POST request")
-                    # If check fails, allow the request (backward compatibility)
-                
                 parsed_path = urlparse(self.path)
                 path = parsed_path.path
                 
@@ -254,6 +236,38 @@ class SupervisorHTTPServer:
                 post_data = self.rfile.read(content_length).decode('utf-8')
 
                 self._logger.info(f"POST data: {post_data}")
+                
+                # Check if serial-getty@ttyAML0.service is masked or disabled
+                # If masked/disabled, reject all POST requests except reboot command
+                try:
+                    result = subprocess.run(
+                        ["systemctl", "is-enabled", "serial-getty@ttyAML0.service"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    enabled_status = result.stdout.strip()
+                    # enabled-status can be: enabled, enabled-runtime, disabled, masked, static,
+                    # indirect, generated, transient, alias, linked-runtime, linked, invalid
+                    is_disabled = (
+                        result.returncode != 0 or
+                        enabled_status in ["disabled", "masked"] or
+                        enabled_status not in ["enabled", "enabled-runtime"]
+                    )
+                    
+                    if is_disabled and not self._is_reboot_command(path, post_data):
+                        self._logger.warning(
+                            f"serial-getty@ttyAML0.service status is '{enabled_status}', rejecting POST request"
+                        )
+                        self._set_headers(status_code=403)
+                        self.wfile.write(json.dumps({
+                            "success": False,
+                            "error": "Action is not supported now."
+                        }).encode())
+                        return
+                except Exception as e:
+                    self._logger.warning(f"Failed to check serial-getty@ttyAML0.service status: {e}, allowing POST request")
+                    # If check fails, allow the request (backward compatibility)
                 
                 # Check Content-Type
                 content_type = self.headers.get('Content-Type', '')
