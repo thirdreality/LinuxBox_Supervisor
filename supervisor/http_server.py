@@ -212,16 +212,16 @@ class SupervisorHTTPServer:
                     self.end_headers()
                     self.wfile.write(json.dumps({"error": "Internal Server Error"}).encode())
             
-            def _is_reboot_command(self, path, post_data):
-                """Check if the POST request is a reboot system command"""
+            def _is_special_command(self, path, post_data):
+                """Check if the POST request is a special system command that is allowed when console is disabled"""
                 if path != "/api/system/command":
                     return False
                 try:
                     params, _, _ = self._parse_post_data(post_data)
                     command = params.get("command", "")
-                    return command == "reboot"
+                    return command in ("reboot", "factory_reset")
                 except Exception as e:
-                    self._logger.warning(f"Failed to parse POST data for reboot check: {e}")
+                    self._logger.warning(f"Failed to parse POST data for special command check: {e}")
                     return False
 
             def do_POST(self):
@@ -255,7 +255,7 @@ class SupervisorHTTPServer:
                         enabled_status not in ["enabled", "enabled-runtime"]
                     )
                     
-                    if is_disabled and not self._is_reboot_command(path, post_data):
+                    if is_disabled and not self._is_special_command(path, post_data):
                         self._logger.warning(
                             f"serial-getty@ttyAML0.service status is '{enabled_status}', rejecting POST request"
                         )
