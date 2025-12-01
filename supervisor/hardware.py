@@ -43,9 +43,9 @@ class LedState(Enum):
     SYS_EVENT_OFF = "sys_event_off" #系统操作完成
 
     # 系统级状态（中优先级）
-    SYS_WIFI_CONFIG_PENDING = "sys_wifi_config_pending"  # 配网模式（待配网）: 紫色快闪（1.5Hz）
-    SYS_WIFI_CONFIGURING = "sys_wifi_configuring"  # 配网中（进行连接）: 紫色快闪（3Hz）
-    SYS_WIFI_CONFIG_SUCCESS = "sys_wifi_config_success"  # 配网成功: 紫色常亮1秒后转正常运行
+    SYS_WIFI_CONFIG_PENDING = "sys_wifi_config_pending"  # 配网模式（待配网）: 蓝灯快闪（2Hz）
+    SYS_WIFI_CONFIGURING = "sys_wifi_configuring"  # 配网中（进行连接）: 蓝灯快闪（4Hz）
+    SYS_WIFI_CONFIG_SUCCESS = "sys_wifi_config_success"  # 配网成功: 蓝灯常亮1秒后转正常运行
     SYS_WIFI_CONFIG_STOPPED = "sys_wifi_config_stopped" # 配网停止: 
 
     # 系统级状态（次低优先级）
@@ -474,18 +474,18 @@ class GpioLed:
                 self.magenta()
             case LedState.STARTUP:
                 self.white()
-            case LedState.SYS_WIFI_CONFIG_PENDING: # Purple fast flash (1.5Hz)
+            case LedState.SYS_WIFI_CONFIG_PENDING: # Blue fast flash (2Hz)
                 if self.step_counter % 2 == 0:
-                    self.purple()
+                    self.blue()
                 else:
                     self.off()
-            case LedState.SYS_WIFI_CONFIGURING: # Purple fast flash (3Hz)
+            case LedState.SYS_WIFI_CONFIGURING: # Blue fast flash (4Hz)
                 if self.step_counter % 2 == 0:
-                    self.purple()
+                    self.blue()
                 else:
                     self.off()
-            case LedState.SYS_WIFI_CONFIG_SUCCESS: # Purple solid for 1 sec
-                self.purple()
+            case LedState.SYS_WIFI_CONFIG_SUCCESS: # Blue solid for 1 sec
+                self.blue()
                 if self.step_counter >= 1: # After 1 second (2 steps of 0.5s timer_delay)
                     self.logger.info("WIFI_CONFIG_SUCCESS: Display time ended, transitioning to NORMAL_OPERATION.")
                     self.set_led_state(LedState.SYS_WIFI_CONFIG_STOPPED)
@@ -647,11 +647,11 @@ class GpioLed:
         calculated_reset_delay = None 
         match led_state:
             case LedState.SYS_WIFI_CONFIG_PENDING:
-                calculated_reset_delay = 1 / 3  # ~1.5Hz
+                calculated_reset_delay = 0.5  # 2Hz
             case LedState.SYS_WIFI_CONFIGURING:
-                calculated_reset_delay = 1 / 6  # ~3Hz
+                calculated_reset_delay = 0.25  # 4Hz
             case LedState.SYS_WIFI_CONFIG_SUCCESS: 
-                calculated_reset_delay = 0.5 
+                calculated_reset_delay = 0.5  # Blue solid for 1 sec (2 steps of 0.5s) 
             case LedState.SYS_DEVICE_PAIRING:
                 calculated_reset_delay = 0.5    # 1Hz
             case LedState.SYS_DEVICE_PAIRED:

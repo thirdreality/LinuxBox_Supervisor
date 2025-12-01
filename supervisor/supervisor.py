@@ -823,9 +823,30 @@ class Supervisor:
             logger.info(f"Status reporter initial check finished: ip={self.wifi_status.ip_address or ''}, ssid={self.wifi_status.ssid or ''}")
         except Exception as e:
             logger.debug(f"Initial network wait failed: {e}")
+            
         while self.running.is_set():
             try:
                 host = self._read_z2m_mqtt_host()
+                
+                # 如果 host 是 localhost 之类的，循环等待30秒，直到 host 不再是 localhost
+                while host and host in ("localhost", "127.0.0.1", "::1") and self.running.is_set():
+                    logger.info(f"mqtt host is local ({host}), waiting for non-localhost host (30s intervals)...")
+                    # 等待30秒（10个3秒）
+                    for _ in range(10):  # 10次 * 3秒 = 30秒
+                        if not self.running.is_set():
+                            break
+                        time.sleep(3)  # 每次等待3秒，便于服务退出
+                    
+                    if not self.running.is_set():
+                        break
+                    
+                    # 重新读取 host
+                    host = self._read_z2m_mqtt_host()
+                    # if host and host not in ("localhost", "127.0.0.1", "::1"):
+                    #     logger.info(f"mqtt host changed to non-localhost: {host}, proceeding with status report")
+                    #     break
+                    # # 如果仍然是 localhost，while 循环条件仍然满足，会自动继续下一轮30秒等待
+                
                 if host and host not in ("localhost", "127.0.0.1", "::1"):
                     try:
                         status, body = self._post_status(host)
@@ -846,11 +867,11 @@ class Supervisor:
             except Exception as e:
                 logger.warning(f"Status report iteration error: {e}")
             logger.info("Next status report in 2 hours")
-            # 间隔2小时
-            for _ in range(720):  # 720 * 10s = 7200s = 2h
+            # 间隔2小时，使用3秒间隔便于服务退出
+            for _ in range(2400):  # 2400 * 3s = 7200s = 2h
                 if not self.running.is_set():
                     break
-                time.sleep(10)
+                time.sleep(3)
         logger.info("Status report thread stopped")
 
     def _start_status_reporter(self):
