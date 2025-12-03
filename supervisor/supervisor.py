@@ -68,7 +68,7 @@ class Supervisor:
     _worker_mode="homeassistant-core"
 
     def __init__(self):
-        # 硬件控制
+        # Hardware control
         self.hwinit = GpioHwController(self)
         self.led = GpioLed(self)
         self.button = GpioButton(self)        
@@ -99,7 +99,7 @@ class Supervisor:
         # self.gatt_server = None  # No longer needed
 
         self.network_monitor = NetworkMonitor(self)
-        # self.ota_server = SupervisorOTAServer(self)  # 临时屏蔽OTA服务器
+        # self.ota_server = SupervisorOTAServer(self)  # Temporarily disabled OTA server
 
         # boot up time
         self.start_time = time.time()
@@ -130,7 +130,7 @@ class Supervisor:
     def set_ota_command(self, cmd):
         logger.info(f"OTA Command: param={cmd}")
 
-    #### 异步命令 
+    #### Asynchronous commands 
 
     def set_zigbee_command(self, cmd):
         logger.info(f"zigbee Command: param={cmd}")
@@ -153,11 +153,11 @@ class Supervisor:
                 logger.error(f"Zigbee pairing start failed: {e}")
                 return f"Zigbee pairing start failed: {e}"
         elif cmd_lower == "info":
-            # 查询zigbee信息
+            # Query zigbee information
             return get_zigbee_info()
         elif cmd_lower == "reset":
             try:
-                # 使用 GPIO 让 Zigbee 芯片重启
+                # Use GPIO to reset Zigbee chip
                 subprocess.run(["gpioset", "0", "3=1"], check=True)
                 time.sleep(0.2)
                 subprocess.run(["gpioset", "0", "3=0"], check=True)
@@ -258,7 +258,7 @@ class Supervisor:
                 return f"Thread support disable fail: {e}"
         elif cmd.lower() == "reset":
             try:
-                # 使用 GPIO 让 Thread 芯片重启
+                # Use GPIO to reset Thread chip
                 subprocess.run(["gpioset", "0", "29=1"], check=True)
                 time.sleep(0.2)
                 subprocess.run(["gpioset", "0", "29=0"], check=True)
@@ -412,14 +412,14 @@ class Supervisor:
             zigbee_mode = get_ha_zigbee_mode()
             if zigbee_mode == 'zha':
                 self.task_manager.start_zha_channel_switch(channel)
-                return True, f"channel已经切换到{channel}"
+                return True, f"Channel has been switched to {channel}"
             elif zigbee_mode == 'z2m':
                 self.task_manager.start_z2m_channel_switch(channel)
-                return True, f"channel已经切换到{channel}, 需要重新启动相关服务，请稍候"
+                return True, f"Channel has been switched to {channel}, related services need to be restarted, please wait"
             else:
-                return False, "无法切换：未检测到Zigbee模式"
+                return False, "Cannot switch: Zigbee mode not detected"
         except Exception as e:
-            return False, f"切换失败: {e}"
+            return False, f"Switch failed: {e}"
 
     def start_thread_channel_switch(self, channel: int):
         """
@@ -431,9 +431,9 @@ class Supervisor:
         """
         try:
             self.task_manager.start_thread_channel_switch(channel)
-            return True, f"channel需要5分钟切换到{channel}，请稍候"
+            return True, f"Channel will take 5 minutes to switch to {channel}, please wait"
         except Exception as e:
-            return False, f"切换失败: {e}"
+            return False, f"Switch failed: {e}"
 
     def start_setting_backup(self) -> bool:
         """
@@ -530,7 +530,7 @@ class Supervisor:
             self.wifi_status.ip_address = ip_address
             self.wifi_status.ssid = ssid
 
-        # 只有从无IP到有IP的跃迁才触发
+        # Only trigger when transitioning from no IP to having an IP
         if (not prev_ip or prev_ip in ["", "0.0.0.0"]) and (ip_address and ip_address not in ["", "0.0.0.0"]):
             logger.debug(f"WiFi connected with IP {ip_address}, notifying GATT manager")
             self.gatt_manager.on_wifi_connected()
@@ -600,7 +600,7 @@ class Supervisor:
     # -------------------------
     def _read_z2m_mqtt_host(self):
         """
-        读取 /opt/zigbee2mqtt/data/configuration.yaml 的 mqtt.server 字段，返回主机名；失败返回 None
+        Read mqtt.server field from /opt/zigbee2mqtt/data/configuration.yaml, return hostname; return None on failure
         """
         config_path = "/opt/zigbee2mqtt/data/configuration.yaml"
         try:
@@ -609,7 +609,7 @@ class Supervisor:
                 return None
             with open(config_path, "r", encoding="utf-8") as f:
                 content = f.read()
-            # 首选使用 yaml 解析
+            # Prefer using yaml parsing
             if yaml:
                 try:
                     data = yaml.safe_load(content) or {}
@@ -619,7 +619,7 @@ class Supervisor:
                 except Exception:
                     server = ""
             else:
-                # 简单解析回退：查找以 'server:' 开头的行
+                # Simple parsing fallback: find lines starting with 'server:'
                 server = ""
                 for line in content.splitlines():
                     line_stripped = line.strip()
@@ -633,12 +633,12 @@ class Supervisor:
             if not server:
                 logger.info("z2m configuration found but mqtt.server is empty")
                 return None
-            # 允许 server 形如 mqtt://host:port 或 tcp:// 或 ws://
+            # Allow server format like mqtt://host:port or tcp:// or ws://
             parsed = urlparse(server)
             hostname = parsed.hostname
-            # 若无法解析（例如直接写了 host:port），做一次兜底
+            # If parsing fails (e.g., directly written as host:port), do a fallback
             if not hostname:
-                # 去掉可能的前缀
+                # Remove possible prefix
                 s = server
                 if "://" in s:
                     s = s.split("://", 1)[1]
@@ -685,10 +685,10 @@ class Supervisor:
 
     def _build_status_payload(self):
         """
-        构建上报的 JSON 负载
+        Build status report JSON payload
         """
         sys_info = self.system_info
-        # 在构建前尽量补齐 IP 与 SSID
+        # Try to fill in IP and SSID before building
         try:
             if not self.wifi_status.ip_address:
                 ip = get_wlan0_ip()
@@ -701,20 +701,20 @@ class Supervisor:
         except Exception:
             pass
         
-        # 计算 uptime（秒）
+        # Calculate uptime (seconds)
         uptime_seconds = int(time.time() - self.start_time)
         
-        # 获取 CPU load (只使用 load_15min)
+        # Get CPU load (only use load_15min)
         cpu_load_15min = self._get_cpu_load_15min()
         
-        # 获取内存使用情况（格式：usedMB/totalMB）
+        # Get memory usage (format: usedMB/totalMB)
         memory_str = self._get_memory_usage()
         
-        # 获取存储信息（使用 http_server.py 的格式）
+        # Get storage information (using http_server.py format)
         storage = sys_info.storage_space if isinstance(sys_info.storage_space, dict) else {"available": "", "total": ""}
         storage_str = f"{storage.get('available', '')}/{storage.get('total', '')}" if storage.get('available') and storage.get('total') else ""
         
-        # 获取已安装的服务列表，过滤掉 "hab"（因为从未正式安装过）
+        # Get installed services list, filter out "hab" (never officially installed)
         try:
             if hasattr(sys_info, 'installed_services'):
                 services_list = [s for s in sys_info.installed_services ]
@@ -741,7 +741,7 @@ class Supervisor:
 
     def _post_status(self, host):
         """
-        发送状态上报；使用 https
+        Send status report; use https
         """
         payload = self._build_status_payload()
         body = json.dumps(payload).encode("utf-8")
@@ -765,11 +765,11 @@ class Supervisor:
                     resp_body = resp.read().decode("utf-8", errors="ignore")
                     return resp.status, resp_body
             except Exception as e:
-                # 若是 HTTPError，尝试读取响应体便于排错
+                # If HTTPError, try to read response body for debugging
                 try:
                     if isinstance(e, HTTPError) and getattr(e, "read", None):
                         err_body = e.read().decode("utf-8", errors="ignore")
-                        # 将HTTP 4xx/5xx带业务JSON的情况视作“正常响应”上报给上层解析，而非错误
+                        # Treat HTTP 4xx/5xx with business JSON as "normal response" for upper layer parsing, not as error
                         logger.info(f"Post to {url} returned HTTP {e.code}, body={err_body}")
                         return e.code, err_body
                     else:
@@ -782,7 +782,7 @@ class Supervisor:
 
     def _handle_pending_commands(self, resp_json: dict):
         """
-        处理返回中的 pendingCommands，如果包含 reboot 则执行重启
+        Handle pendingCommands in response, execute reboot if it contains reboot command
         """
         try:
             data = resp_json.get("data") or {}
@@ -791,17 +791,17 @@ class Supervisor:
                 cmd = (item.get("command") or "").strip().lower()
                 if cmd == "reboot":
                     logger.warning("Received pending command: reboot, executing reboot")
-                    # 给出一点延迟以返回 HTTP
+                    # Give a little delay to return HTTP response
                     threading.Timer(3.0, self.perform_reboot).start()
         except Exception as e:
             logger.warning(f"Handle pendingCommands failed: {e}")
 
     def _status_report_loop(self):
         """
-        每2小时循环一次：检测配置、判断 host、不是 localhost 则上报
+        Loop every 2 hours: check configuration, determine host, report if not localhost
         """
         logger.info("Status report thread started")
-        # 首次启动给予网络初始化的等待时间，最多等待60秒，提前获取IP/SSID
+        # Give network initialization wait time on first startup, wait up to 60 seconds, get IP/SSID in advance
         try:
             logger.info("Status reporter initial delay: waiting up to 60s for network info...")
             waited = 0
@@ -811,7 +811,7 @@ class Supervisor:
                     break
                 time.sleep(1)
                 waited += 1
-            # 补一次查询
+            # Do one more query
             if not self.wifi_status.ip_address:
                 ip = get_wlan0_ip()
                 if ip:
@@ -828,30 +828,33 @@ class Supervisor:
             try:
                 host = self._read_z2m_mqtt_host()
                 
-                # 如果 host 是 localhost 之类的，循环等待30秒，直到 host 不再是 localhost
+                # If host is localhost-like, wait in 30-second cycles until host is no longer localhost
                 while host and host in ("localhost", "127.0.0.1", "::1") and self.running.is_set():
                     logger.info(f"mqtt host is local ({host}), waiting for non-localhost host (30s intervals)...")
-                    # 等待30秒（10个3秒）
-                    for _ in range(10):  # 10次 * 3秒 = 30秒
+                    # Wait 30 seconds (10 times 3 seconds)
+                    for _ in range(10):  # 10 times * 3 seconds = 30 seconds
                         if not self.running.is_set():
                             break
-                        time.sleep(3)  # 每次等待3秒，便于服务退出
+                        time.sleep(3)  # Wait 3 seconds each time, convenient for service exit
                     
                     if not self.running.is_set():
                         break
                     
-                    # 重新读取 host
+                    # Re-read host
                     host = self._read_z2m_mqtt_host()
                     # if host and host not in ("localhost", "127.0.0.1", "::1"):
                     #     logger.info(f"mqtt host changed to non-localhost: {host}, proceeding with status report")
                     #     break
-                    # # 如果仍然是 localhost，while 循环条件仍然满足，会自动继续下一轮30秒等待
+                    # # If still localhost, while loop condition still satisfied, will automatically continue next 30-second wait cycle
+
+                if not self.running.is_set():
+                    break                    
                 
                 if host and host not in ("localhost", "127.0.0.1", "::1"):
                     try:
                         status, body = self._post_status(host)
                         logger.info(f"Status reported to {host}, status={status}")
-                        # 解析返回并处理 pendingCommands
+                        # Parse response and handle pendingCommands
                         try:
                             resp_json = json.loads(body)
                             self._handle_pending_commands(resp_json)
@@ -867,7 +870,7 @@ class Supervisor:
             except Exception as e:
                 logger.warning(f"Status report iteration error: {e}")
             logger.info("Next status report in 2 hours")
-            # 间隔2小时，使用3秒间隔便于服务退出
+            # 2-hour interval, use 3-second intervals for convenient service exit
             for _ in range(2400):  # 2400 * 3s = 7200s = 2h
                 if not self.running.is_set():
                     break
@@ -876,15 +879,34 @@ class Supervisor:
 
     def _start_status_reporter(self):
         """
-        若存在配置文件则启动守护线程；若不存在则不启动
+        Start daemon thread if configuration file exists; do not start if it doesn't exist
         """
         try:
             if self._status_report_thread and self._status_report_thread.is_alive():
                 return
-            # 仅当配置文件存在时启动
+            # Only start if configuration file exists
             if not os.path.exists("/opt/zigbee2mqtt/data/configuration.yaml"):
                 logger.info("z2m configuration not found, status reporter not started")
                 return
+            # Only start status report thread when zigbee2mqtt.service is enabled
+            try:
+                result = subprocess.run(
+                    ["systemctl", "is-enabled", "zigbee2mqtt.service"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                enabled_status = (result.stdout or "").strip()
+                if result.returncode != 0 or enabled_status not in ("enabled", "enabled-runtime"):
+                    logger.info(
+                        f"zigbee2mqtt.service is not enabled (status='{enabled_status}'), "
+                        "status reporter not started"
+                    )
+                    return
+            except Exception as se:
+                logger.warning(f"Failed to check zigbee2mqtt.service enabled status: {se}, status reporter not started")
+                return
+            
             self._status_report_thread = threading.Thread(target=self._status_report_loop, daemon=True)
             self._status_report_thread.start()
             logger.info("Status reporter started")
@@ -978,7 +1000,7 @@ class Supervisor:
         # Stop status reporter
         try:
             if self._status_report_thread and self._status_report_thread.is_alive():
-                # 线程基于 self.running 结束，这里不 join 阻塞
+                # Thread ends based on self.running, do not join and block here
                 logger.info("Status reporter stopping...")
         except Exception:
             pass
@@ -1030,7 +1052,7 @@ class Supervisor:
         self.led.set_led_off_state()
         logger.info("[LED]Switch to other mode...")
 
-        # Start storage manager (启动存储空间管理服务，在最后启动)
+        # Start storage manager (start storage space management service, start last)
         try:
             if self.storage_manager:
                 self.storage_manager.start()
@@ -1072,7 +1094,7 @@ def main():
             sys.exit(1)
         try:
             client = SupervisorClient()
-            # Pass-through; server端负责解析 enable/disable/clear/颜色/状态
+            # Pass-through; server side responsible for parsing enable/disable/clear/colors/states
             resp = client.send_command("led", value, "Led command")
             if resp:
                 print(resp)
