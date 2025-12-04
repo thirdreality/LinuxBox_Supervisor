@@ -737,7 +737,9 @@ async function pollUpgradeProgress(packageName, progressFill, progressText, btn,
             
             // Update progress bar
             progressFill.style.width = `${progress}%`;
-            progressText.textContent = message || `${t('progress.downloading')} ${progress}%`;
+            // Translate OTA message from backend to current language
+            const translatedMessage = message ? I18N.translateOtaMessage(message) : `${t('progress.downloading')} ${progress}%`;
+            progressText.textContent = translatedMessage;
             
             lastProgress = progress;
             
@@ -759,8 +761,9 @@ async function pollUpgradeProgress(packageName, progressFill, progressText, btn,
                 setTimeout(() => loadOtaInfo(), 2000);
                 
             } else if (status === 'failed' || status === 'error') {
-                // Upgrade failed
-                throw new Error(message || 'Upgrade failed');
+                // Upgrade failed - translate error message
+                const translatedError = message ? I18N.translateOtaMessage(message) : t('progress.upgradeFailed', { error: 'Unknown error' });
+                throw new Error(translatedError);
                 
             } else {
                 // Continue polling

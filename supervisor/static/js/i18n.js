@@ -88,13 +88,19 @@ const I18N = {
             'empty.noSoftware': 'No software available for update',
             'empty.updateFailed': 'Failed to get update information',
             
-            // Progress
-            'progress.preparing': 'Preparing upgrade...',
-            'progress.downloading': 'Downloading...',
-            'progress.installing': 'Installing...',
+            // Progress (OTA messages from backend)
+            'progress.preparing': 'Preparing upgrade for {software}...',
+            'progress.downloading': 'Downloading {software} v{version}...',
+            'progress.downloadingSize': 'Downloading... {downloaded}MB / {total}MB',
+            'progress.installing': 'Download complete, installing {software}...',
             'progress.fixingDeps': 'Fixing dependencies...',
             'progress.cleaning': 'Cleaning up...',
-            'progress.complete': 'Upgrade complete!',
+            'progress.complete': '{software} upgrade successful!',
+            'progress.upgraded': '{software} has been upgraded to v{version}',
+            'progress.downloadFailed': 'Download failed: {reason}',
+            'progress.installTimeout': 'Installation timed out',
+            'progress.upgradeFailed': 'Upgrade failed: {error}',
+            'progress.installFailed': 'Installation failed: {error}',
             
             // Confirm Dialog
             'confirm.upgrade': 'Are you sure you want to upgrade {software} to {version}?\n\nPlease do not close the page or disconnect during the upgrade.',
@@ -191,13 +197,19 @@ const I18N = {
             'empty.noSoftware': '没有可更新的软件',
             'empty.updateFailed': '无法获取更新信息',
             
-            // Progress
-            'progress.preparing': '准备升级...',
-            'progress.downloading': '下载中...',
-            'progress.installing': '安装中...',
-            'progress.fixingDeps': '修复依赖...',
-            'progress.cleaning': '清理中...',
-            'progress.complete': '升级完成！',
+            // Progress (OTA messages from backend)
+            'progress.preparing': '准备升级 {software}...',
+            'progress.downloading': '正在下载 {software} v{version}...',
+            'progress.downloadingSize': '下载中... {downloaded}MB / {total}MB',
+            'progress.installing': '下载完成，正在安装 {software}...',
+            'progress.fixingDeps': '正在修复依赖...',
+            'progress.cleaning': '正在清理...',
+            'progress.complete': '{software} 升级成功！',
+            'progress.upgraded': '{software} 已成功升级到 v{version}',
+            'progress.downloadFailed': '下载失败: {reason}',
+            'progress.installTimeout': '安装超时',
+            'progress.upgradeFailed': '升级失败: {error}',
+            'progress.installFailed': '安装失败: {error}',
             
             // Confirm Dialog
             'confirm.upgrade': '确定要将 {software} 升级到 {version} 吗？\n\n升级过程中请勿关闭页面或断开设备连接。',
@@ -294,13 +306,19 @@ const I18N = {
             'empty.noSoftware': '沒有可更新的軟體',
             'empty.updateFailed': '無法取得更新資訊',
             
-            // Progress
-            'progress.preparing': '準備升級...',
-            'progress.downloading': '下載中...',
-            'progress.installing': '安裝中...',
-            'progress.fixingDeps': '修復依賴...',
-            'progress.cleaning': '清理中...',
-            'progress.complete': '升級完成！',
+            // Progress (OTA messages from backend)
+            'progress.preparing': '準備升級 {software}...',
+            'progress.downloading': '正在下載 {software} v{version}...',
+            'progress.downloadingSize': '下載中... {downloaded}MB / {total}MB',
+            'progress.installing': '下載完成，正在安裝 {software}...',
+            'progress.fixingDeps': '正在修復依賴...',
+            'progress.cleaning': '正在清理...',
+            'progress.complete': '{software} 升級成功！',
+            'progress.upgraded': '{software} 已成功升級到 v{version}',
+            'progress.downloadFailed': '下載失敗: {reason}',
+            'progress.installTimeout': '安裝逾時',
+            'progress.upgradeFailed': '升級失敗: {error}',
+            'progress.installFailed': '安裝失敗: {error}',
             
             // Confirm Dialog
             'confirm.upgrade': '確定要將 {software} 升級到 {version} 嗎？\n\n升級過程中請勿關閉頁面或中斷裝置連接。',
@@ -398,6 +416,102 @@ const I18N = {
      */
     getLanguages() {
         return this.languages;
+    },
+    
+    /**
+     * Translate OTA progress message from backend (English) to current language
+     * @param {string} message - English message from backend
+     * @returns {string} Translated message
+     */
+    translateOtaMessage(message) {
+        if (!message) return message;
+        
+        // Pattern matching for different message types
+        const patterns = [
+            // "Preparing upgrade for {software}..."
+            {
+                regex: /^Preparing upgrade for (.+)\.\.\.$/,
+                key: 'progress.preparing',
+                extract: (m) => ({ software: m[1] })
+            },
+            // "Downloading {software} v{version}..."
+            {
+                regex: /^Downloading (.+) v(.+)\.\.\.$/,
+                key: 'progress.downloading',
+                extract: (m) => ({ software: m[1], version: m[2] })
+            },
+            // "Downloading... {downloaded}MB / {total}MB"
+            {
+                regex: /^Downloading\.\.\. (\d+)MB \/ (\d+)MB$/,
+                key: 'progress.downloadingSize',
+                extract: (m) => ({ downloaded: m[1], total: m[2] })
+            },
+            // "Download complete, installing {software}..."
+            {
+                regex: /^Download complete, installing (.+)\.\.\.$/,
+                key: 'progress.installing',
+                extract: (m) => ({ software: m[1] })
+            },
+            // "Fixing dependencies..."
+            {
+                regex: /^Fixing dependencies\.\.\.$/,
+                key: 'progress.fixingDeps',
+                extract: () => ({})
+            },
+            // "Cleaning up..."
+            {
+                regex: /^Cleaning up\.\.\.$/,
+                key: 'progress.cleaning',
+                extract: () => ({})
+            },
+            // "{software} upgrade successful!"
+            {
+                regex: /^(.+) upgrade successful!$/,
+                key: 'progress.complete',
+                extract: (m) => ({ software: m[1] })
+            },
+            // "{software} has been upgraded to v{version}"
+            {
+                regex: /^(.+) has been upgraded to v(.+)$/,
+                key: 'progress.upgraded',
+                extract: (m) => ({ software: m[1], version: m[2] })
+            },
+            // "Download failed: {reason}"
+            {
+                regex: /^Download failed: (.+)$/,
+                key: 'progress.downloadFailed',
+                extract: (m) => ({ reason: m[1] })
+            },
+            // "Installation timed out"
+            {
+                regex: /^Installation timed out$/,
+                key: 'progress.installTimeout',
+                extract: () => ({})
+            },
+            // "Upgrade failed: {error}"
+            {
+                regex: /^Upgrade failed: (.+)$/,
+                key: 'progress.upgradeFailed',
+                extract: (m) => ({ error: m[1] })
+            },
+            // "Installation failed: {error}"
+            {
+                regex: /^Installation failed: (.+)$/,
+                key: 'progress.installFailed',
+                extract: (m) => ({ error: m[1] })
+            }
+        ];
+        
+        for (const pattern of patterns) {
+            const match = message.match(pattern.regex);
+            if (match) {
+                const params = pattern.extract(match);
+                return this.t(pattern.key, params);
+            }
+        }
+        
+        // If no pattern matches, return original message
+        return message;
     }
 };
 

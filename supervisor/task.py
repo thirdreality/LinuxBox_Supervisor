@@ -148,12 +148,20 @@ class TaskManager:
         import shutil
         
         # Component to debian package name mapping
+        # Maps version.json keys to actual debian package names
         component_to_package = {
             "python3": "thirdreality-python3",
             "hacore": "thirdreality-hacore",
             "hacore-config": "thirdreality-hacore-config",
             "otbr-agent": "thirdreality-otbr-agent",
             "zigbee-mqtt": "thirdreality-zigbee-mqtt",
+            "board-firmware": "thirdreality-board-firmware",
+            "music-assistant": "thirdreality-music-assistant",
+            "openhab": "thirdreality-openhab",
+            "zwave": "thirdreality-zwave",
+            "enocean": "thirdreality-enocean",
+            "supervisor": "linuxbox-supervisor",
+            "linux-kernel": "linux-image-current-meson64",
         }
         
         package_name = component_to_package.get(software, software)
@@ -162,7 +170,7 @@ class TaskManager:
         try:
             # Step 1: Prepare
             if progress_callback:
-                progress_callback(5, f"准备升级 {software}...")
+                progress_callback(5, f"Preparing upgrade for {software}...")
             
             # Create cache directory
             cache_dir = os.path.join("/var/cache/apt", software)
@@ -172,7 +180,7 @@ class TaskManager:
             
             # Step 2: Download
             if progress_callback:
-                progress_callback(10, f"正在下载 {software} v{version}...")
+                progress_callback(10, f"Downloading {software} v{version}...")
             
             self.logger.info(f"[OTA] Downloading {software} from {download_url}")
             
@@ -182,12 +190,12 @@ class TaskManager:
                     downloaded = block_num * block_size
                     percent = min(downloaded / total_size * 60, 60)  # Max 60% for download
                     if progress_callback:
-                        progress_callback(10 + int(percent), f"下载中... {downloaded // 1024 // 1024}MB / {total_size // 1024 // 1024}MB")
+                        progress_callback(10 + int(percent), f"Downloading... {downloaded // 1024 // 1024}MB / {total_size // 1024 // 1024}MB")
             
             urllib.request.urlretrieve(download_url, local_file, download_progress_hook)
             
             if progress_callback:
-                progress_callback(70, f"下载完成，正在安装 {software}...")
+                progress_callback(70, f"Download complete, installing {software}...")
             
             # Step 3: Install
             self.logger.info(f"[OTA] Installing {package_name} from {local_file}")
@@ -202,7 +210,7 @@ class TaskManager:
             if result.returncode != 0:
                 # Try to fix dependencies
                 if progress_callback:
-                    progress_callback(85, "正在修复依赖...")
+                    progress_callback(85, "Fixing dependencies...")
                 
                 fix_result = subprocess.run(
                     ["apt-get", "-f", "install", "-y"],
@@ -212,25 +220,25 @@ class TaskManager:
                 )
                 
                 if fix_result.returncode != 0:
-                    raise Exception(f"安装失败: {result.stderr}")
+                    raise Exception(f"Installation failed: {result.stderr}")
             
             if progress_callback:
-                progress_callback(95, "正在清理...")
+                progress_callback(95, "Cleaning up...")
             
             # Clean up downloaded file
             if os.path.exists(local_file):
                 os.remove(local_file)
             
             if progress_callback:
-                progress_callback(100, f"{software} 升级成功!")
+                progress_callback(100, f"{software} upgrade successful!")
             
             if complete_callback:
-                complete_callback(True, f"{software} 已成功升级到 v{version}")
+                complete_callback(True, f"{software} has been upgraded to v{version}")
             
             self.logger.info(f"[OTA] {software} upgrade to v{version} completed successfully")
             
         except urllib.error.URLError as e:
-            error_msg = f"下载失败: {e.reason}"
+            error_msg = f"Download failed: {e.reason}"
             self.logger.error(f"[OTA] Download failed: {e}")
             if progress_callback:
                 progress_callback(100, error_msg)
@@ -238,7 +246,7 @@ class TaskManager:
                 complete_callback(False, error_msg)
                 
         except subprocess.TimeoutExpired:
-            error_msg = "安装超时"
+            error_msg = "Installation timed out"
             self.logger.error(f"[OTA] Installation timed out")
             if progress_callback:
                 progress_callback(100, error_msg)
@@ -246,7 +254,7 @@ class TaskManager:
                 complete_callback(False, error_msg)
                 
         except Exception as e:
-            error_msg = f"升级失败: {str(e)}"
+            error_msg = f"Upgrade failed: {str(e)}"
             self.logger.error(f"[OTA] Upgrade failed: {e}")
             if progress_callback:
                 progress_callback(100, error_msg)
