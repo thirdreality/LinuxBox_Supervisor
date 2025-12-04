@@ -28,6 +28,9 @@ from . import const
 
 from .sysinfo import get_package_version
 
+# Static files directory
+STATIC_DIR = os.path.join(os.path.dirname(__file__), 'static')
+
 # 使用与supervisor相同的logger
 
 class SupervisorHTTPServer:
@@ -145,12 +148,18 @@ class SupervisorHTTPServer:
                     self._logger.info(f"GET request: {path}")
                     
                     # Handle different API endpoints
-                    if path == "/api/wifi/status":
+                    if path == "/" or path == "/index.html":
+                        self._serve_static_file("/index.html")
+                    elif path.startswith("/static/"):
+                        self._serve_static_file(path)
+                    elif path == "/api/wifi/status":
                         self._handle_wifi_status()
                     elif path == "/api/system/info":
                         self._handle_system_info()
                     elif path == "/api/software/info":
                         self._handle_software_info()
+                    elif path == "/api/v2/software/info":
+                        self._handle_software_info_v2()
                     elif path.startswith("/api/service/info"):
                         # Support two ways to get service name:
                         # 1. By path: /api/service/info/<service_name>
@@ -191,7 +200,7 @@ class SupervisorHTTPServer:
                             self.wfile.write(json.dumps({"success": False, "error": "Missing 'task' query parameter."}).encode())
                             return
 
-                        if task_type not in ["zigbee", "thread", "setting"]:
+                        if task_type not in ["zigbee", "thread", "setting", "ota"]:
                             self._set_headers(status_code=400)
                             self.wfile.write(json.dumps({"success": False, "error": f"Invalid task type: {task_type}"}).encode())
                             return
@@ -280,6 +289,8 @@ class SupervisorHTTPServer:
                     self._handle_service_command(post_data)
                 elif path == "/api/setting/update":
                     self._handle_setting_update(post_data)
+                elif path == "/api/ota/upgrade":
+                    self._handle_ota_upgrade(post_data)
                 # elif path == "/api/software/command":
                 #     self._handle_software_command(post_data)
                 # elif path == "/api/zigbee/command":
@@ -542,6 +553,39 @@ class SupervisorHTTPServer:
 
                 self._set_headers()
                 self.wfile.write(json.dumps(result).encode())                
+
+            def _handle_software_info_v2(self):
+                """Handle GET /api/v2/software/info - Query all predefined software versions"""
+                # 预定义的软件包列表
+                predefined_packages = [
+                    "linux-image-current-meson64",
+                    "linuxbox-supervisor",
+                    "thirdreality-board-firmware",
+                    "thirdreality-hacore",
+                    "thirdreality-zigbee-mqtt",
+                    "thirdreality-otbr-agent",
+
+                    "thirdreality-music-assistant",
+                    "thirdreality-openhab",
+                    "thirdreality-zwave",
+                    "thirdreality-enocean",
+
+                    "thirdreality-python3",
+                ]
+                
+                result = {}
+                
+                for package in predefined_packages:
+                    try:
+                        version = get_package_version(package)
+                        if version:  # 只有查询到版本才添加
+                            result[package] = version
+                    except Exception:
+                        # 查询失败时静默跳过，不记录错误日志
+                        pass
+                
+                self._set_headers()
+                self.wfile.write(json.dumps(result).encode())
 
             def _handle_service_info(self, service_name=None): 
                 """Handle service info request, can specify a particular service"""
@@ -1374,6 +1418,117 @@ class SupervisorHTTPServer:
                         self._send_error(f"Error preparing file download: {str(e)}")
                     except:
                         pass  # May have already sent partial response, ignore error
+
+            def _serve_static_file(self, path):
+                """Serve static files from the static directory"""
+                try:
+                    # Security: prevent directory traversal
+                    if '..' in path or path.startswith('//'):
+                        self.send_response(403)
+                        self.end_headers()
+                        self.wfile.write(b"Forbidden")
+                        return
+                    
+                    # Map path to file
+                    if path == '/index.html' or path == '/':
+                        file_path = os.path.join(STATIC_DIR, 'index.html')
+                    else:
+                        # Remove leading /static/ prefix
+                        relative_path = path[8:] if path.startswith('/static/') else path[1:]
+                        file_path = os.path.join(STATIC_DIR, relative_path)
+                    
+                    # Normalize and verify path is within STATIC_DIR
+                    file_path = os.path.normpath(file_path)
+                    if not file_path.startswith(os.path.normpath(STATIC_DIR)):
+                        self.send_response(403)
+                        self.end_headers()
+                        self.wfile.write(b"Forbidden")
+                        return
+                    
+                    # Check if file exists
+                    if not os.path.isfile(file_path):
+                        self.send_response(404)
+                        self.end_headers()
+                        self.wfile.write(b"Not Found")
+                        return
+                    
+                    # Determine MIME type
+                    content_type, _ = mimetypes.guess_type(file_path)
+                    if content_type is None:
+                        content_type = 'application/octet-stream'
+                    
+                    # Read and send file
+                    with open(file_path, 'rb') as f:
+                        content = f.read()
+                    
+                    self.send_response(200)
+                    self.send_header('Content-Type', content_type)
+                    self.send_header('Content-Length', len(content))
+                    self.send_header('Cache-Control', 'no-cache')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(content)
+                    
+                except Exception as e:
+                    self._logger.error(f"Error serving static file {path}: {e}")
+                    self.send_response(500)
+                    self.end_headers()
+                    self.wfile.write(b"Internal Server Error")
+
+            def _handle_ota_upgrade(self, post_data):
+                """Handle OTA upgrade request"""
+                try:
+                    # Parse JSON body
+                    try:
+                        data = json.loads(post_data)
+                    except json.JSONDecodeError:
+                        self._set_headers(status_code=400)
+                        self.wfile.write(json.dumps({"success": False, "error": "Invalid JSON"}).encode())
+                        return
+                    
+                    # Support both old format (software) and new format (package, versionKey)
+                    package_name = data.get('package') or data.get('software')
+                    version_key = data.get('versionKey')
+                    version = data.get('version')
+                    release = data.get('release')
+                    
+                    if not package_name or not version or not release:
+                        self._set_headers(status_code=400)
+                        self.wfile.write(json.dumps({"success": False, "error": "Missing required parameters: package/software, version, release"}).encode())
+                        return
+                    
+                    self._logger.info(f"[OTA] Upgrade request: package={package_name}, versionKey={version_key}, version={version}, release={release}")
+                    
+                    # Build download URL using versionKey if available, otherwise use package name
+                    release_base_url = "https://github.com/thirdreality/LinuxBox-Installer/releases/download"
+                    filename = version_key or package_name
+                    download_url = f"{release_base_url}/{release}/{filename}_{version}.deb"
+                    
+                    # Start OTA upgrade task
+                    started = self._supervisor.task_manager.start_ota_upgrade(
+                        software=package_name,
+                        version=version,
+                        download_url=download_url
+                    )
+                    
+                    if started:
+                        self._set_headers()
+                        self.wfile.write(json.dumps({
+                            "success": True, 
+                            "message": f"OTA upgrade started for {package_name}",
+                            "task": "ota"
+                        }).encode())
+                    else:
+                        self._set_headers(status_code=409)
+                        self.wfile.write(json.dumps({
+                            "success": False, 
+                            "error": "Another upgrade task is already running"
+                        }).encode())
+                        
+                except Exception as e:
+                    self._logger.error(f"Error handling OTA upgrade: {e}")
+                    self._set_headers(status_code=500)
+                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode())
         
         return LinuxBoxHTTPHandler
 

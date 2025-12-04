@@ -28,6 +28,7 @@ class TaskManager:
             "thread": self._create_task_entry(),
             "setting": self._create_task_entry(),
             "wifi": self._create_task_entry(),
+            "ota": self._create_task_entry(),
         }
 
     def _create_task_entry(self, status=TaskStatus.IDLE, progress=0, message="", sub_task=""):
@@ -133,6 +134,132 @@ class TaskManager:
     def start_setting_update_z2m_mqtt(self, config: dict):
         """Start long-running setting update task for z2m mqtt config"""
         return self._start_task("setting", "update_z2m_mqtt", setting_util.run_setting_update_z2m_mqtt, config)
+
+    def start_ota_upgrade(self, software: str, version: str, download_url: str):
+        """Start OTA upgrade task for a specific software package"""
+        return self._start_task("ota", f"upgrade_{software}", self._run_ota_upgrade, software, version, download_url)
+
+    def _run_ota_upgrade(self, software: str, version: str, download_url: str, progress_callback=None, complete_callback=None):
+        """Run OTA upgrade for a specific software package"""
+        import tempfile
+        import urllib.request
+        import urllib.error
+        import os
+        import shutil
+        
+        # Component to debian package name mapping
+        component_to_package = {
+            "python3": "thirdreality-python3",
+            "hacore": "thirdreality-hacore",
+            "hacore-config": "thirdreality-hacore-config",
+            "otbr-agent": "thirdreality-otbr-agent",
+            "zigbee-mqtt": "thirdreality-zigbee-mqtt",
+        }
+        
+        package_name = component_to_package.get(software, software)
+        cache_dir = None
+        
+        try:
+            # Step 1: Prepare
+            if progress_callback:
+                progress_callback(5, f"准备升级 {software}...")
+            
+            # Create cache directory
+            cache_dir = os.path.join("/var/cache/apt", software)
+            os.makedirs(cache_dir, exist_ok=True)
+            
+            local_file = os.path.join(cache_dir, f"{software}_{version}.deb")
+            
+            # Step 2: Download
+            if progress_callback:
+                progress_callback(10, f"正在下载 {software} v{version}...")
+            
+            self.logger.info(f"[OTA] Downloading {software} from {download_url}")
+            
+            # Download with progress tracking
+            def download_progress_hook(block_num, block_size, total_size):
+                if total_size > 0:
+                    downloaded = block_num * block_size
+                    percent = min(downloaded / total_size * 60, 60)  # Max 60% for download
+                    if progress_callback:
+                        progress_callback(10 + int(percent), f"下载中... {downloaded // 1024 // 1024}MB / {total_size // 1024 // 1024}MB")
+            
+            urllib.request.urlretrieve(download_url, local_file, download_progress_hook)
+            
+            if progress_callback:
+                progress_callback(70, f"下载完成，正在安装 {software}...")
+            
+            # Step 3: Install
+            self.logger.info(f"[OTA] Installing {package_name} from {local_file}")
+            
+            result = subprocess.run(
+                ["dpkg", "-i", local_file],
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minute timeout
+            )
+            
+            if result.returncode != 0:
+                # Try to fix dependencies
+                if progress_callback:
+                    progress_callback(85, "正在修复依赖...")
+                
+                fix_result = subprocess.run(
+                    ["apt-get", "-f", "install", "-y"],
+                    capture_output=True,
+                    text=True,
+                    timeout=300
+                )
+                
+                if fix_result.returncode != 0:
+                    raise Exception(f"安装失败: {result.stderr}")
+            
+            if progress_callback:
+                progress_callback(95, "正在清理...")
+            
+            # Clean up downloaded file
+            if os.path.exists(local_file):
+                os.remove(local_file)
+            
+            if progress_callback:
+                progress_callback(100, f"{software} 升级成功!")
+            
+            if complete_callback:
+                complete_callback(True, f"{software} 已成功升级到 v{version}")
+            
+            self.logger.info(f"[OTA] {software} upgrade to v{version} completed successfully")
+            
+        except urllib.error.URLError as e:
+            error_msg = f"下载失败: {e.reason}"
+            self.logger.error(f"[OTA] Download failed: {e}")
+            if progress_callback:
+                progress_callback(100, error_msg)
+            if complete_callback:
+                complete_callback(False, error_msg)
+                
+        except subprocess.TimeoutExpired:
+            error_msg = "安装超时"
+            self.logger.error(f"[OTA] Installation timed out")
+            if progress_callback:
+                progress_callback(100, error_msg)
+            if complete_callback:
+                complete_callback(False, error_msg)
+                
+        except Exception as e:
+            error_msg = f"升级失败: {str(e)}"
+            self.logger.error(f"[OTA] Upgrade failed: {e}")
+            if progress_callback:
+                progress_callback(100, error_msg)
+            if complete_callback:
+                complete_callback(False, error_msg)
+        
+        finally:
+            # Clean up cache directory on error
+            if cache_dir and os.path.exists(cache_dir):
+                try:
+                    shutil.rmtree(cache_dir)
+                except Exception:
+                    pass
 
     def start_thread_mode_enable(self):
         return self._start_task("thread", "enable", thread_util.run_thread_enable)
