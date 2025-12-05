@@ -73,13 +73,21 @@ class SupervisorOTAServer:
             return
         
         try:
-            # 下载版本信息文件
+            # 下载版本信息文件（增加超时与耗时日志）
             version_file = os.path.join(temp_dir, "version.json")
             try:
-                self.logger.info(f"Downloading version info from {self.version_url}")
-                urllib.request.urlretrieve(self.version_url, version_file)
+                self.logger.info(f"[ota] Downloading version info from {self.version_url}")
+                start_ts = time.time()
+                with urllib.request.urlopen(self.version_url, timeout=15) as resp:
+                    with open(version_file, 'wb') as f:
+                        f.write(resp.read())
+                cost = round(time.time() - start_ts, 2)
+                if cost > 5:
+                    self.logger.warning(f"[ota] Download version.json took {cost}s (slow)")
+                else:
+                    self.logger.info(f"[ota] Download version.json ok, cost {cost}s")
             except urllib.error.URLError as e:
-                self.logger.error(f"Failed to download version info: {e}")
+                self.logger.error(f"[ota] Failed to download version info: {e}")
                 return
             
             # 解析版本信息

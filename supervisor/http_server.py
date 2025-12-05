@@ -562,6 +562,7 @@ class SupervisorHTTPServer:
 
             def _handle_software_info_v2(self):
                 """Handle GET /api/v2/software/info - Query all predefined software versions"""
+                self._logger.info("Handling /api/v2/software/info request")
                 # 预定义的软件包列表
                 predefined_packages = [
                     "linux-image-current-meson64",
@@ -590,6 +591,7 @@ class SupervisorHTTPServer:
                         # 查询失败时静默跳过，不记录错误日志
                         pass
                 
+                self._logger.info(f"/api/v2/software/info result count={len(result)}")
                 self._set_headers()
                 self.wfile.write(json.dumps(result).encode())
 
