@@ -223,15 +223,21 @@ class SupervisorHTTPServer:
             
             def _is_special_command(self, path, post_data):
                 """Check if the POST request is a special system command that is allowed when console is disabled"""
-                if path != "/api/system/command":
-                    return False
-                try:
-                    params, _, _ = self._parse_post_data(post_data)
-                    command = params.get("command", "")
-                    return command in ("reboot", "factory_reset")
-                except Exception as e:
-                    self._logger.warning(f"Failed to parse POST data for special command check: {e}")
-                    return False
+                # OTA upgrade is always allowed
+                if path == "/api/ota/upgrade":
+                    return True
+                
+                # System commands: reboot and factory_reset are allowed
+                if path == "/api/system/command":
+                    try:
+                        params, _, _ = self._parse_post_data(post_data)
+                        command = params.get("command", "")
+                        return command in ("reboot", "factory_reset")
+                    except Exception as e:
+                        self._logger.warning(f"Failed to parse POST data for special command check: {e}")
+                        return False
+                
+                return False
 
             def do_POST(self):
                 """Handle POST request"""
