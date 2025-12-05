@@ -231,20 +231,24 @@ class TaskManager:
                     if progress_callback:
                         progress_callback(90, "Running post-installation fix...")
                     
-                    postinst_result = subprocess.run(
-                        [postinst_file, "fix-dependency"],
-                        capture_output=True,
-                        text=True,
-                        timeout=60,
-                        check=False  # Don't raise exception on failure
-                    )
-                    
-                    if postinst_result.returncode == 0:
-                        self.logger.info(f"[OTA] postinst fix-dependency completed successfully for {package_name}")
-                    else:
-                        self.logger.warning(f"[OTA] postinst fix-dependency returned non-zero exit code for {package_name}: {postinst_result.returncode}")
-                        if postinst_result.stderr:
-                            self.logger.warning(f"[OTA] postinst stderr: {postinst_result.stderr}")
+                    try:
+                        postinst_result = subprocess.run(
+                            [postinst_file, "fix-dependency"],
+                            capture_output=True,
+                            text=True,
+                            timeout=300,  # 5 minutes timeout, same as dpkg/apt-get
+                            check=False  # Don't raise exception on failure
+                        )
+                        
+                        if postinst_result.returncode == 0:
+                            self.logger.info(f"[OTA] postinst fix-dependency completed successfully for {package_name}")
+                        else:
+                            self.logger.warning(f"[OTA] postinst fix-dependency returned non-zero exit code for {package_name}: {postinst_result.returncode}")
+                            if postinst_result.stderr:
+                                self.logger.warning(f"[OTA] postinst stderr: {postinst_result.stderr}")
+                    except subprocess.TimeoutExpired:
+                        # Timeout is acceptable, log warning but continue
+                        self.logger.warning(f"[OTA] postinst fix-dependency timed out for {package_name} (timeout: 300s), continuing upgrade")
                 else:
                     self.logger.debug(f"[OTA] postinst file not found for {package_name}, skipping fix-dependency")
             except Exception as e:
