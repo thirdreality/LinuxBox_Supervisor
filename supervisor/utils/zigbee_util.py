@@ -59,7 +59,8 @@ def _service_exists(service_name):
             logging.debug(f"Service unit '{service_name}' exists.")
             return True
         else:
-            logging.warning(f"Service unit '{service_name}' does not exist or systemctl cat failed: {result.stderr.strip()}")
+            # 不存在时仅输出 debug，避免正常缺失服务刷屏
+            logging.debug(f"Service unit '{service_name}' does not exist or systemctl cat failed: {result.stderr.strip()}")
             return False
     except FileNotFoundError:
         logging.error("systemctl command not found. Cannot check service existence.")
@@ -1038,13 +1039,10 @@ def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):
 
 def get_ha_zigbee_mode(config_file="/var/lib/homeassistant/homeassistant/.storage/core.config_entries"):
     """
-    根据用户规则判断 Zigbee 模式：
-    1) 若 zigbee2mqtt.service 与 home-assistant.service 都不存在 => 'none'
-    2) 若 zigbee2mqtt.service 为 enabled，且 home-assistant.service 不存在或为 disabled => 'z2m'
-    3) 若 zigbee2mqtt.service 不存在或为 disabled，且 home-assistant.service 为 enabled => 读取 HomeAssistant 配置：
-       - 有 zha 关键字 => 'zha'
-       - 有 mqtt 关键字 => 'z2m'
-       - 都没有或文件不存在/不可读 => 'none'
+    Zigbee 模式判定顺序：
+    1) 两个服务都不存在 => none
+    2) 先看运行态：z2m 运行则 z2m；HA 运行则读 HA 配置决定 zha/z2m
+    3) 都未运行时，用 enabled + HA 配置兜底：z2m 启用优先；否则 HA 启用则读配置；否则 none
     """
 
     def _is_service_enabled(service_name: str) -> bool:
@@ -1063,20 +1061,23 @@ def get_ha_zigbee_mode(config_file="/var/lib/homeassistant/homeassistant/.storag
             logging.warning(f"Failed to check is-enabled for {service_name}: {e}")
             return False
 
-    # 先判断服务是否存在
-    has_z2m_service = _service_exists("zigbee2mqtt.service")
-    has_ha_service = _service_exists("home-assistant.service")
+    def _is_service_active(service_name: str) -> bool:
+        try:
+            result = subprocess.run(
+                ["systemctl", "is-active", service_name],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return result.stdout.strip() == "active"
+        except FileNotFoundError:
+            logging.warning("systemctl not found when checking is-active.")
+            return False
+        except Exception as e:
+            logging.warning(f"Failed to check is-active for {service_name}: {e}")
+            return False
 
-    if not has_z2m_service and not has_ha_service:
-        return 'none'
-
-    # zigbee2mqtt enabled 且 HA 不存在或 disabled => mqtt
-    if has_z2m_service and _is_service_enabled("zigbee2mqtt.service"):
-        if (not has_ha_service) or (has_ha_service and not _is_service_enabled("home-assistant.service")):
-            return 'z2m'
-
-    # z2m disabled 且 HA enabled => 检查 HA 配置
-    if (not _is_service_enabled("zigbee2mqtt.service")) and has_ha_service and _is_service_enabled("home-assistant.service"):
+    def _get_mode_from_ha_config() -> str:
         attempts = 0
         max_attempts = 3
         retry_delay_seconds = 0.5
@@ -1104,7 +1105,43 @@ def get_ha_zigbee_mode(config_file="/var/lib/homeassistant/homeassistant/.storag
                 logging.error(f"Unexpected error while reading HomeAssistant config_entries: {e}")
                 return 'none'
 
-    # 其他情况均视为 none（未覆盖到的组合）
+    # 是否存在
+    has_z2m_service = _service_exists("zigbee2mqtt.service")
+    has_ha_service = _service_exists("home-assistant.service")
+
+    if not has_z2m_service and not has_ha_service:
+        return 'none'
+
+    # 先看运行态
+    z2m_active = has_z2m_service and _is_service_active("zigbee2mqtt.service")
+    ha_active = has_ha_service and _is_service_active("home-assistant.service")
+
+    if z2m_active and not ha_active:
+        return 'z2m'
+    if ha_active and not z2m_active:
+        return _get_mode_from_ha_config()
+    if z2m_active and ha_active:
+        # 两者都在跑，按 HA 配置判定；配置缺失时倾向 z2m
+        mode = _get_mode_from_ha_config()
+        return mode if mode != 'none' else 'z2m'
+
+    # 未运行，按 enabled + 配置兜底
+    z2m_enabled = has_z2m_service and _is_service_enabled("zigbee2mqtt.service")
+    ha_enabled = has_ha_service and _is_service_enabled("home-assistant.service")
+
+    if z2m_enabled and not ha_enabled:
+        return 'z2m'
+    if ha_enabled:
+        mode = _get_mode_from_ha_config()
+        if mode != 'none':
+            return mode
+        # HA 启用但配置缺失，若 z2m 也启用则偏向 z2m
+        if z2m_enabled:
+            return 'z2m'
+
+    if z2m_enabled:
+        return 'z2m'
+
     return 'none'
 
 def _start_pairing_led_timer(led_controller, duration):
