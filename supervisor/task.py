@@ -222,6 +222,35 @@ class TaskManager:
                 if fix_result.returncode != 0:
                     raise Exception(f"Installation failed: {result.stderr}")
             
+            # Step 4: Run postinst fix-dependency (if dpkg -i succeeded)
+            # This command may fail, but should not affect other operations
+            try:
+                postinst_file = f"/var/lib/dpkg/info/{package_name}.postinst"
+                if os.path.exists(postinst_file):
+                    self.logger.info(f"[OTA] Running postinst fix-dependency for {package_name}")
+                    if progress_callback:
+                        progress_callback(90, "Running post-installation fix...")
+                    
+                    postinst_result = subprocess.run(
+                        [postinst_file, "fix-dependency"],
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                        check=False  # Don't raise exception on failure
+                    )
+                    
+                    if postinst_result.returncode == 0:
+                        self.logger.info(f"[OTA] postinst fix-dependency completed successfully for {package_name}")
+                    else:
+                        self.logger.warning(f"[OTA] postinst fix-dependency returned non-zero exit code for {package_name}: {postinst_result.returncode}")
+                        if postinst_result.stderr:
+                            self.logger.warning(f"[OTA] postinst stderr: {postinst_result.stderr}")
+                else:
+                    self.logger.debug(f"[OTA] postinst file not found for {package_name}, skipping fix-dependency")
+            except Exception as e:
+                # Log warning but don't fail the upgrade
+                self.logger.warning(f"[OTA] postinst execution error for {package_name}: {e}")
+            
             if progress_callback:
                 progress_callback(95, "Cleaning up...")
             

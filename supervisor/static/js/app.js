@@ -554,10 +554,10 @@ function renderOtaTable(upgrades) {
         <table class="ota-table">
             <thead>
                 <tr>
-                    <th style="width: 50px;">${t('ota.table.no')}</th>
-                    <th>${t('ota.table.software')}</th>
-                    <th style="width: 160px; white-space: nowrap;">${t('ota.table.version')}</th>
-                    <th style="width: 140px;">${t('ota.table.upgrade')}</th>
+                    <th style="width: 10%;">${t('ota.table.no')}</th>
+                    <th style="width: 30%;">${t('ota.table.software')}</th>
+                    <th style="width: 30%; white-space: nowrap;">${t('ota.table.version')}</th>
+                    <th style="width: 30%;">${t('ota.table.upgrade')}</th>
                 </tr>
             </thead>
             <tbody>

@@ -78,7 +78,7 @@ const I18N = {
             'software.thirdreality-zwave': 'Z-Wave',
             'software.thirdreality-enocean': 'EnOcean',
             'software.linuxbox-supervisor': 'LinuxBox Supervisor',
-            'software.linux-image-current-meson64': 'Linux Kernel',
+            'software.linux-image-current-meson64': 'LinuxBox Kernel',
             
             // Loading & Empty States
             'loading': 'Loading...',
@@ -187,7 +187,7 @@ const I18N = {
             'software.thirdreality-zwave': 'Z-Wave',
             'software.thirdreality-enocean': 'EnOcean',
             'software.linuxbox-supervisor': 'LinuxBox 管理器',
-            'software.linux-image-current-meson64': 'Linux 内核',
+            'software.linux-image-current-meson64': 'LinuxBox 内核',
             
             // Loading & Empty States
             'loading': '加载中...',
@@ -296,7 +296,7 @@ const I18N = {
             'software.thirdreality-zwave': 'Z-Wave',
             'software.thirdreality-enocean': 'EnOcean',
             'software.linuxbox-supervisor': 'LinuxBox 管理器',
-            'software.linux-image-current-meson64': 'Linux 核心',
+            'software.linux-image-current-meson64': 'LinuxBox 核心',
             
             // Loading & Empty States
             'loading': '載入中...',
