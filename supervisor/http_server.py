@@ -227,6 +227,10 @@ class SupervisorHTTPServer:
                 if path == "/api/ota/upgrade":
                     return True
                 
+                # Setting update is always allowed
+                if path == "/api/setting/update":
+                    return True
+                
                 # System commands: reboot and factory_reset are allowed
                 if path == "/api/system/command":
                     try:
