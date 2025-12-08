@@ -69,7 +69,7 @@ class SystemInfo:
         # Model ID (the actual model number)
         self.model_id = release_info.get("MODLE", "3RLB01081MH")
         # Device Name (set by SystemInfoUpdater based on MAC)
-        self.name = "3RHUB-XXXX"
+        self.name = "3RCARE-XXXX"
         # Pretty name (keep for reference)
         self.pretty_name = release_info.get("PRETTY_NAME", DEVICE_MODEL_NAME)
                 
@@ -186,7 +186,7 @@ class SystemInfoUpdater:
                 mac_str = get_wlan0_mac_for_localname()
                 if mac_str:
                     # Use same algorithm as btgatt-server.c and LinuxBoxAdvertisement
-                    device_name = f"3RHUB-{mac_str[-8:]}"  # Use only last 8 characters of MAC address
+                    device_name = f"3RCARE-{mac_str[-8:]}"  # Use only last 8 characters of MAC address
                     self.logger.info(f"Generated device name from MAC (attempt {attempt + 1}): {device_name}")
                     return device_name
                 else:
@@ -206,14 +206,14 @@ class SystemInfoUpdater:
                 if machine_id and len(machine_id) >= 8:
                     # Use last 8 characters and convert to uppercase
                     machine_suffix = machine_id[-8:].upper()
-                    fallback_name = f"3RHUB-{machine_suffix}"
+                    fallback_name = f"3RCARE-{machine_suffix}"
                     self.logger.info(f"Using machine-id based fallback name: {fallback_name}")
                     return fallback_name
         except Exception as e:
             self.logger.warning(f"Failed to read /etc/machine-id: {e}")
         
         # Final fallback if machine-id is also unavailable
-        final_fallback = "3RHUB-EMB"
+        final_fallback = "3RCARE-EMB"
         self.logger.warning(f"All attempts failed, using final fallback: {final_fallback}")
         return final_fallback
     
@@ -229,7 +229,7 @@ class SystemInfoUpdater:
             sys_info = self.supervisor.system_info
             
             # Update device name if it's still the default
-            if sys_info.name in ["3RHUB-XXXX", "3RHUB-EMB"] or not sys_info.name:
+            if sys_info.name in ["3RCARE-XXXX", "3RCARE-EMB"] or not sys_info.name:
                 device_name = self._generate_device_name_with_retry()
                 sys_info.name = device_name
                 self.logger.info(f"Updated device name: {device_name}")
