@@ -10,6 +10,48 @@ from .const import DEVICE_MODEL_NAME, DEVICE_BUILD_NUMBER
 from .hardware import LedState
 
 T3R_RELEASE_FILE = "/etc/t3r-release"
+ARMBIAN_RELEASE_FILE = "/etc/armbian-release"
+
+def _get_armbian_release_info():
+    """Parses the /etc/armbian-release file and returns a dictionary."""
+    release_info = {}
+    if not os.path.exists(ARMBIAN_RELEASE_FILE):
+        logging.warning(f"Armbian release file not found: {ARMBIAN_RELEASE_FILE}")
+        return release_info
+    
+    try:
+        with open(ARMBIAN_RELEASE_FILE, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                try:
+                    key, value = line.split('=', 1)
+                    if value.startswith('"') and value.endswith('"'):
+                        value = value[1:-1]
+                    elif value.startswith("'") and value.endswith("'"):
+                        value = value[1:-1]
+                    release_info[key.strip()] = value.strip()
+                except ValueError:
+                    logging.warning(f"Skipping malformed line in {ARMBIAN_RELEASE_FILE}: {line}")
+    except IOError as e:
+        logging.error(f"Error reading {ARMBIAN_RELEASE_FILE}: {e}")
+        
+    return release_info
+
+def _get_device_name_prefix():
+    """Returns device name prefix based on BOARD value in /etc/armbian-release"""
+    armbian_info = _get_armbian_release_info()
+    board = armbian_info.get("BOARD", "")
+    
+    if board == "trhubv3":
+        return "3RHUB-"
+    elif board == "trhubv3b":
+        return "3RCARE-"
+    else:
+        # Default to 3RHUB- as fallback
+        logging.warning(f"Unknown BOARD value '{board}', defaulting to 3RHUB-")
+        return "3RHUB-"
 
 def _get_t3r_release_info():
     """Parses the /etc/t3r-release file and returns a dictionary."""
@@ -63,13 +105,14 @@ class OpenHabInfo:
 class SystemInfo:
     def __init__(self):
         release_info = _get_t3r_release_info()
+        device_prefix = _get_device_name_prefix()
 
         # Device Model (for compatibility, use PRETTY_NAME)
         self.model = release_info.get("PRETTY_NAME", DEVICE_MODEL_NAME)
         # Model ID (the actual model number)
         self.model_id = release_info.get("MODLE", "3RLB01081MH")
         # Device Name (set by SystemInfoUpdater based on MAC)
-        self.name = "3RCARE-XXXX"
+        self.name = f"{device_prefix}XXXX"
         # Pretty name (keep for reference)
         self.pretty_name = release_info.get("PRETTY_NAME", DEVICE_MODEL_NAME)
                 
@@ -78,8 +121,8 @@ class SystemInfo:
         self.support_zigbee=True
         self.support_thread=True  # Fixed to always support thread        
         self.mode = "homeassistant-core"
-        self.memory_size = ""  # 设备内存大小，单位为MB
-        self.storage_space = ""  # 存储空间大小，单位为GB
+        self.memory_size = ""  # Device memory size in MB
+        self.storage_space = ""  # Storage space size in GB
         self.hainfo = HomeAssistantInfo()
         self.openhabinfo = OpenHabInfo()
         self.installed_services = []  # Cache of installed services (checked at startup)
@@ -93,9 +136,9 @@ class ProcedureInfo:
 
 
 def get_package_version(package_name):
-    """查询指定包的版本号"""
+    """Query version number of specified package"""
     try:
-        # 使用dpkg-query命令查询包版本
+        # Use dpkg-query command to query package version
         result = subprocess.run(
             ["dpkg-query", "-W", "-f=${Version}", package_name],
             capture_output=True,
@@ -111,16 +154,16 @@ def get_package_version(package_name):
         return ""
 
 def get_memory_size():
-    """获取设备内存大小，单位为MB"""
+    """Get device memory size in MB"""
     try:
-        # 使用/proc/meminfo获取内存信息
+        # Use /proc/meminfo to get memory information
         with open('/proc/meminfo', 'r') as f:
             meminfo = f.read()
         
-        # 使用正则表达式提取MemTotal值
+        # Use regex to extract MemTotal value
         match = re.search(r'MemTotal:\s+(\d+)\s+kB', meminfo)
         if match:
-            # 将kB转换为MB并返回
+            # Convert kB to MB and return
             mem_kb = int(match.group(1))
             mem_mb = mem_kb // 1024
             return str(mem_mb)
@@ -131,9 +174,9 @@ def get_memory_size():
         return ""
 
 def get_storage_space():
-    """获取存储空间大小，返回总空间(GB)和可用空间(GB)"""
+    """Get storage space size, returns total space (GB) and available space (GB)"""
     try:
-        # 使用df命令获取根分区信息
+        # Use df command to get root partition information
         result = subprocess.run(
             ["df", "-h", "/"],
             capture_output=True,
@@ -142,14 +185,14 @@ def get_storage_space():
         )
         
         if result.returncode == 0:
-            # 解析输出，跳过标题行
+            # Parse output, skip header line
             lines = result.stdout.strip().split('\n')
             if len(lines) >= 2:
-                # 分割行并获取总大小和可用大小
+                # Split line and get total size and available size
                 parts = lines[1].split()
                 if len(parts) >= 4:
-                    total_size = parts[1]  # 例如：7.8G
-                    avail_size = parts[3]  # 例如：3.2G
+                    total_size = parts[1]  # e.g.: 7.8G
+                    avail_size = parts[3]  # e.g.: 3.2G
                     return {"total": total_size, "available": avail_size}
         
         return {"total": "", "available": ""}
@@ -181,12 +224,15 @@ class SystemInfoUpdater:
         from .utils.wifi_utils import get_wlan0_mac_for_localname
         import time
         
+        # Get device name prefix based on BOARD value
+        device_prefix = _get_device_name_prefix()
+        
         for attempt in range(max_retries):
             try:
                 mac_str = get_wlan0_mac_for_localname()
                 if mac_str:
                     # Use same algorithm as btgatt-server.c and LinuxBoxAdvertisement
-                    device_name = f"3RCARE-{mac_str[-8:]}"  # Use only last 8 characters of MAC address
+                    device_name = f"{device_prefix}{mac_str[-8:]}"  # Use only last 8 characters of MAC address
                     self.logger.info(f"Generated device name from MAC (attempt {attempt + 1}): {device_name}")
                     return device_name
                 else:
@@ -206,14 +252,14 @@ class SystemInfoUpdater:
                 if machine_id and len(machine_id) >= 8:
                     # Use last 8 characters and convert to uppercase
                     machine_suffix = machine_id[-8:].upper()
-                    fallback_name = f"3RCARE-{machine_suffix}"
+                    fallback_name = f"{device_prefix}{machine_suffix}"
                     self.logger.info(f"Using machine-id based fallback name: {fallback_name}")
                     return fallback_name
         except Exception as e:
             self.logger.warning(f"Failed to read /etc/machine-id: {e}")
         
         # Final fallback if machine-id is also unavailable
-        final_fallback = "3RCARE-EMB"
+        final_fallback = f"{device_prefix}EMB"
         self.logger.warning(f"All attempts failed, using final fallback: {final_fallback}")
         return final_fallback
     
@@ -229,7 +275,9 @@ class SystemInfoUpdater:
             sys_info = self.supervisor.system_info
             
             # Update device name if it's still the default
-            if sys_info.name in ["3RCARE-XXXX", "3RCARE-EMB"] or not sys_info.name:
+            device_prefix = _get_device_name_prefix()
+            default_names = [f"{device_prefix}XXXX", f"{device_prefix}EMB"]
+            if sys_info.name in default_names or not sys_info.name:
                 device_name = self._generate_device_name_with_retry()
                 sys_info.name = device_name
                 self.logger.info(f"Updated device name: {device_name}")
@@ -269,7 +317,7 @@ class SystemInfoUpdater:
 
             ha_info.enabled = ha_info.installed
             
-            # 设置LED
+            # Set LED
             if hasattr(self.supervisor, 'set_led_state'):
                 if not ha_info.installed:
                     self.logger.info("Software not fully installed, set LED SYS_SYSTEM_CORRUPTED")
@@ -359,8 +407,8 @@ class SystemInfoUpdater:
 
     def update_software_status_and_led(self):
         """
-        更新HomeAssistant和OpenHAB的installed/enabled状态，并根据结果设置LED状态。
-        只依赖core和python字段。
+        Update installed/enabled status of HomeAssistant and OpenHAB, and set LED state based on result.
+        Only depends on core and python fields.
         """
         if not hasattr(self.supervisor, 'system_info'):
             self.logger.error("Supervisor does not have system_info attribute")
@@ -393,7 +441,7 @@ class SystemInfoUpdater:
             ha_info.installed = bool(ha_info.core or ha_info.z2m)
             ha_info.enabled = ha_info.installed
 
-            # 设置LED
+            # Set LED
             if hasattr(self.supervisor, 'set_led_state'):
                 if ha_info.installed:
                     self.logger.info("Software installed, clear LED SYS_SYSTEM_CORRUPTED")

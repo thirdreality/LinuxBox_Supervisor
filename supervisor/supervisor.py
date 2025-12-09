@@ -615,7 +615,6 @@ class Supervisor:
                     data = yaml.safe_load(content) or {}
                     mqtt_cfg = data.get("mqtt") or {}
                     server = mqtt_cfg.get("server") or ""
-                    logger.info(f"z2m configuration loaded via yaml, mqtt.server='{server}'")
                 except Exception:
                     server = ""
             else:
@@ -629,7 +628,6 @@ class Supervisor:
                         if len(parts) == 2:
                             server = parts[1].strip()
                         break
-                logger.info(f"z2m configuration loaded via fallback, mqtt.server='{server}'")
             if not server:
                 logger.info("z2m configuration found but mqtt.server is empty")
                 return None
@@ -643,7 +641,6 @@ class Supervisor:
                 if "://" in s:
                     s = s.split("://", 1)[1]
                 hostname = s.split("/")[0].split(":")[0].strip()
-            logger.info(f"Parsed mqtt host from configuration: '{hostname}'")
             return hostname or None
         except Exception as e:
             logger.warning(f"Failed to read z2m configuration: {e}")
