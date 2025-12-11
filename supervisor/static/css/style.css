@@ -33,8 +33,8 @@
     --shadow-glow: 0 0 0 2px var(--accent-glow);
     
     /* Typography */
-    --font-mono: 'JetBrains Mono', monospace;
-    --font-sans: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'Courier New', Courier, monospace;
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
     
     /* Transitions */
     --transition-fast: 150ms ease;
