@@ -206,7 +206,12 @@ class GpioLed:
             'blue'
         )
 
-    def off(self): self.set_color(False, False, False)
+    def off(self): 
+        """Force turn off all LEDs, bypassing _enabled check"""
+        # Directly set GPIO without checking _enabled to ensure LEDs can always be turned off
+        self._set_gpio_value(self.leds['RED']['chip'], self.leds['RED']['line'], 0, 'red')
+        self._set_gpio_value(self.leds['GREEN']['chip'], self.leds['GREEN']['line'], 0, 'green')
+        self._set_gpio_value(self.leds['BLUE']['chip'], self.leds['BLUE']['line'], 0, 'blue')
     def red(self): self.set_color(True, False, False)
     def green(self): self.set_color(False, True, False)
     def blue(self): self.set_color(False, False, True)
@@ -307,13 +312,14 @@ class GpioLed:
         self.logger.info(f"LED module enabled, re-applying current state: {state}")
 
     def disable(self):
-        self._enabled = False
-        self._persist_enabled()
-        # Turn off immediately and ignore further updates
+        # Turn off LED first before disabling (to ensure GPIO is actually turned off)
         try:
             self.off()
         except Exception:
             pass
+        # Then disable and persist the setting
+        self._enabled = False
+        self._persist_enabled()
         self.logger.info("LED module disabled: LEDs turned off and commands ignored")
 
     def is_enabled(self):
