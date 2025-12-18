@@ -36,7 +36,8 @@ class LedState(Enum):
     REBOOT = "reboot" # 白灯
     FACTORY_RESET = "factory_reset"  # 恢复出厂设置: 红色快闪（4Hz）
     STARTUP = "startup" # 白灯
-    STARTUP_OFF = "startup_off" # 白灯    
+    STARTUP_OFF = "startup_off" # 白灯
+    CRITICAL_TOGGLE_RED = "critical_toggle_red"  # Toggle功能: 红灯常亮
 
      # 系统级状态（高优先级）
     SYS_FIRMWARE_UPDATING = "sys_firmware_updating"  # 设备升级中: 绿色类呼吸灯效果 (1Hz pulse)
@@ -84,7 +85,8 @@ class GpioLed:
             LedState.USER_EVENT_MAGENTA, LedState.USER_EVENT_OFF
         ]
         self.system_critical_states = [ # Tier 2
-            LedState.REBOOT, LedState.STARTUP, LedState.STARTUP_OFF, LedState.FACTORY_RESET
+            LedState.REBOOT, LedState.STARTUP, LedState.STARTUP_OFF, 
+            LedState.FACTORY_RESET, LedState.CRITICAL_TOGGLE_RED
         ]
         self.system_high_priority_states = [ # Tier 3 (Firmware update operations)
             LedState.SYS_FIRMWARE_UPDATING, LedState.SYS_EVENT_OFF
@@ -176,6 +178,10 @@ class GpioLed:
 
     def set_color(self, red, green, blue):
         """Set LED colors using gpioset"""
+        # 如果LED模块被禁用，不操作GPIO
+        if not self._enabled:
+            return
+            
         # Set RED LED
         self._set_gpio_value(
             self.leds['RED']['chip'], 
@@ -294,9 +300,11 @@ class GpioLed:
     def enable(self):
         self._enabled = True
         self._persist_enabled()
-        # Re-apply current state
-        self.led_control_event.set()
-        self.logger.info("LED module enabled")
+        # Re-apply current state to GPIO
+        with self.state_lock:
+            state = self.current_led_state
+        self.process_led_state(state)
+        self.logger.info(f"LED module enabled, re-applying current state: {state}")
 
     def disable(self):
         self._enabled = False
@@ -313,9 +321,8 @@ class GpioLed:
 
     def set_led_state(self, state):
         """Set the current LED state based on priority levels."""
-        # Ignore任何更新当禁用，但允许 STARTUP_OFF 以完成启动阶段的收尾清除
-        if not self._enabled and state != LedState.STARTUP_OFF:
-            return
+        # 始终更新内部状态，不受 _enabled 影响
+        # GPIO操作在 set_color 中根据 _enabled 决定是否执行
         with self.state_lock:
             old_current_led_state = self.current_led_state
             state_changed = False
@@ -449,10 +456,7 @@ class GpioLed:
     
     def process_led_state(self, state):
         """Process the LED state and set appropriate color"""   
-        # Disabled时：强制关灯，但若是STARTUP_OFF则允许进入以完成开机序列收尾
-        if not self._enabled and state != LedState.STARTUP_OFF:
-            self.off()
-            return
+        # 处理LED状态，GPIO操作在 set_color 中根据 _enabled 决定是否执行
         match state:
             case LedState.REBOOT:
                 self.white() # Solid white during the brief reboot trigger phase
@@ -474,6 +478,17 @@ class GpioLed:
                 self.magenta()
             case LedState.STARTUP:
                 self.white()
+            case LedState.CRITICAL_TOGGLE_RED:
+                # 红黄交替闪烁：红灯闪一次，黄灯闪一次，循环
+                cycle = self.step_counter % 4
+                if cycle == 0:
+                    self.red()      # 红灯亮
+                elif cycle == 1:
+                    self.off()      # 红灯灭
+                elif cycle == 2:
+                    self.yellow()   # 黄灯亮
+                else:  # cycle == 3
+                    self.off()      # 黄灯灭
             case LedState.SYS_WIFI_CONFIG_PENDING: # Blue fast flash (2Hz)
                 if self.step_counter % 2 == 0:
                     self.blue()
@@ -521,7 +536,7 @@ class GpioLed:
                     self.cyan()
                 else:
                     self.off()
-            case LedState.FACTORY_RESET: # Example: Red very fast blink
+            case LedState.FACTORY_RESET: # Red slow blink (1Hz)
                 if self.step_counter % 2 == 0:
                     self.red()
                 else:
@@ -545,9 +560,8 @@ class GpioLed:
     
     def clear_led_state(self, state):
         """Clear the priority level that the specified state belongs to."""
-        # Ignore any state updates when disabled
-        if not self._enabled:
-            return
+        # 始终更新内部状态，不受 _enabled 影响
+        # GPIO操作在 set_color 中根据 _enabled 决定是否执行
         with self.state_lock:
             old_current_led_state = self.current_led_state
             state_changed = False
@@ -671,11 +685,55 @@ class GpioLed:
             case LedState.REBOOT:
                 calculated_reset_delay = 0.5
             case LedState.FACTORY_RESET:
-                calculated_reset_delay = 0.125 # 4Hz
+                calculated_reset_delay = 0.5  # 1Hz (慢闪，红色闪烁)
+            case LedState.CRITICAL_TOGGLE_RED:
+                calculated_reset_delay = 0.2  # 快闪，红黄交替（完整周期0.8秒）
             case _:
                 pass # calculated_reset_delay remains None
         
         return calculated_reset_delay
+
+    def toggle_critical_red(self):
+        """
+        Toggle功能：在system_critical_priority_state层面控制红灯开关
+        - 首次调用：如果当前不是红灯，就显示红灯（CRITICAL_TOGGLE_RED）
+        - 再次调用：如果当前是红灯，就清除红灯
+        """
+        with self.state_lock:
+            if self.system_critical_priority_state == LedState.CRITICAL_TOGGLE_RED:
+                # 当前是红灯，清除它
+                self.logger.info("Toggle: Clearing CRITICAL_TOGGLE_RED")
+                self.system_critical_priority_state = None
+                
+                # 重新计算当前LED状态
+                new_current_led_state = self._recalculate_current_led_state()
+                
+                if self.current_led_state != new_current_led_state:
+                    self.current_led_state = new_current_led_state
+                    self.step_counter = 0
+                    
+                    calculated_reset_delay = self._calculate_timer_delay(self.current_led_state)
+                    if calculated_reset_delay is not None:
+                        self.trigger_led_control(reset_delay=calculated_reset_delay)
+                    else:
+                        self.led_control_event.set()
+            else:
+                # 当前不是红灯，设置为红灯
+                self.logger.info("Toggle: Setting CRITICAL_TOGGLE_RED")
+                self.system_critical_priority_state = LedState.CRITICAL_TOGGLE_RED
+                
+                # 重新计算当前LED状态
+                new_current_led_state = self._recalculate_current_led_state()
+                
+                if self.current_led_state != new_current_led_state:
+                    self.current_led_state = new_current_led_state
+                    self.step_counter = 0
+                    
+                    calculated_reset_delay = self._calculate_timer_delay(self.current_led_state)
+                    if calculated_reset_delay is not None:
+                        self.trigger_led_control(reset_delay=calculated_reset_delay)
+                    else:
+                        self.led_control_event.set()
 
 # -----------------------------------------------------------------------------
 

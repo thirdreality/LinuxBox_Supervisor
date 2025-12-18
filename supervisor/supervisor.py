@@ -120,12 +120,28 @@ class Supervisor:
     
 
     def set_led_state(self, state):
-        # Forward the LED state to the GpioLed instance
-        self.led.set_led_state(state)
+        """Set LED state with safety checks"""
+        if self.led and hasattr(self.led, 'set_led_state'):
+            self.led.set_led_state(state)
+        else:
+            logger.warning("LED controller not available or missing set_led_state method")
 
     def clear_led_state(self, state):
-        # Forward the LED state clearing to the GpioLed instance
-        self.led.clear_led_state(state)
+        """Clear LED state with safety checks"""
+        if self.led and hasattr(self.led, 'clear_led_state'):
+            self.led.clear_led_state(state)
+        else:
+            logger.warning("LED controller not available or missing clear_led_state method")
+
+    def toggle_led_critical_red(self):
+        """Toggle the critical red LED state (red-yellow alternating flash)"""
+        if self.led and hasattr(self.led, 'toggle_critical_red'):
+            self.led.toggle_critical_red()
+            logger.info("LED critical red toggle executed")
+            return "LED critical red toggled"
+        else:
+            logger.error("LED toggle function not available")
+            return "LED toggle function not available"
 
     def set_ota_command(self, cmd):
         logger.info(f"OTA Command: param={cmd}")

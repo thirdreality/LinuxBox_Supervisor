@@ -291,6 +291,12 @@ class SupervisorProxy:
                             self.supervisor.set_led_state(LedState.USER_EVENT_OFF)
                             return "LED user event cleared"
                         return "LED clear failed"
+                    # "toggle" for toggling critical red LED (red-yellow alternating flash)
+                    if state_str in ("toggle",):
+                        if self.supervisor and hasattr(self.supervisor, 'toggle_led_critical_red'):
+                            result = self.supervisor.toggle_led_critical_red()
+                            return result
+                        return "LED toggle failed"
 
                     # Support mapping of simple color names to USER_EVENT
                     user_event_map = {
