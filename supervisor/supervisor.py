@@ -522,7 +522,7 @@ class Supervisor:
         except Exception as e:
             logger.error(f"Failed to start Zeroconf on first connect: {e}", exc_info=True)
         # Network is up, safe to launch status reporting
-        self._start_status_reporter()
+        # self._start_status_reporter()
 
     def onNetworkDisconnect(self):
         logger.info("## Supervisor: Network onNetworkDisconnect() ...")

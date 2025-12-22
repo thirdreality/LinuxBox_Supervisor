@@ -2,7 +2,7 @@
 
 """Constants."""
 
-VERSION = "v1.4.0"
+VERSION = "v1.5.0"
 
 VERSION_URL = "https://raw.githubusercontent.com/thirdreality/LinuxBox-Installer/refs/heads/main/version.json"
 DOWNLOAD_BASE_URL = "https://github.com/thirdreality/LinuxBox-Installer/releases/download"
@@ -22,7 +22,7 @@ LINUXBOX_BUTTON_CHIP=0
 LINUXBOX_BUTTON_LINE=26
 
 DEVICE_MODEL_NAME="LinuxBox Dev Edition"
-DEVICE_BUILD_NUMBER="20250626-0000"
+DEVICE_BUILD_NUMBER="20251222-0000"
 
 # BLE GATT Server Configuration
 # 'auto' - Automatically detect whether there is an external service
