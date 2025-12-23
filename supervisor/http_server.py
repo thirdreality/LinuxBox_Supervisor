@@ -1273,6 +1273,11 @@ class SupervisorHTTPServer:
                             self._set_headers(status_code=400)
                             self.wfile.write(json.dumps({"success": False, "error": "z2m-mqtt update is not supported: zigbee2mqtt.service is not installed"}).encode())
                             return
+                        # Check if linuxbox-hubv3-bridge.service exists
+                        if util.is_service_present("linuxbox-hubv3-bridge.service"):
+                            self._set_headers(status_code=400)
+                            self.wfile.write(json.dumps({"success": False, "error": "z2m-mqtt update is not supported: zlinuxbox-hubv3-bridge.service is installed"}).encode())
+                            return                            
                         started = self._supervisor.task_manager.start_setting_update_z2m_mqtt(param_dict)
                         self._set_headers()
                         self.wfile.write(json.dumps({"success": bool(started), "task": "setting", "sub_task": "update_z2m_mqtt"}).encode())

@@ -46,6 +46,11 @@ class ZigbeePairingState:
 
 pairing_state = ZigbeePairingState()
 
+# Global variables for pairing LED timer management
+_pairing_timer_event = None
+_pairing_timer_thread = None
+_pairing_timer_lock = threading.Lock()
+
 class ConfigError(Exception):
     """Custom exception for configuration errors."""
     pass
@@ -56,11 +61,11 @@ def _service_exists(service_name):
         # systemctl cat returns 0 if service unit exists, non-zero otherwise
         result = subprocess.run(["systemctl", "cat", service_name], capture_output=True, text=True, check=False)
         if result.returncode == 0:
-            logging.debug(f"Service unit '{service_name}' exists.")
+            # logging.debug(f"Service unit '{service_name}' exists.")
             return True
         else:
             # 不存在时仅输出 debug，避免正常缺失服务刷屏
-            logging.debug(f"Service unit '{service_name}' does not exist or systemctl cat failed: {result.stderr.strip()}")
+            # logging.debug(f"Service unit '{service_name}' does not exist or systemctl cat failed: {result.stderr.strip()}")
             return False
     except FileNotFoundError:
         logging.error("systemctl command not found. Cannot check service existence.")
@@ -1144,22 +1149,51 @@ def get_ha_zigbee_mode(config_file="/var/lib/homeassistant/homeassistant/.storag
 
     return 'none'
 
+def _cancel_pairing_led_timer():
+    """Cancel the current pairing LED timer if it exists."""
+    global _pairing_timer_event, _pairing_timer_thread
+    
+    with _pairing_timer_lock:
+        if _pairing_timer_event is not None:
+            logging.info("Cancelling pairing LED timer...")
+            _pairing_timer_event.set()
+            # Wait a bit for the thread to finish
+            if _pairing_timer_thread is not None and _pairing_timer_thread.is_alive():
+                _pairing_timer_thread.join(timeout=0.5)
+            _pairing_timer_event = None
+            _pairing_timer_thread = None
+            logging.info("Pairing LED timer cancelled.")
+
 def _start_pairing_led_timer(led_controller, duration):
     """Starts a timer in a daemon thread to manage the LED state for pairing."""
+    global _pairing_timer_event, _pairing_timer_thread
+    
     if not led_controller:
         pairing_state.set_pairing(False) # Ensure state is reset even without LED
         return
 
-    def timer_task():
-        logging.info(f"Zigbee pairing LED timer started for {duration} seconds.")
-        time.sleep(duration)
-        # Check if the state is still pairing before turning it off
-        led_controller.set_led_state(LedState.SYS_DEVICE_PAIRED)
-        pairing_state.set_pairing(False)
-        logging.info("Zigbee pairing timer finished and state reset.")
+    # Cancel previous timer if exists
+    _cancel_pairing_led_timer()
 
-    timer_thread = threading.Thread(target=timer_task, daemon=True)
-    timer_thread.start()
+    # Create new event for this timer
+    with _pairing_timer_lock:
+        _pairing_timer_event = threading.Event()
+        
+        def timer_task():
+            logging.info(f"Zigbee pairing LED timer started for {duration} seconds.")
+            # Wait for duration or until event is set (cancelled)
+            if not _pairing_timer_event.wait(timeout=duration):
+                # Event was not set, meaning timer completed normally
+                # Check if the state is still pairing before turning it off
+                led_controller.set_led_state(LedState.SYS_DEVICE_PAIRED)
+                pairing_state.set_pairing(False)
+                logging.info("Zigbee pairing timer finished and state reset.")
+            else:
+                # Event was set, meaning timer was cancelled
+                logging.info("Zigbee pairing timer was cancelled.")
+
+        _pairing_timer_thread = threading.Thread(target=timer_task, daemon=True)
+        _pairing_timer_thread.start()
 
 def run_mqtt_pairing(progress_callback=None, led_controller=None) -> bool:
     """ 
@@ -1338,6 +1372,8 @@ def run_zigbee_pairing(progress_callback=None, complete_callback=None, led_contr
 
     finally:
         if not pairing_initiated_successfully:
+            # Cancel timer if pairing failed
+            _cancel_pairing_led_timer()
             pairing_state.set_pairing(False)
             if led_controller:
                 led_controller.set_led_state(LedState.SYS_DEVICE_PAIRED)
@@ -1370,10 +1406,13 @@ def run_zigbee_stop_pairing(progress_callback=None, complete_callback=None, led_
             "-u", MQTT_USERNAME,
             "-P", MQTT_PASSWORD,
             "-t", "zigbee2mqtt/bridge/request/permit_join",
-            "-m", '{"value": false}',
+            "-m", '{"value": false, "time": 0}',
         ]
         logging.info("Executing scan_stop command: %s", " ".join(cmd))
         subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+        # Cancel pairing LED timer if it exists
+        _cancel_pairing_led_timer()
 
         # Reset pairing state and LED immediately
         pairing_state.set_pairing(False)
