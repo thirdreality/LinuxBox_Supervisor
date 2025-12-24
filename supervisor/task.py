@@ -160,6 +160,7 @@ class TaskManager:
             "openhab": "thirdreality-openhab",
             "zwave": "thirdreality-zwave",
             "enocean": "thirdreality-enocean",
+            "bridge": "thirdreality-bridge",
             "supervisor": "linuxbox-supervisor",
             "linux-kernel": "linux-image-current-meson64",
         }

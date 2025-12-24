@@ -571,6 +571,7 @@ class SupervisorHTTPServer:
                 predefined_packages = [
                     "linux-image-current-meson64",
                     "linuxbox-supervisor",
+                    "thirdreality-bridge",
                     "thirdreality-board-firmware",
                     "thirdreality-hacore",
                     "thirdreality-zigbee-mqtt",

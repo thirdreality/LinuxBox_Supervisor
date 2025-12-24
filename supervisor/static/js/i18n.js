@@ -77,6 +77,7 @@ const I18N = {
             'software.thirdreality-openhab': 'OpenHAB',
             'software.thirdreality-zwave': 'Z-Wave',
             'software.thirdreality-enocean': 'EnOcean',
+            'software.thirdreality-bridge': 'LinuxBox Bridge',
             'software.linuxbox-supervisor': 'LinuxBox Supervisor',
             'software.linux-image-current-meson64': 'LinuxBox Kernel',
             
@@ -186,6 +187,7 @@ const I18N = {
             'software.thirdreality-openhab': 'OpenHAB',
             'software.thirdreality-zwave': 'Z-Wave',
             'software.thirdreality-enocean': 'EnOcean',
+            'software.thirdreality-bridge': 'LinuxBox 数据路由',
             'software.linuxbox-supervisor': 'LinuxBox 管理器',
             'software.linux-image-current-meson64': 'LinuxBox 内核',
             
@@ -295,6 +297,7 @@ const I18N = {
             'software.thirdreality-openhab': 'OpenHAB',
             'software.thirdreality-zwave': 'Z-Wave',
             'software.thirdreality-enocean': 'EnOcean',
+            'software.thirdreality-bridge': 'LinuxBox 資料路由',
             'software.linuxbox-supervisor': 'LinuxBox 管理器',
             'software.linux-image-current-meson64': 'LinuxBox 核心',
             

@@ -355,6 +355,7 @@ const PACKAGE_TO_VERSION_KEY = {
     'thirdreality-openhab': 'openhab',
     'thirdreality-zwave': 'zwave',
     'thirdreality-enocean': 'enocean',
+    'thirdreality-bridge': 'bridge',
     'linuxbox-supervisor': 'linuxbox-supervisor',
     'linux-image-current-meson64': 'linux-image',
 };
@@ -363,6 +364,7 @@ const PACKAGE_TO_VERSION_KEY = {
 const PACKAGE_ORDER = [
     'linux-image-current-meson64',
     'linuxbox-supervisor',
+    'thirdreality-bridge',
     'thirdreality-board-firmware',
     'thirdreality-hacore',
     'thirdreality-zigbee-mqtt',
@@ -385,6 +387,7 @@ const VERSION_KEY_TO_PACKAGE = {
     'openhab': 'openhab',
     'zwave': 'zwave',
     'enocean': 'enocean',
+    'bridge': 'thirdreality-bridge',
     'linuxbox-supervisor': 'linuxbox-supervisor',
     'linux-image': 'linux-image',
 };

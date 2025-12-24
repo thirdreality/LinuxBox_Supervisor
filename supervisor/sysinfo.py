@@ -362,6 +362,7 @@ class SystemInfoUpdater:
             "matter-server.service": "matter",
             "zigbee2mqtt.service": "z2m",
             "otbr-agent.service": "otbr",
+            "linuxbox-hubv3-bridge.service": "bridge",
             "openhab.service": "hab",
         }
         
