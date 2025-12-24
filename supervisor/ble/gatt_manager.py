@@ -349,29 +349,29 @@ class GattServerManager:
     def on_wifi_connected(self):
         """Callback when WiFi connection is successful"""
         if self.is_provisioning:
-            self.logger.info("[GATT Manager] WiFi connected, will stop provisioning mode after delay")
+            self.logger.info("[GATT Manager] WiFi connected")
             
-            # Add delay to allow App to receive WiFi configuration response
-            # before stopping GATT server
-            def delayed_stop():
-                time.sleep(8)  # Give App 5 seconds to receive response
-                self.logger.info("[GATT Manager] Delayed stop of provisioning mode after WiFi connection")
-                try:
-                    self.stop_provisioning_mode()
-                except Exception as e:
-                    self.logger.error(f"Error stopping provisioning mode on WiFi connect: {e}")
-                    # Force reset state even if stop fails
-                    self.is_provisioning = False
-                    # Try to set LED to off state as fallback
-                    try:
-                        if hasattr(self.supervisor, 'set_led_state'):
-                            self.supervisor.set_led_state(LedState.SYS_WIFI_CONFIG_STOPPED)
-                    except:
-                        pass
+            # # Add delay to allow App to receive WiFi configuration response
+            # # before stopping GATT server
+            # def delayed_stop():
+            #     time.sleep(8)  # Give App 5 seconds to receive response
+            #     self.logger.info("[GATT Manager] Delayed stop of provisioning mode after WiFi connection")
+            #     try:
+            #         self.stop_provisioning_mode()
+            #     except Exception as e:
+            #         self.logger.error(f"Error stopping provisioning mode on WiFi connect: {e}")
+            #         # Force reset state even if stop fails
+            #         self.is_provisioning = False
+            #         # Try to set LED to off state as fallback
+            #         try:
+            #             if hasattr(self.supervisor, 'set_led_state'):
+            #                 self.supervisor.set_led_state(LedState.SYS_WIFI_CONFIG_STOPPED)
+            #         except:
+            #             pass
             
-            # Start delayed stop in a separate thread
-            stop_thread = threading.Thread(target=delayed_stop, daemon=True)
-            stop_thread.start()
+            # # Start delayed stop in a separate thread
+            # stop_thread = threading.Thread(target=delayed_stop, daemon=True)
+            # stop_thread.start()
 
     def startAdv(self):
         """Start BLE advertisement"""

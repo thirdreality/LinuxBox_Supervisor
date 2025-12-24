@@ -35,7 +35,7 @@ EXTERNAL_GATT_SERVICE_NAME = "btgatt-config.service"
 EXTERNAL_GATT_BINARY_PATH = "/usr/local/bin/btgatt-config-server"
 
 # GATT server timeout configuration (minutes)
-GATT_SERVER_TIMEOUT_SECONDS = 90
+GATT_SERVER_TIMEOUT_SECONDS = 300
 
 # Backup storage configuration
 # 'internal' - Use internal storage path
