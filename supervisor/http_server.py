@@ -1515,18 +1515,18 @@ class SupervisorHTTPServer:
                         self.wfile.write(json.dumps({"success": False, "error": "Missing required parameters: package/software, version, release"}).encode())
                         return
                     
-                    self._logger.info(f"[OTA] Upgrade request: package={package_name}, versionKey={version_key}, version={version}, release={release}")
-                    
-                    # Build download URL using versionKey if available, otherwise use package name
-                    release_base_url = "https://github.com/thirdreality/LinuxBox-Installer/releases/download"
+                    # Use versionKey if available, otherwise use package name as filename
                     filename = version_key or package_name
-                    download_url = f"{release_base_url}/{release}/{filename}_{version}.deb"
                     
-                    # Start OTA upgrade task
+                    self._logger.info(f"[OTA] Upgrade request: package={package_name}, versionKey={version_key}, version={version}, release={release}, filename={filename}")
+                    
+                    # Start OTA upgrade task with new signature: software, release, version, filename
+                    # The download URL selection will be handled in _run_ota_upgrade
                     started = self._supervisor.task_manager.start_ota_upgrade(
                         software=package_name,
+                        release=release,
                         version=version,
-                        download_url=download_url
+                        filename=filename
                     )
                     
                     if started:

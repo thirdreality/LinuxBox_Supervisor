@@ -145,6 +145,34 @@ class Supervisor:
 
     def set_ota_command(self, cmd):
         logger.info(f"OTA Command: param={cmd}")
+        cmd_lower = cmd.strip().lower() if isinstance(cmd, str) else ""
+        
+        if cmd_lower == "bridge":
+            try:
+                # Start bridge OTA upgrade task
+                started = self.task_manager.start_ota_bridge_upgrade()
+                if started:
+                    logger.info("Bridge OTA upgrade task started")
+                    return "Bridge OTA upgrade started"
+                else:
+                    return "Another OTA task is already running"
+            except Exception as e:
+                logger.error(f"Failed to start bridge OTA upgrade: {e}")
+                return f"Failed to start bridge OTA upgrade: {e}"
+        elif cmd_lower == "z2m":
+            try:
+                # Start z2m OTA upgrade task
+                started = self.task_manager.start_ota_z2m_upgrade()
+                if started:
+                    logger.info("Z2M OTA upgrade task started")
+                    return "Z2M OTA upgrade started"
+                else:
+                    return "Another OTA task is already running"
+            except Exception as e:
+                logger.error(f"Failed to start z2m OTA upgrade: {e}")
+                return f"Failed to start z2m OTA upgrade: {e}"
+        else:
+            return f"Unknown OTA command: {cmd}. Supported: bridge, z2m"
 
     #### Asynchronous commands 
 
@@ -1077,76 +1105,35 @@ class Supervisor:
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Supervisor Service")
+    from .commands import get_registry, execute_command, show_version
+    
+    registry = get_registry()
+    available_commands = registry.list_commands()
+    
+    parser = argparse.ArgumentParser(
+        description="Supervisor Service",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=f"Available commands: {', '.join(available_commands)}"
+    )
     parser.add_argument('--version', '-v', action='store_true', help='Show version and exit')
-    parser.add_argument('command', nargs='?', default='daemon', choices=['daemon', 'led', 'zigbee','thread','setting','ptest'], help="Command to run: daemon | led <color> | zigbee <parameter> | thread <parameter> | setting <parameter> | ptest <mode>")
+    parser.add_argument(
+        'command', 
+        nargs='?', 
+        default='daemon', 
+        choices=available_commands,
+        help="Command to run"
+    )
     parser.add_argument('arg', nargs='?', default=None, help="Argument for command (e.g., color for led)")
     args = parser.parse_args()
 
     # Handle --version early and exit
     if getattr(args, 'version', False):
-        print(f"Supervisor {VERSION} ({DEVICE_BUILD_NUMBER})")
+        show_version()
         sys.exit(0)
 
-    if args.command == 'daemon':
-        supervisor = Supervisor()
-        try:
-            supervisor.run()
-        except KeyboardInterrupt:
-            supervisor.cleanup()
-            logger.info("Supervisor terminated by user")
-        except Exception as e:
-            logger.error(f"Unhandled exception: {e}")
-            supervisor.cleanup()
-    elif args.command == 'led':
-        value = args.arg
-        print(f"[Main]input led arg: {value}")
-        if value is None:
-            print("Usage: supervisor.py led <arg>")
-            print("Supported: on|off|clear, colors [red|blue|yellow|green|white|cyan|magenta|purple], states [reboot|startup|factory_reset|sys_normal_operation|...]")
-            sys.exit(1)
-        try:
-            client = SupervisorClient()
-            # Pass-through; server side responsible for parsing enable/disable/clear/colors/states
-            resp = client.send_command("led", value, "Led command")
-            if resp:
-                print(resp)
-        except Exception as e:
-            print(f"Error sending LED command: {e}")
-            sys.exit(1)
-    elif args.command in ['ota', 'zigbee', 'thread', 'setting', 'ptest']:
-        param = args.arg
-        if param is None:
-            print(f"Usage: supervisor.py {args.command} <parameter>")
-            if args.command == 'ptest':
-                print("Available modes: start, finish, restore")
-            sys.exit(1)
-            
-        try:
-            client = SupervisorClient()
-            # Directly use the send_command method for simplicity and flexibility
-            response = client.send_command(args.command, param, f"{args.command} command")
-            
-            if response is None:
-                print(f"Error: Failed to send {args.command} command")
-                sys.exit(1)
-                
-            # For ptest, the response handling is done in the client
-            if args.command != 'ptest':
-                # Special handling for info commands - display JSON response
-                if param == 'info':
-                    try:
-                        # Try to parse and pretty print JSON response
-                        json_data = json.loads(response)
-                        print(json.dumps(json_data, indent=2, ensure_ascii=False))
-                    except (json.JSONDecodeError, TypeError):
-                        # If not valid JSON, print as is
-                        print(response)
-                else:
-                    print(f"{args.command.capitalize()} command sent successfully: {param}")
-        except Exception as e:
-            print(f"Error sending {args.command} command: {e}")
-            sys.exit(1)               
+    # Execute command using the command registry
+    exit_code = execute_command(args.command, args.arg)
+    sys.exit(exit_code)               
 
 if __name__ == "__main__":
     main()

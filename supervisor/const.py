@@ -2,10 +2,15 @@
 
 """Constants."""
 
-VERSION = "v1.5.0"
+VERSION = "v1.6.0"
 
+# GitHub URLs (primary, for international users)
 VERSION_URL = "https://raw.githubusercontent.com/thirdreality/LinuxBox-Installer/refs/heads/main/version.json"
 DOWNLOAD_BASE_URL = "https://github.com/thirdreality/LinuxBox-Installer/releases/download"
+
+# Gitee URLs (for Chinese users)
+VERSION_URL_GITEE = "https://gitee.com/thirdreality/LinuxBox-Installer/raw/main/version.json"
+DOWNLOAD_BASE_URL_GITEE = "https://gitee.com/thirdreality/LinuxBox-Installer/releases/download"
 
 # GPIO chip and line numbers for LED control
 LINUXBOX_LED_R_CHIP=1

@@ -10,7 +10,10 @@
 // ============================================
 const CONFIG = {
     API_BASE: '',  // Same origin
+    // Version info URLs (try GitHub first, fallback to Gitee if unavailable)
     VERSION_URL: 'https://raw.githubusercontent.com/thirdreality/LinuxBox-Installer/refs/heads/main/version.json',
+    VERSION_URL_GITEE: 'https://gitee.com/thirdreality/LinuxBox-Installer/raw/main/version.json',
+    // Release base URL (for display only, actual download is handled by backend with dual-source support)
     RELEASE_BASE_URL: 'https://github.com/thirdreality/LinuxBox-Installer/releases/download',
     REFRESH_INTERVAL: 30000,  // 30 seconds
     TASK_POLL_INTERVAL: 2000,  // 2 seconds
@@ -376,22 +379,6 @@ const PACKAGE_ORDER = [
     'thirdreality-python3',
 ];
 
-// Reverse mapping: version.json key to package name (for download URL)
-const VERSION_KEY_TO_PACKAGE = {
-    'python3': 'python3',
-    'hacore': 'hacore',
-    'otbr-agent': 'otbr-agent',
-    'zigbee-mqtt': 'zigbee-mqtt',
-    'board-firmware': 'board-firmware',
-    'music-assistant': 'music-assistant',
-    'openhab': 'openhab',
-    'zwave': 'zwave',
-    'enocean': 'enocean',
-    'thirdreality-bridge': 'thirdreality-bridge',
-    'linuxbox-supervisor': 'linuxbox-supervisor',
-    'linux-image': 'linux-image',
-};
-
 async function loadSoftwareInfo() {
     try {
         const response = await fetch(`${CONFIG.API_BASE}/api/v2/software/info`);
@@ -406,23 +393,60 @@ async function loadSoftwareInfo() {
 }
 
 async function loadVersionInfo() {
-    try {
-        const response = await fetch(CONFIG.VERSION_URL);
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-        
-        state.versionInfo = await response.json();
-        return state.versionInfo;
-    } catch (error) {
-        console.error('Failed to load version info:', error);
-        throw error;
+    // Try GitHub first, fallback to Gitee if unavailable
+    const urls = [CONFIG.VERSION_URL, CONFIG.VERSION_URL_GITEE];
+    
+    for (let i = 0; i < urls.length; i++) {
+        try {
+            const url = urls[i];
+            const isGitee = url === CONFIG.VERSION_URL_GITEE;
+            const sourceName = isGitee ? 'Gitee' : 'GitHub';
+            
+            if (isGitee) {
+                console.log('GitHub version URL failed, trying Gitee...');
+            }
+            
+            // Create timeout controller for better browser compatibility
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 seconds timeout
+            
+            try {
+                const response = await fetch(url, {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json',
+                    },
+                    signal: controller.signal,
+                });
+                
+                clearTimeout(timeoutId);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                state.versionInfo = await response.json();
+                
+                if (isGitee) {
+                    console.log('Successfully loaded version info from Gitee');
+                }
+                
+                return state.versionInfo;
+            } catch (fetchError) {
+                clearTimeout(timeoutId);
+                throw fetchError;
+            }
+        } catch (error) {
+            const sourceName = urls[i] === CONFIG.VERSION_URL ? 'GitHub' : 'Gitee';
+            console.error(`Failed to load version info from ${sourceName}:`, error);
+            
+            // If this is the last URL, throw the error
+            if (i === urls.length - 1) {
+                throw new Error(`Failed to load version info from all sources: ${error.message}`);
+            }
+            // Otherwise, continue to next URL
+        }
     }
-}
-
-function buildDownloadUrl(versionKey, version, release) {
-    // Build download URL: https://github.com/.../releases/download/{release}/{name}_{version}.deb
-    // Use the version key (e.g., python3, hacore) for the filename
-    const filename = VERSION_KEY_TO_PACKAGE[versionKey] || versionKey;
-    return `${CONFIG.RELEASE_BASE_URL}/${release}/${filename}_${version}.deb`;
 }
 
 function getUpgradeInfo(installedSoftware, versionInfo) {
@@ -449,7 +473,6 @@ function getUpgradeInfo(installedSoftware, versionInfo) {
                 currentVersion: currentVersion,
                 newVersion: null,
                 release: null,
-                downloadUrl: null,
             });
             return;
         }
@@ -470,7 +493,6 @@ function getUpgradeInfo(installedSoftware, versionInfo) {
                 currentVersion: currentVersion,
                 newVersion: hasUpdate ? newVersion : null,
                 release: hasUpdate ? release : null,
-                downloadUrl: hasUpdate ? buildDownloadUrl(versionKey, newVersion, release) : null,
             });
         } else {
             // Software installed but no version info available online
@@ -482,7 +504,6 @@ function getUpgradeInfo(installedSoftware, versionInfo) {
                 currentVersion: currentVersion,
                 newVersion: null,
                 release: null,
-                downloadUrl: null,
             });
         }
     });

@@ -135,17 +135,51 @@ class TaskManager:
         """Start long-running setting update task for z2m mqtt config"""
         return self._start_task("setting", "update_z2m_mqtt", setting_util.run_setting_update_z2m_mqtt, config)
 
-    def start_ota_upgrade(self, software: str, version: str, download_url: str):
-        """Start OTA upgrade task for a specific software package"""
-        return self._start_task("ota", f"upgrade_{software}", self._run_ota_upgrade, software, version, download_url)
+    def start_ota_upgrade(self, software: str, release: str, version: str, filename: str):
+        """Start OTA upgrade task for a specific software package
+        
+        Args:
+            software: Software package name (component name)
+            release: Release tag (e.g., v2024.2.0)
+            version: Version number
+            filename: Filename for the .deb package (without extension)
+        """
+        return self._start_task("ota", f"upgrade_{software}", self._run_ota_upgrade, software, release, version, filename)
+    
+    def start_ota_bridge_upgrade(self):
+        """Start OTA upgrade task for bridge package
+        
+        This will:
+        1. Fetch version.json from GitHub (fallback to Gitee)
+        2. Compare installed version with online version
+        3. Download and install if upgrade is needed
+        """
+        return self._start_task("ota", "upgrade_bridge", self._run_ota_bridge_upgrade)
+    
+    def start_ota_z2m_upgrade(self):
+        """Start OTA upgrade task for z2m (zigbee-mqtt) package
+        
+        This will:
+        1. Fetch version.json from GitHub (fallback to Gitee)
+        2. Compare installed version with online version
+        3. Download and install if upgrade is needed
+        """
+        return self._start_task("ota", "upgrade_z2m", self._run_ota_z2m_upgrade)
 
-    def _run_ota_upgrade(self, software: str, version: str, download_url: str, progress_callback=None, complete_callback=None):
-        """Run OTA upgrade for a specific software package"""
-        import tempfile
+    def _run_ota_upgrade(self, software: str, release: str, version: str, filename: str, progress_callback=None, complete_callback=None):
+        """Run OTA upgrade for a specific software package
+        
+        Args:
+            software: Software package name (component name)
+            release: Release tag (e.g., v2024.2.0)
+            version: Version number
+            filename: Filename for the .deb package (without extension)
+        """
         import urllib.request
         import urllib.error
         import os
         import shutil
+        from .const import DOWNLOAD_BASE_URL, DOWNLOAD_BASE_URL_GITEE
         
         # Component to debian package name mapping
         # Maps version.json keys to actual debian package names
@@ -160,7 +194,7 @@ class TaskManager:
             "openhab": "thirdreality-openhab",
             "zwave": "thirdreality-zwave",
             "enocean": "thirdreality-enocean",
-            "bridge": "thirdreality-bridge",
+            "thirdreality-bridge": "thirdreality-bridge",
             "supervisor": "linuxbox-supervisor",
             "linux-kernel": "linux-image-current-meson64",
         }
@@ -177,9 +211,23 @@ class TaskManager:
             cache_dir = os.path.join("/var/cache/apt", software)
             os.makedirs(cache_dir, exist_ok=True)
             
-            local_file = os.path.join(cache_dir, f"{software}_{version}.deb")
+            local_file = os.path.join(cache_dir, f"{filename}_{version}.deb")
             
-            # Step 2: Download
+            # Step 2: Build download URLs and find available one
+            if progress_callback:
+                progress_callback(8, f"Checking download sources for {software} v{version}...")
+            
+            # Build URLs for both GitHub and Gitee
+            github_url = f"{DOWNLOAD_BASE_URL}/{release}/{filename}_{version}.deb"
+            gitee_url = f"{DOWNLOAD_BASE_URL_GITEE}/{release}/{filename}_{version}.deb"
+            
+            # Try to find available download URL quickly
+            download_url = self._find_available_download_url([github_url, gitee_url])
+            
+            if not download_url:
+                raise Exception("File not found in both GitHub and Gitee")
+            
+            # Step 3: Download
             if progress_callback:
                 progress_callback(10, f"Downloading {software} v{version}...")
             
@@ -302,6 +350,536 @@ class TaskManager:
                     shutil.rmtree(cache_dir)
                 except Exception:
                     pass
+    
+    def _find_available_download_url(self, urls):
+        """Quickly find an available download URL from a list of URLs
+        
+        Uses HEAD request to check if file exists, with short timeout for quick detection.
+        Tries URLs in order and returns the first available one.
+        
+        Args:
+            urls: List of URLs to check
+            
+        Returns:
+            str: First available URL, or None if none are available
+        """
+        import urllib.request
+        import urllib.error
+        import socket
+        
+        for url in urls:
+            try:
+                # Use HEAD request to check if file exists (faster than GET)
+                req = urllib.request.Request(url, method='HEAD')
+                req.add_header('User-Agent', 'LinuxBox-Supervisor/1.0')
+                
+                # Short timeout for quick detection (2 seconds)
+                with urllib.request.urlopen(req, timeout=2) as response:
+                    # Check if status is OK (200)
+                    if response.status == 200:
+                        self.logger.info(f"[OTA] Found available file at: {url}")
+                        return url
+            except (urllib.error.HTTPError, urllib.error.URLError, socket.timeout) as e:
+                # File not found or timeout, try next URL
+                self.logger.debug(f"[OTA] File not available at {url}: {e}")
+                continue
+            except Exception as e:
+                # Other errors, log and continue
+                self.logger.debug(f"[OTA] Error checking {url}: {e}")
+                continue
+        
+        return None
+    
+    def _run_ota_bridge_upgrade(self, progress_callback=None, complete_callback=None):
+        """Run OTA upgrade for bridge package
+        
+        Fetches version.json from GitHub/Gitee, compares versions, and upgrades if needed.
+        """
+        import urllib.request
+        import urllib.error
+        import json
+        import os
+        import shutil
+        import subprocess
+        import socket
+        from .const import VERSION_URL, VERSION_URL_GITEE, DOWNLOAD_BASE_URL, DOWNLOAD_BASE_URL_GITEE
+        
+        BRIDGE_PACKAGE_NAME = "thirdreality-bridge"
+        BRIDGE_COMPONENT = "thirdreality-bridge"  # Used for filename (bridge_version.deb)
+        BRIDGE_VERSION_KEY = "thirdreality-bridge"  # Key in version.json
+        cache_dir = None
+        
+        try:
+            # Step 1: Prepare
+            if progress_callback:
+                progress_callback(5, "Checking bridge version...")
+            
+            # Get installed version
+            installed_version = self._get_installed_version(BRIDGE_PACKAGE_NAME)
+            if not installed_version:
+                raise Exception(f"{BRIDGE_PACKAGE_NAME} is not installed")
+            
+            self.logger.info(f"[OTA Bridge] Installed version: {installed_version}")
+            
+            # Step 2: Fetch version.json (try GitHub first, fallback to Gitee)
+            if progress_callback:
+                progress_callback(10, "Fetching version information...")
+            
+            version_info = self._fetch_version_info_with_fallback()
+            if not version_info:
+                raise Exception("Failed to fetch version.json from both GitHub and Gitee")
+            
+            # Step 3: Extract bridge version info
+            bridge_info = None
+            if "homeassistant" in version_info:
+                ha_info = version_info["homeassistant"]
+                if BRIDGE_VERSION_KEY in ha_info:
+                    bridge_info = ha_info[BRIDGE_VERSION_KEY]
+            
+            if not bridge_info or not bridge_info.get("version") or not bridge_info.get("release"):
+                raise Exception("Bridge version information not found in version.json")
+            
+            target_version = bridge_info["version"]
+            release = bridge_info["release"]
+            
+            self.logger.info(f"[OTA Bridge] Target version: {target_version}, Release: {release}")
+            
+            # Step 4: Compare versions
+            if progress_callback:
+                progress_callback(15, "Comparing versions...")
+            
+            needs_upgrade = self._is_version_less(installed_version, target_version)
+            
+            if not needs_upgrade:
+                message = f"Bridge is already up to date (installed: {installed_version}, latest: {target_version})"
+                self.logger.info(f"[OTA Bridge] {message}")
+                if progress_callback:
+                    progress_callback(100, message)
+                if complete_callback:
+                    complete_callback(True, message)
+                return
+            
+            self.logger.info(f"[OTA Bridge] Upgrade needed: {installed_version} -> {target_version}")
+            
+            # Step 5: Prepare download
+            if progress_callback:
+                progress_callback(20, "Preparing download...")
+            
+            cache_dir = os.path.join("/var/cache/apt", BRIDGE_COMPONENT)
+            os.makedirs(cache_dir, exist_ok=True)
+            local_file = os.path.join(cache_dir, f"{BRIDGE_COMPONENT}_{target_version}.deb")
+            
+            # Step 6: Build download URLs and find available one
+            if progress_callback:
+                progress_callback(25, "Finding download source...")
+            
+            github_url = f"{DOWNLOAD_BASE_URL}/{release}/{BRIDGE_COMPONENT}_{target_version}.deb"
+            gitee_url = f"{DOWNLOAD_BASE_URL_GITEE}/{release}/{BRIDGE_COMPONENT}_{target_version}.deb"
+            
+            download_url = self._find_available_download_url([github_url, gitee_url])
+            if not download_url:
+                raise Exception("Bridge package not found in both GitHub and Gitee")
+            
+            # Step 7: Download
+            if progress_callback:
+                progress_callback(30, f"Downloading bridge v{target_version}...")
+            
+            self.logger.info(f"[OTA Bridge] Downloading from {download_url}")
+            
+            def download_progress_hook(block_num, block_size, total_size):
+                if total_size > 0:
+                    downloaded = block_num * block_size
+                    percent = min(downloaded / total_size * 50, 50)  # Max 50% for download
+                    if progress_callback:
+                        progress_callback(30 + int(percent), f"Downloading... {downloaded // 1024 // 1024}MB / {total_size // 1024 // 1024}MB")
+            
+            urllib.request.urlretrieve(download_url, local_file, download_progress_hook)
+            
+            if progress_callback:
+                progress_callback(80, "Download complete, installing bridge...")
+            
+            # Step 8: Install
+            self.logger.info(f"[OTA Bridge] Installing {BRIDGE_PACKAGE_NAME} from {local_file}")
+            
+            result = subprocess.run(
+                ["dpkg", "-i", local_file],
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minute timeout
+            )
+            
+            if result.returncode != 0:
+                # Try to fix dependencies
+                if progress_callback:
+                    progress_callback(90, "Fixing dependencies...")
+                
+                fix_result = subprocess.run(
+                    ["apt-get", "-f", "install", "-y"],
+                    capture_output=True,
+                    text=True,
+                    timeout=300
+                )
+                
+                if fix_result.returncode != 0:
+                    raise Exception(f"Installation failed: {result.stderr}")
+            
+            # Step 9: Run postinst fix-dependency (if exists)
+            try:
+                postinst_file = f"/var/lib/dpkg/info/{BRIDGE_PACKAGE_NAME}.postinst"
+                if os.path.exists(postinst_file):
+                    self.logger.info(f"[OTA Bridge] Running postinst fix-dependency for {BRIDGE_PACKAGE_NAME}")
+                    if progress_callback:
+                        progress_callback(95, "Running post-installation fix...")
+                    
+                    postinst_result = subprocess.run(
+                        [postinst_file, "fix-dependency"],
+                        capture_output=True,
+                        text=True,
+                        timeout=300,
+                        check=False
+                    )
+                    
+                    if postinst_result.returncode == 0:
+                        self.logger.info(f"[OTA Bridge] postinst fix-dependency completed successfully")
+            except Exception as e:
+                self.logger.warning(f"[OTA Bridge] postinst execution error: {e}")
+            
+            if progress_callback:
+                progress_callback(98, "Cleaning up...")
+            
+            # Clean up downloaded file
+            if os.path.exists(local_file):
+                os.remove(local_file)
+            
+            if progress_callback:
+                progress_callback(100, f"Bridge upgrade successful! ({installed_version} -> {target_version})")
+            
+            success_message = f"Bridge has been upgraded from {installed_version} to {target_version}"
+            if complete_callback:
+                complete_callback(True, success_message)
+            
+            self.logger.info(f"[OTA Bridge] Upgrade completed successfully: {installed_version} -> {target_version}")
+            
+        except urllib.error.URLError as e:
+            error_msg = f"Download failed: {e.reason}"
+            self.logger.error(f"[OTA Bridge] {error_msg}")
+            if progress_callback:
+                progress_callback(100, error_msg)
+            if complete_callback:
+                complete_callback(False, error_msg)
+                
+        except subprocess.TimeoutExpired:
+            error_msg = "Installation timed out"
+            self.logger.error(f"[OTA Bridge] {error_msg}")
+            if progress_callback:
+                progress_callback(100, error_msg)
+            if complete_callback:
+                complete_callback(False, error_msg)
+                
+        except Exception as e:
+            error_msg = f"Bridge upgrade failed: {str(e)}"
+            self.logger.error(f"[OTA Bridge] {error_msg}")
+            if progress_callback:
+                progress_callback(100, error_msg)
+            if complete_callback:
+                complete_callback(False, error_msg)
+        
+        finally:
+            # Clean up cache directory on error
+            if cache_dir and os.path.exists(cache_dir):
+                try:
+                    shutil.rmtree(cache_dir)
+                except Exception:
+                    pass
+    
+    def _run_ota_z2m_upgrade(self, progress_callback=None, complete_callback=None):
+        """Run OTA upgrade for z2m (zigbee-mqtt) package
+        
+        Fetches version.json from GitHub/Gitee, compares versions, and upgrades if needed.
+        """
+        import urllib.request
+        import urllib.error
+        import json
+        import os
+        import shutil
+        import subprocess
+        import socket
+        from .const import VERSION_URL, VERSION_URL_GITEE, DOWNLOAD_BASE_URL, DOWNLOAD_BASE_URL_GITEE
+        
+        Z2M_PACKAGE_NAME = "thirdreality-zigbee-mqtt"
+        Z2M_COMPONENT = "zigbee-mqtt"  # Used for filename (zigbee-mqtt_version.deb)
+        Z2M_VERSION_KEY = "zigbee-mqtt"  # Key in version.json
+        cache_dir = None
+        
+        try:
+            # Step 1: Prepare
+            if progress_callback:
+                progress_callback(5, "Checking z2m version...")
+            
+            # Get installed version
+            installed_version = self._get_installed_version(Z2M_PACKAGE_NAME)
+            if not installed_version:
+                raise Exception(f"{Z2M_PACKAGE_NAME} is not installed")
+            
+            self.logger.info(f"[OTA Z2M] Installed version: {installed_version}")
+            
+            # Step 2: Fetch version.json (try GitHub first, fallback to Gitee)
+            if progress_callback:
+                progress_callback(10, "Fetching version information...")
+            
+            version_info = self._fetch_version_info_with_fallback()
+            if not version_info:
+                raise Exception("Failed to fetch version.json from both GitHub and Gitee")
+            
+            # Step 3: Extract z2m version info
+            z2m_info = None
+            if "homeassistant" in version_info:
+                ha_info = version_info["homeassistant"]
+                if Z2M_VERSION_KEY in ha_info:
+                    z2m_info = ha_info[Z2M_VERSION_KEY]
+            
+            if not z2m_info or not z2m_info.get("version") or not z2m_info.get("release"):
+                raise Exception("Z2M version information not found in version.json")
+            
+            target_version = z2m_info["version"]
+            release = z2m_info["release"]
+            
+            self.logger.info(f"[OTA Z2M] Target version: {target_version}, Release: {release}")
+            
+            # Step 4: Compare versions
+            if progress_callback:
+                progress_callback(15, "Comparing versions...")
+            
+            needs_upgrade = self._is_version_less(installed_version, target_version)
+            
+            if not needs_upgrade:
+                message = f"Z2M is already up to date (installed: {installed_version}, latest: {target_version})"
+                self.logger.info(f"[OTA Z2M] {message}")
+                if progress_callback:
+                    progress_callback(100, message)
+                if complete_callback:
+                    complete_callback(True, message)
+                return
+            
+            self.logger.info(f"[OTA Z2M] Upgrade needed: {installed_version} -> {target_version}")
+            
+            # Step 5: Prepare download
+            if progress_callback:
+                progress_callback(20, "Preparing download...")
+            
+            cache_dir = os.path.join("/var/cache/apt", Z2M_COMPONENT)
+            os.makedirs(cache_dir, exist_ok=True)
+            local_file = os.path.join(cache_dir, f"{Z2M_COMPONENT}_{target_version}.deb")
+            
+            # Step 6: Build download URLs and find available one
+            if progress_callback:
+                progress_callback(25, "Finding download source...")
+            
+            github_url = f"{DOWNLOAD_BASE_URL}/{release}/{Z2M_COMPONENT}_{target_version}.deb"
+            gitee_url = f"{DOWNLOAD_BASE_URL_GITEE}/{release}/{Z2M_COMPONENT}_{target_version}.deb"
+            
+            download_url = self._find_available_download_url([github_url, gitee_url])
+            if not download_url:
+                raise Exception("Z2M package not found in both GitHub and Gitee")
+            
+            # Step 7: Download
+            if progress_callback:
+                progress_callback(30, f"Downloading z2m v{target_version}...")
+            
+            self.logger.info(f"[OTA Z2M] Downloading from {download_url}")
+            
+            def download_progress_hook(block_num, block_size, total_size):
+                if total_size > 0:
+                    downloaded = block_num * block_size
+                    percent = min(downloaded / total_size * 50, 50)  # Max 50% for download
+                    if progress_callback:
+                        progress_callback(30 + int(percent), f"Downloading... {downloaded // 1024 // 1024}MB / {total_size // 1024 // 1024}MB")
+            
+            urllib.request.urlretrieve(download_url, local_file, download_progress_hook)
+            
+            if progress_callback:
+                progress_callback(80, "Download complete, installing z2m...")
+            
+            # Step 8: Install
+            self.logger.info(f"[OTA Z2M] Installing {Z2M_PACKAGE_NAME} from {local_file}")
+            
+            result = subprocess.run(
+                ["dpkg", "-i", local_file],
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minute timeout
+            )
+            
+            if result.returncode != 0:
+                # Try to fix dependencies
+                if progress_callback:
+                    progress_callback(90, "Fixing dependencies...")
+                
+                fix_result = subprocess.run(
+                    ["apt-get", "-f", "install", "-y"],
+                    capture_output=True,
+                    text=True,
+                    timeout=300
+                )
+                
+                if fix_result.returncode != 0:
+                    raise Exception(f"Installation failed: {result.stderr}")
+            
+            # Step 9: Run postinst fix-dependency (if exists)
+            try:
+                postinst_file = f"/var/lib/dpkg/info/{Z2M_PACKAGE_NAME}.postinst"
+                if os.path.exists(postinst_file):
+                    self.logger.info(f"[OTA Z2M] Running postinst fix-dependency for {Z2M_PACKAGE_NAME}")
+                    if progress_callback:
+                        progress_callback(95, "Running post-installation fix...")
+                    
+                    postinst_result = subprocess.run(
+                        [postinst_file, "fix-dependency"],
+                        capture_output=True,
+                        text=True,
+                        timeout=300,
+                        check=False
+                    )
+                    
+                    if postinst_result.returncode == 0:
+                        self.logger.info(f"[OTA Z2M] postinst fix-dependency completed successfully")
+            except Exception as e:
+                self.logger.warning(f"[OTA Z2M] postinst execution error: {e}")
+            
+            if progress_callback:
+                progress_callback(98, "Cleaning up...")
+            
+            # Clean up downloaded file
+            if os.path.exists(local_file):
+                os.remove(local_file)
+            
+            if progress_callback:
+                progress_callback(100, f"Z2M upgrade successful! ({installed_version} -> {target_version})")
+            
+            success_message = f"Z2M has been upgraded from {installed_version} to {target_version}"
+            if complete_callback:
+                complete_callback(True, success_message)
+            
+            self.logger.info(f"[OTA Z2M] Upgrade completed successfully: {installed_version} -> {target_version}")
+            
+        except urllib.error.URLError as e:
+            error_msg = f"Download failed: {e.reason}"
+            self.logger.error(f"[OTA Z2M] {error_msg}")
+            if progress_callback:
+                progress_callback(100, error_msg)
+            if complete_callback:
+                complete_callback(False, error_msg)
+                
+        except subprocess.TimeoutExpired:
+            error_msg = "Installation timed out"
+            self.logger.error(f"[OTA Z2M] {error_msg}")
+            if progress_callback:
+                progress_callback(100, error_msg)
+            if complete_callback:
+                complete_callback(False, error_msg)
+                
+        except Exception as e:
+            error_msg = f"Z2M upgrade failed: {str(e)}"
+            self.logger.error(f"[OTA Z2M] {error_msg}")
+            if progress_callback:
+                progress_callback(100, error_msg)
+            if complete_callback:
+                complete_callback(False, error_msg)
+        
+        finally:
+            # Clean up cache directory on error
+            if cache_dir and os.path.exists(cache_dir):
+                try:
+                    shutil.rmtree(cache_dir)
+                except Exception:
+                    pass
+    
+    def _fetch_version_info_with_fallback(self):
+        """Fetch version.json with GitHub/Gitee fallback
+        
+        Returns:
+            dict: Version info JSON, or None if both sources fail
+        """
+        import urllib.request
+        import urllib.error
+        import json
+        import socket
+        from .const import VERSION_URL, VERSION_URL_GITEE
+        
+        urls = [VERSION_URL, VERSION_URL_GITEE]
+        
+        for url in urls:
+            try:
+                source_name = "GitHub" if url == VERSION_URL else "Gitee"
+                if url == VERSION_URL_GITEE:
+                    self.logger.info("[OTA Bridge] GitHub failed, trying Gitee...")
+                
+                req = urllib.request.Request(url)
+                req.add_header('User-Agent', 'LinuxBox-Supervisor/1.0')
+                
+                with urllib.request.urlopen(req, timeout=15) as response:
+                    if response.status == 200:
+                        version_info = json.loads(response.read().decode('utf-8'))
+                        self.logger.info(f"[OTA Bridge] Successfully loaded version.json from {source_name}")
+                        return version_info
+            except (urllib.error.HTTPError, urllib.error.URLError, socket.timeout) as e:
+                self.logger.debug(f"[OTA Bridge] Failed to load from {source_name}: {e}")
+                continue
+            except json.JSONDecodeError as e:
+                self.logger.error(f"[OTA Bridge] Failed to parse JSON from {source_name}: {e}")
+                continue
+            except Exception as e:
+                self.logger.debug(f"[OTA Bridge] Error loading from {source_name}: {e}")
+                continue
+        
+        return None
+    
+    def _get_installed_version(self, package_name):
+        """Get installed version of a package
+        
+        Args:
+            package_name: Package name
+            
+        Returns:
+            str: Version string, or None if not installed
+        """
+        import subprocess
+        
+        try:
+            result = subprocess.run(
+                ["dpkg-query", "-W", "-f=${Version}", package_name],
+                capture_output=True,
+                text=True
+            )
+            if result.returncode == 0:
+                version = result.stdout.strip()
+                return version if version else None
+            return None
+        except Exception as e:
+            self.logger.error(f"Error getting version for {package_name}: {e}")
+            return None
+    
+    def _is_version_less(self, installed, target):
+        """Compare versions using dpkg --compare-versions
+        
+        Args:
+            installed: Installed version string
+            target: Target version string
+            
+        Returns:
+            bool: True if installed < target
+        """
+        import subprocess
+        
+        try:
+            result = subprocess.run(
+                ["dpkg", "--compare-versions", installed, "lt", target],
+                capture_output=True
+            )
+            return result.returncode == 0
+        except Exception:
+            # If comparison fails, assume upgrade is needed
+            return True
 
     def start_thread_mode_enable(self):
         return self._start_task("thread", "enable", thread_util.run_thread_enable)
