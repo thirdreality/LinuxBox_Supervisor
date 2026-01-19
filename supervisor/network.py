@@ -332,6 +332,7 @@ class NetworkMonitor:
             self.logger.info(f"wlan0 interface exists: {wlan0_exists}")
             
             if not wlan0_exists:
+                self.logger.info("wlan0 not ready yet, periodic check will continue monitoring")
                 if self.supervisor:
                     self.supervisor.set_led_state(LedState.STARTUP)
                 return False  # No longer call this callback

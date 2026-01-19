@@ -214,6 +214,11 @@ class SystemInfoUpdater:
         if not hasattr(self.supervisor, 'system_info'):
             self.logger.error("Supervisor does not have system_info attribute")
             return
+        
+        # Wait for wlan0 interface if it's not ready yet (useful for kernel 6.6+)
+        from .utils.wifi_utils import wait_for_wlan0_interface
+        if not wait_for_wlan0_interface(timeout=30):
+            self.logger.warning("wlan0 interface not available, proceeding with fallback device name")
             
         device_name = self._generate_device_name_with_retry()
         self.supervisor.system_info.name = device_name

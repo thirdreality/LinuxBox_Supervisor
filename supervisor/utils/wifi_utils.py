@@ -4,6 +4,7 @@ import subprocess
 import logging
 import glob
 import os
+import time
 import configparser
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -43,6 +44,44 @@ def is_interface_existing(interface="wlan0"):
     except FileNotFoundError:
         logging.warning(f"Interface {interface} not found")
         return False
+
+
+def wait_for_wlan0_interface(timeout=30):
+    """
+    Wait for wlan0 interface to become available at system startup.
+    This is useful when WiFi driver initialization is delayed (e.g., kernel 6.6).
+    
+    Args:
+        timeout: Maximum time to wait in seconds, defaults to 30
+        
+    Returns:
+        bool: True if interface becomes available, False if timeout
+    """
+    start_time = time.time()
+    check_path = "/sys/class/net/wlan0/address"
+    
+    logging.info(f"Waiting for wlan0 interface (timeout: {timeout}s)...")
+    
+    attempt = 0
+    while time.time() - start_time < timeout:
+        attempt += 1
+        
+        # Check if interface file exists
+        if os.path.exists(check_path):
+            # Give driver a little more time to fully initialize
+            time.sleep(0.5)
+            logging.info(f"wlan0 interface detected after {int(time.time() - start_time)}s")
+            return True
+        
+        # Log progress every 5 attempts (5 seconds)
+        if attempt % 5 == 0:
+            elapsed = int(time.time() - start_time)
+            logging.info(f"Still waiting for wlan0... ({elapsed}s/{timeout}s)")
+        
+        time.sleep(1)
+    
+    logging.warning(f"wlan0 interface not available after {timeout}s timeout")
+    return False
 
 
 def is_network_connected():
@@ -88,6 +127,31 @@ def get_wlan0_mac():
     if status == 0 and result:
         return result
     logging.warning("Failed to get wlan0 MAC address")
+    return None
+
+
+def get_wlan0_mac_with_retry(max_retries=3, retry_delay=1.0):
+    """
+    Get the MAC address of the wlan0 interface with retry logic.
+    This is useful during system startup when the interface might not be immediately available.
+    
+    Args:
+        max_retries: Maximum number of retry attempts, defaults to 3
+        retry_delay: Delay between retries in seconds, defaults to 1.0
+        
+    Returns:
+        str or None: Returns the MAC address, or None if not available after all retries
+    """
+    for attempt in range(1, max_retries + 1):
+        mac = get_wlan0_mac()
+        if mac:
+            return mac
+        
+        if attempt < max_retries:
+            logging.warning(f"Failed to get MAC address (attempt {attempt}/{max_retries})")
+            time.sleep(retry_delay)
+    
+    logging.warning(f"Failed to get wlan0 MAC address after {max_retries} attempts")
     return None
 
 def get_wlan0_mac_for_localname():
