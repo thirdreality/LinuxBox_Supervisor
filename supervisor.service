@@ -7,6 +7,7 @@ ExecStart=/bin/sh -c '/usr/bin/python3 /usr/local/bin/supervisor 2>&1 | /usr/bin
 Restart=on-failure
 RestartSec=5
 # Prepare log directory and rotate previous log to .1 on each start
+ExecStartPre=/bin/sh -c 'for i in 1 2 3 4 5 6 7 8 9 10; do [ -e /sys/class/net/wlan0/address ] && break || sleep 2; done'
 ExecStartPre=/bin/sh -c 'mkdir -p /var/log/thirdreality'
 ExecStartPre=/bin/sh -c '[ -f /var/log/thirdreality/supervisor.log ] && mv /var/log/thirdreality/supervisor.log /var/log/thirdreality/supervisor.log.1 || true'
 ExecStartPre=/bin/sh -c 'touch /var/log/thirdreality/supervisor.log && chmod 0644 /var/log/thirdreality/supervisor.log'
