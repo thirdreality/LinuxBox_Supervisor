@@ -183,16 +183,16 @@ class Supervisor:
         if cmd_lower == "zha":
             try:
                 self.task_manager.start_zigbee_switch_zha_mode()
-                logger.info("Zigbee device started pairing")
-                return "Zigbee device started pairing"
+                logger.info("Zigbee device start switching ...")
+                return "Zigbee device started switch to zha mode"
             except Exception as e:
                 logger.error(f"Zigbee pairing start failed: {e}")
                 return f"Zigbee pairing start failed: {e}"
         elif cmd_lower == "z2m":
             try:
                 self.task_manager.start_zigbee_switch_z2m_mode()
-                logger.info("Zigbee device started pairing")
-                return "Zigbee device started pairing"
+                logger.info("Zigbee device start switching ...")
+                return "Zigbee device started switch to zha mode ..."
             except Exception as e:
                 logger.error(f"Zigbee pairing start failed: {e}")
                 return f"Zigbee pairing start failed: {e}"

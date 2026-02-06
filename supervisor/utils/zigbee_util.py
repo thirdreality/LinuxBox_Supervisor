@@ -64,7 +64,7 @@ def _service_exists(service_name):
             # logging.debug(f"Service unit '{service_name}' exists.")
             return True
         else:
-            # 不存在时仅输出 debug，避免正常缺失服务刷屏
+            # Only output debug when service doesn't exist to avoid log spam for normal missing services
             # logging.debug(f"Service unit '{service_name}' does not exist or systemctl cat failed: {result.stderr.strip()}")
             return False
     except FileNotFoundError:
@@ -125,7 +125,7 @@ def _get_info_from_zha_conf():
         raise ConfigError(f"Error: {zha_conf_path} does not exist")
     
     ieee = None
-    radio_type = "zigate"  # Default to zigate if not specified
+    radio_type = "blz"  # Default to zigate if not specified
     
     try:
         with open(zha_conf_path, 'r') as f:
@@ -307,11 +307,11 @@ def _update_zha_device_registry(mqtt_entry_id, zha_entry_id, ieee, radio_type="z
             
         new_devices.append(device)
     
-    # 查找coordinator
+    # Find coordinator
     coordinators = find_zigbee_coordinator(new_devices)
     has_zha_coordinator = len(coordinators) > 0
     
-    # 如果没有coordinator，添加
+    # If no coordinator found, add one
     if not has_zha_coordinator:
         now = datetime.now(timezone.utc).isoformat()
         if radio_type == "blz":
@@ -621,7 +621,7 @@ def _update_zigbee2mqtt_entity_registry():
 
 def _reset_zigbee2mqtt_configuration():
     """
-    根据zha.conf的radio_type选择不同的zigbee2mqtt配置模板，拷贝到目标目录，并sync三次。
+    Select different zigbee2mqtt config template based on radio_type in zha.conf, copy to target directory, and sync three times.
     """
     import shutil
     zha_conf_path = "/var/lib/homeassistant/zha.conf"
@@ -631,7 +631,7 @@ def _reset_zigbee2mqtt_configuration():
     radio_type = None
     try:
         if os.path.exists(zha_conf_path):
-            # 读取最后一个有效的Radio Type
+            # Read the last valid Radio Type
             with open(zha_conf_path, 'r') as f:
                 lines = f.readlines()
             for line in reversed(lines):
@@ -666,7 +666,7 @@ def _reset_zigbee2mqtt_configuration():
 
 def _reset_blz_hardware():
     """
-    如果脚本/srv/homeassistant/bin/home_assistant_blz_reset.sh存在，则执行该脚本。不输出任何日志。
+    If script /srv/homeassistant/bin/home_assistant_blz_reset.sh exists, execute it. No log output.
     """
     logging.info("Resetting blz hardware...")
     script_path = "/srv/homeassistant/bin/home_assistant_blz_reset.sh"
@@ -713,35 +713,53 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
     """
     logging.info("Attempting to switch to ZHA mode...")
     ha_service_was_running = False
+    z2m_service_was_running = False
+    switch_successful = False  # Flag to track if switch was successful
+
+    mode = get_ha_zigbee_mode()
+    
+    # If already in ZHA mode, return directly
+    if mode == 'zha':
+        logging.info("Already in ZHA mode. No need to switch.")
+        _call_progress(progress_callback, 100, "Already in ZHA mode.")
+        if complete_callback:
+            complete_callback(True, "already_in_zha_mode")
+        return
 
     try:
-        _call_progress(progress_callback, 5, "Fetching Zigbee device info...")
+        # Stop services that may occupy the serial port first
+        _call_progress(progress_callback, 5, "Stopping services that may occupy serial port...")
+        
+        # 1. Check and stop zigbee2mqtt service (early, to avoid serial port occupation)
         try:
-            ieee, radio_type = _get_info_from_zha_conf()
-            if not ieee:
-                logging.error("Could not find Device IEEE in zha.conf. Aborting switch to ZHA mode.")
-                if complete_callback:
-                    complete_callback(False, "no_ieee_found")
-                return
-            logging.info(f"Successfully fetched IEEE: {ieee} and Radio Type: {radio_type}")
-        except ConfigError as e:
-            logging.error(f"Configuration error while fetching Zigbee info: {e}")
-            if complete_callback:
-                complete_callback(False, f"config_error_fetch_info: {e}")
-            return
-        except Exception as e:
-            logging.error(f"Unexpected error while fetching Zigbee info: {e}", exc_info=True)
-            if complete_callback:
-                complete_callback(False, f"unexpected_error_fetch_info: {e}")
-            return
+            z2m_status = subprocess.run(["systemctl", "is-active", "zigbee2mqtt.service"], 
+                                       capture_output=True, text=True, check=False, timeout=10)
+            if z2m_status.stdout.strip() == "active":
+                z2m_service_was_running = True
+                logging.info("Zigbee2MQTT service is running. Stopping it to free serial port.")
+                subprocess.run(["systemctl", "stop", "zigbee2mqtt.service"], check=True, timeout=30)
+                logging.info("Zigbee2MQTT service stopped.")
+            else:
+                logging.info("Zigbee2MQTT service is not running.")
+        except subprocess.TimeoutExpired as e:
+            logging.warning(f"Timeout checking or stopping Zigbee2MQTT service: {e}")
+        except subprocess.CalledProcessError as e:
+            logging.warning(f"Failed to stop Zigbee2MQTT service: {e}")
+        except FileNotFoundError:
+            logging.warning("systemctl command not found. Cannot check Zigbee2MQTT service.")
+        
+        time.sleep(0.5)
+        _restart_dongle()
+        time.sleep(0.5)
 
+        # 2. Check and stop Home Assistant service
         _call_progress(progress_callback, 10, "Checking Home Assistant service status...")
         try:
-            status_check = subprocess.run(["systemctl", "is-active", "home-assistant.service"], capture_output=True, text=True, check=False, timeout=15)
+            status_check = subprocess.run(["systemctl", "is-active", "home-assistant.service"], 
+                                         capture_output=True, text=True, check=False, timeout=15)
             if status_check.stdout.strip() == "active":
                 ha_service_was_running = True
                 logging.info("Home Assistant service is running. Stopping it temporarily.")
-                _call_progress(progress_callback, 15, "Stopping Home Assistant service...")
                 subprocess.run(["systemctl", "stop", "home-assistant.service"], check=True, timeout=60)
                 logging.info("Home Assistant service stopped.")
             else:
@@ -761,39 +779,63 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
             if complete_callback:
                 complete_callback(False, "systemctl_not_found")
             return
+        
+        # 3. Get Zigbee device information
+        _call_progress(progress_callback, 20, "Fetching Zigbee device info...")
+        ieee = None
+        radio_type = "blz"  # Default value
+        
+        # Try reading from zha.conf
+        try:
+            ieee, radio_type = _get_info_from_zha_conf()
+            logging.info(f"Successfully fetched from zha.conf - IEEE: {ieee}, Radio Type: {radio_type}")
+        except (ConfigError, Exception) as e:
+            logging.warning(f"Could not read from zha.conf, will try to get info from hardware.")
+        
+        # If reading from conf file fails, try getting from hardware
+        if not ieee:
+            logging.info("Attempting to get IEEE from hardware by restarting dongle...")
+            try:
+                _restart_dongle()
+                time.sleep(2)  # Wait for device to stabilize
+                
+                blz_info = get_blz_info()
+                if blz_info and 'IEEE' in blz_info:
+                    ieee = blz_info['IEEE']
+                    radio_type = "blz"
+                    logging.info(f"Successfully fetched from hardware - IEEE: {ieee}, Radio Type: {radio_type}")
+                else:
+                    raise ConfigError("Could not get IEEE from hardware. blz_info is empty or missing IEEE field.")
+            except ConfigError:
+                raise  # Re-raise ConfigError
+            except Exception as e:
+                raise ConfigError(f"Error getting IEEE from hardware: {e}") from e
+        
+        if not ieee:
+            raise ConfigError("Could not obtain Device IEEE from any source.")
 
-        _call_progress(progress_callback, 20, "Updating ZHA config entries...")
+        _call_progress(progress_callback, 30, "Updating ZHA config entries...")
         mqtt_entry_id, zha_entry_id = _update_zha_config_entries(radio_type)
         logging.info(f"ZHA config entries updated. MQTT Entry ID: {mqtt_entry_id}, ZHA Entry ID: {zha_entry_id}")
 
-        _call_progress(progress_callback, 40, "Updating ZHA device registry...")
+        _call_progress(progress_callback, 50, "Updating ZHA device registry...")
         _update_zha_device_registry(mqtt_entry_id, zha_entry_id, ieee, radio_type)
         logging.info("ZHA device registry updated.")
 
-        _call_progress(progress_callback, 60, "Updating ZHA entity registry...")
+        _call_progress(progress_callback, 70, "Updating ZHA entity registry...")
         _update_zha_entity_registry()
         logging.info("ZHA entity registry updated.")
 
-        _call_progress(progress_callback, 80, "Stopping and disabling conflicting services (zigbee2mqtt)...")
-        services_to_manage = [("zigbee2mqtt.service", "Zigbee2MQTT")]
-        all_services_managed_successfully = True
-        for service_file, service_name in services_to_manage:
-            try:
-                logging.info(f"Disabling {service_name} ({service_file})...")
-                subprocess.run(["systemctl", "disable", service_file], check=True)
-                logging.info(f"Stopping {service_name} ({service_file})...")
-                subprocess.run(["systemctl", "stop", service_file], check=True)
-                logging.info(f"{service_name} ({service_file}) disabled and stopped.")
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-                logging.warning(f"Error managing {service_name} ({service_file}): {e}. Continuing...")
-                all_services_managed_successfully = False
-            except FileNotFoundError:
-                logging.warning(f"systemctl not found. Cannot manage {service_name} ({service_file}).")
-                all_services_managed_successfully = False
-                break
-        
-        if not all_services_managed_successfully:
-            logging.warning("One or more conflicting services could not be fully managed. Check logs.")
+        _call_progress(progress_callback, 80, "Disabling zigbee2mqtt service...")
+        # Disable zigbee2mqtt service (already stopped earlier)
+        try:
+            logging.info("Disabling Zigbee2MQTT service...")
+            subprocess.run(["systemctl", "disable", "zigbee2mqtt.service"], check=True, timeout=30)
+            logging.info("Zigbee2MQTT service disabled.")
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            logging.warning(f"Error disabling Zigbee2MQTT service: {e}. Continuing...")
+        except FileNotFoundError:
+            logging.warning("systemctl not found. Cannot disable Zigbee2MQTT service.")
 
         _call_progress(progress_callback, 90, "Cleaning up Zigbee2MQTT data and resetting configuration...")
         z2m_data_path = "/opt/zigbee2mqtt/data"
@@ -802,7 +844,7 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
             os.path.join(z2m_data_path, "state.json")
         ]
         dir_to_delete = os.path.join(z2m_data_path, "log")
-        config_src = "/lib/thirdreality/conf/configuration.yaml.default"
+        config_src = "/lib/thirdreality/conf/configuration_blz.yaml.default"
         config_dest = os.path.join(z2m_data_path, "configuration.yaml")
 
         for f_path in files_to_delete:
@@ -810,14 +852,6 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
                 if os.path.exists(f_path):
                     os.remove(f_path)
                     logging.info(f"Successfully deleted Zigbee2MQTT file: {f_path}")
-                    # 如果是database.db且radio_type为blz，执行reset
-                    if f_path.endswith("database.db"):
-                        try:
-                            _, radio_type = _get_info_from_zha_conf()
-                        except Exception:
-                            radio_type = None
-                        if radio_type == "blz":
-                            _reset_blz_hardware()
                 else:
                     logging.info(f"Zigbee2MQTT file not found, skipping deletion: {f_path}")
             except OSError as e:
@@ -849,6 +883,7 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
 
         _call_progress(progress_callback, 100, "Successfully switched to ZHA mode.")
         logging.info("Successfully switched to ZHA mode.")
+        switch_successful = True  # Mark switch as successful
         if complete_callback:
             complete_callback(True, "success")
 
@@ -873,6 +908,7 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
         if complete_callback:
             complete_callback(False, f"unexpected_error: {e}")
     finally:
+        # Restore Home Assistant service
         if ha_service_was_running:
             logging.info("Restoring Home Assistant service state as it was running before...")
             try:
@@ -882,6 +918,19 @@ def run_zigbee_switch_zha_mode(progress_callback=None, complete_callback=None):
                 logging.error(f"CRITICAL: Failed to restart Home Assistant service: {e}. Manual intervention may be required.")
             except FileNotFoundError:
                 logging.error("CRITICAL: systemctl not found. Cannot restart Home Assistant service. Manual intervention may be required.")
+        
+        # If switch failed and zigbee2mqtt was running before, restore it
+        # Note: Should not restore zigbee2mqtt when successfully switched to ZHA mode
+        if not switch_successful and z2m_service_was_running:
+            logging.info("Switch failed. Restoring Zigbee2MQTT service state as it was running before...")
+            try:
+                subprocess.run(["systemctl", "start", "zigbee2mqtt.service"], check=True, timeout=30)
+                logging.info("Zigbee2MQTT service restored successfully.")
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                logging.error(f"CRITICAL: Failed to restart Zigbee2MQTT service: {e}. Manual intervention may be required.")
+            except FileNotFoundError:
+                logging.error("CRITICAL: systemctl not found. Cannot restart Zigbee2MQTT service.")
+        
         # Force sync to flush NAND cache
         try:
             force_sync()
@@ -896,6 +945,16 @@ def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):
     """
     logging.info("Attempting to switch to Zigbee2MQTT mode...")
     ha_service_was_running = False
+
+    mode = get_ha_zigbee_mode()
+    
+    # If already in Z2M mode, return directly
+    if mode == 'z2m':
+        logging.info("Already in Z2M mode. No need to switch.")
+        _call_progress(progress_callback, 100, "Already in Z2M mode.")
+        if complete_callback:
+            complete_callback(True, "already_in_z2m_mode")
+        return
 
     try:
         _call_progress(progress_callback, 5, "Checking prerequisite services (Mosquitto, Zigbee2MQTT)...")
@@ -960,7 +1019,7 @@ def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):
             # Force sync to flush NAND cache
             force_sync()
 
-            # 新增：重置configuration.yaml
+            # New: Reset configuration.yaml
             _reset_zigbee2mqtt_configuration()
 
         _call_progress(progress_callback, 70, "Process zigbee dongle ...")
@@ -970,14 +1029,7 @@ def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):
             if os.path.exists(zigbee_db_path):
                 os.remove(zigbee_db_path)
                 logging.info(f"Successfully deleted HomeAssistant zigbee database: {zigbee_db_path}")
-                # radio_type判断，复用_get_info_from_zha_conf
-                try:
-                    _, radio_type = _get_info_from_zha_conf()
-                except Exception:
-                    radio_type = None
-                if radio_type == "blz":
-                    _reset_blz_hardware()
-                    _restart_dongle()
+                _restart_dongle()
             else:
                 logging.info(f"HomeAssistant zigbee database not found, skipping deletion: {zigbee_db_path}")
         except OSError as e:
@@ -1044,10 +1096,10 @@ def run_zigbee_switch_z2m_mode(progress_callback=None, complete_callback=None):
 
 def get_ha_zigbee_mode(config_file="/var/lib/homeassistant/homeassistant/.storage/core.config_entries"):
     """
-    Zigbee 模式判定顺序：
-    1) 两个服务都不存在 => none
-    2) 先看运行态：z2m 运行则 z2m；HA 运行则读 HA 配置决定 zha/z2m
-    3) 都未运行时，用 enabled + HA 配置兜底：z2m 启用优先；否则 HA 启用则读配置；否则 none
+    Zigbee mode determination order:
+    1) Both services don't exist => none
+    2) Check running state first: z2m running => z2m; HA running => read HA config to decide zha/z2m
+    3) When neither running, use enabled + HA config as fallback: z2m enabled takes priority; else HA enabled then read config; else none
     """
 
     def _is_service_enabled(service_name: str) -> bool:
@@ -1110,14 +1162,14 @@ def get_ha_zigbee_mode(config_file="/var/lib/homeassistant/homeassistant/.storag
                 logging.error(f"Unexpected error while reading HomeAssistant config_entries: {e}")
                 return 'none'
 
-    # 是否存在
+    # Check if services exist
     has_z2m_service = _service_exists("zigbee2mqtt.service")
     has_ha_service = _service_exists("home-assistant.service")
 
     if not has_z2m_service and not has_ha_service:
         return 'none'
 
-    # 先看运行态
+    # Check running state first
     z2m_active = has_z2m_service and _is_service_active("zigbee2mqtt.service")
     ha_active = has_ha_service and _is_service_active("home-assistant.service")
 
@@ -1126,11 +1178,11 @@ def get_ha_zigbee_mode(config_file="/var/lib/homeassistant/homeassistant/.storag
     if ha_active and not z2m_active:
         return _get_mode_from_ha_config()
     if z2m_active and ha_active:
-        # 两者都在跑，按 HA 配置判定；配置缺失时倾向 z2m
+        # Both running, decide by HA config; prefer z2m if config missing
         mode = _get_mode_from_ha_config()
         return mode if mode != 'none' else 'z2m'
 
-    # 未运行，按 enabled + 配置兜底
+    # Not running, use enabled + config as fallback
     z2m_enabled = has_z2m_service and _is_service_enabled("zigbee2mqtt.service")
     ha_enabled = has_ha_service and _is_service_enabled("home-assistant.service")
 
@@ -1140,7 +1192,7 @@ def get_ha_zigbee_mode(config_file="/var/lib/homeassistant/homeassistant/.storag
         mode = _get_mode_from_ha_config()
         if mode != 'none':
             return mode
-        # HA 启用但配置缺失，若 z2m 也启用则偏向 z2m
+        # HA enabled but config missing, prefer z2m if it's also enabled
         if z2m_enabled:
             return 'z2m'
 
@@ -1479,6 +1531,8 @@ def get_zigbee_info():
         if not ha_running and not z2m_running:
             logging.info("Both Home Assistant and Zigbee2MQTT services are not running, trying BL702 direct communication...")
             try:
+                _restart_dongle()
+                time.sleep(3)
                 blz_info = get_blz_info(verbose=False)
                 if blz_info:
                     result["blz_info"] = {}

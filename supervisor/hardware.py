@@ -509,8 +509,8 @@ class GpioLed:
                 self.blue()
                 if self.step_counter >= 1: # After 1 second (2 steps of 0.5s timer_delay)
                     self.logger.info("WIFI_CONFIG_SUCCESS: Display time ended, transitioning to NORMAL_OPERATION.")
-                    self.set_led_state(LedState.SYS_WIFI_CONFIG_STOPPED)
-                    self.set_led_state(LedState.SYS_NORMAL_OPERATION)
+                    self.set_led_state(LedState.SYS_WIFI_CONFIG_PENDING)
+                    #self.set_led_state(LedState.SYS_NORMAL_OPERATION)
             case LedState.SYS_WIFI_CONFIG_STOPPED: # This state clears WiFi config priority, no LED action needed
                 self.off()
             case LedState.SYS_DEVICE_PAIRING: # Green slow flash (1Hz)
@@ -669,7 +669,7 @@ class GpioLed:
             case LedState.SYS_WIFI_CONFIG_PENDING:
                 calculated_reset_delay = 0.5  # 2Hz
             case LedState.SYS_WIFI_CONFIGURING:
-                calculated_reset_delay = 0.25  # 4Hz
+                calculated_reset_delay = 0.2  # 5Hz
             case LedState.SYS_WIFI_CONFIG_SUCCESS: 
                 calculated_reset_delay = 0.5  # Blue solid for 1 sec (2 steps of 0.5s) 
             case LedState.SYS_DEVICE_PAIRING:
